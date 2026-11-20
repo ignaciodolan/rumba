@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -103,5 +104,37 @@ describe('readAgentResult', () => {
     await writeResult({ kind: 'triage', workable: true, reason: '', ticketKind: 'feature', criteria, criteriaSource: 'mine' })
     await expect(readAgentResult(dir, 'triage')).rejects.toThrow(/criteriaSource/)
   })
-})
 
+  describe('a result the agent tampered with', () => {
+    const good = JSON.stringify({ kind: 'fix', summary: 'from outside' })
+
+    it('does not follow a result file that is a symbolic link', async () => {
+      const outside = path.join(dir, 'outside.json')
+      await writeFile(outside, good)
+      await mkdir(path.join(dir, 'work', '.rumba-out'), { recursive: true })
+      await symlink(outside, path.join(dir, 'work', RESULT_PATH))
+      await expect(readAgentResult(path.join(dir, 'work'), 'fix')).rejects.toThrow(AgentError)
+      await expect(readAgentResult(path.join(dir, 'work'), 'fix')).rejects.toThrow(/not a regular file/)
+    })
+
+    it('does not follow a result folder that is a symbolic link', async () => {
+      await mkdir(path.join(dir, 'outside'))
+      await writeFile(path.join(dir, 'outside', 'result.json'), good)
+      await mkdir(path.join(dir, 'work'))
+      await symlink(path.join(dir, 'outside'), path.join(dir, 'work', '.rumba-out'))
+      await expect(readAgentResult(path.join(dir, 'work'), 'fix')).rejects.toThrow(AgentError)
+      await expect(readAgentResult(path.join(dir, 'work'), 'fix')).rejects.toThrow(/not a regular file/)
+    })
+
+    it('does not block on a result that is a named pipe', async () => {
+      await mkdir(path.join(dir, '.rumba-out'))
+      execFileSync('mkfifo', [path.join(dir, RESULT_PATH)])
+      await expect(readAgentResult(dir, 'fix')).rejects.toThrow(/not a regular file/)
+    }, 3000)
+
+    it('refuses a result larger than 1 MB', async () => {
+      await writeRaw(JSON.stringify({ kind: 'fix', summary: 'x'.repeat(1_100_000) }))
+      await expect(readAgentResult(dir, 'fix')).rejects.toThrow(/too large/)
+    })
+  })
+})

@@ -4,38 +4,101 @@ import { DockerEnvironment, shellRunner } from '../../../src/adapters/environmen
 const cfg = { up: 'docker compose up -d --wait', exec: 'docker compose exec -T app', down: 'docker compose down -v' }
 const ref = { branch: 'b', sha: 's', role: 'before' as const }
 
+type Call = { c: string; cwd: string; timeoutMs: number; env?: Record<string, string> }
+
+/** Hands out the directories `/t1`, `/t2`, … and records what was asked and what was removed. */
+function trustedStub() {
+  const asked: string[] = []
+  const removed: string[] = []
+  return {
+    asked, removed,
+    trustedCheckout: async (branch: string) => { asked.push(branch); return `/t${asked.length}` },
+    cleanup: async (dir: string) => { removed.push(dir) },
+  }
+}
+
 describe('DockerEnvironment', () => {
-  it('runs up in the workdir and a check through the exec prefix', async () => {
-    const calls: string[] = []
-    const env = new DockerEnvironment({ ...cfg, run: async (c, o) => { calls.push(`${o.cwd}: ${c}`); return { exitCode: 0, output: 'ok' } } })
+  it('runs up and a check in the trusted checkout, with the commit under test in RUMBA_WORKDIR', async () => {
+    const calls: Call[] = []
+    const trusted = trustedStub()
+    const env = new DockerEnvironment({ ...cfg, trusted, run: async (c, o) => { calls.push({ c, ...o }); return { exitCode: 0, output: 'ok' } } })
     const h = await env.up(ref, '/w')
     const r = await env.runCheck(h, { criterionId: 'c1', command: "npm test -- -t 'saves profile'", files: [] })
-    expect(h).toEqual({ workdir: '/w' })
-    expect(calls[0]).toBe('/w: docker compose up -d --wait')
-    expect(calls[1]).toBe(`/w: docker compose exec -T app sh -c 'npm test -- -t '\\''saves profile'\\'''`)
+    expect(h).toEqual({ workdir: '/w', hostDir: '/t1' })
+    expect(trusted.asked).toEqual(['b'])
+    expect(calls.map((x) => `${x.cwd}: ${x.c}`)).toEqual([
+      '/t1: docker compose up -d --wait',
+      `/t1: docker compose exec -T app sh -c 'npm test -- -t '\\''saves profile'\\'''`,
+    ])
+    for (const x of calls) expect(x.env).toEqual({ RUMBA_WORKDIR: '/w' })
     expect(r).toEqual({ criterionId: 'c1', passed: true, exitCode: 0, output: 'ok' })
   })
+  it('never runs a command in the directory of the commit under test', async () => {
+    const cwds: string[] = []
+    const env = new DockerEnvironment({ ...cfg, trusted: trustedStub(), run: async (_c, o) => { cwds.push(o.cwd); return { exitCode: 0, output: '' } } })
+    const h = await env.up(ref, '/w')
+    await env.runCheck(h, { criterionId: 'c1', command: 'x', files: [] })
+    await env.runCommand(h, 'npm test')
+    await env.down(h)
+    expect(cwds).toEqual(['/t1', '/t1', '/t1', '/t1'])
+  })
   it('reports a failing check without throwing', async () => {
-    const env = new DockerEnvironment({ ...cfg, run: async c => c.includes('exec') ? { exitCode: 1, output: 'AssertionError' } : { exitCode: 0, output: '' } })
+    const env = new DockerEnvironment({ ...cfg, trusted: trustedStub(), run: async c => c.includes('exec') ? { exitCode: 1, output: 'AssertionError' } : { exitCode: 0, output: '' } })
     const h = await env.up(ref, '/w')
     expect(await env.runCheck(h, { criterionId: 'c1', command: 'x', files: [] })).toMatchObject({ passed: false, exitCode: 1, output: 'AssertionError' })
   })
-  it('throws with the output when up fails, after running down, and swallows a failing down', async () => {
+  it('throws with the output when up fails, after running down and removing the trusted checkout', async () => {
     const calls: string[] = []
-    const env = new DockerEnvironment({ ...cfg, run: async c => { calls.push(c); return { exitCode: 1, output: 'port in use' } } })
+    const trusted = trustedStub()
+    const env = new DockerEnvironment({ ...cfg, trusted, run: async (c, o) => { calls.push(`${o.cwd}: ${c}`); return { exitCode: 1, output: 'port in use' } } })
     await expect(env.up(ref, '/w')).rejects.toThrow(/port in use/)
-    expect(calls).toEqual([cfg.up, cfg.down])
-    await expect(env.down({ workdir: '/w' })).resolves.toBeUndefined()
+    expect(calls).toEqual([`/t1: ${cfg.up}`, `/t1: ${cfg.down}`])
+    expect(trusted.removed).toEqual(['/t1'])
   })
-  it('never throws from down, even when the runner rejects', async () => {
-    const env = new DockerEnvironment({ ...cfg, run: async () => { throw new Error('boom') } })
-    await expect(env.down({ workdir: '/w' })).resolves.toBeUndefined()
+  it('removes the trusted checkout when the up command cannot be run at all', async () => {
+    const trusted = trustedStub()
+    const env = new DockerEnvironment({ ...cfg, trusted, run: async () => { throw new Error('boom') } })
+    await expect(env.up(ref, '/w')).rejects.toThrow('boom')
+    expect(trusted.removed).toEqual(['/t1'])
   })
-  it('runs an arbitrary command through the exec prefix in the workdir and passes the timeout', async () => {
-    const seen: { c: string; cwd: string; timeoutMs: number }[] = []
-    const env = new DockerEnvironment({ ...cfg, timeoutMs: 5, run: async (c, o) => { seen.push({ c, ...o }); return { exitCode: 2, output: 'x' } } })
-    expect(await env.runCommand({ workdir: '/w' }, 'ls')).toEqual({ exitCode: 2, output: 'x' })
-    expect(seen).toEqual([{ c: "docker compose exec -T app sh -c 'ls'", cwd: '/w', timeoutMs: 5 }])
+  it('runs nothing when no trusted checkout can be made', async () => {
+    const calls: string[] = []
+    const trusted = { trustedCheckout: async () => { throw new Error('no base') }, cleanup: async () => {} }
+    const env = new DockerEnvironment({ ...cfg, trusted, run: async (c) => { calls.push(c); return { exitCode: 0, output: '' } } })
+    await expect(env.up(ref, '/w')).rejects.toThrow('no base')
+    expect(calls).toEqual([])
+  })
+  it('takes the environment down in the trusted checkout, then removes it', async () => {
+    const calls: Call[] = []
+    const trusted = trustedStub()
+    const env = new DockerEnvironment({ ...cfg, trusted, run: async (c, o) => { calls.push({ c, ...o }); return { exitCode: 0, output: '' } } })
+    const h = await env.up(ref, '/w')
+    await env.down(h)
+    expect(calls.at(-1)).toMatchObject({ c: cfg.down, cwd: '/t1', env: { RUMBA_WORKDIR: '/w' } })
+    expect(trusted.removed).toEqual(['/t1'])
+  })
+  it('never throws from down, even when the runner and the cleanup reject, and still removes the checkout', async () => {
+    const removed: string[] = []
+    const trusted = { trustedCheckout: async () => '/t1', cleanup: async (d: string) => { removed.push(d); throw new Error('busy') } }
+    let fail = false
+    const env = new DockerEnvironment({ ...cfg, trusted, run: async () => { if (fail) throw new Error('boom'); return { exitCode: 0, output: '' } } })
+    const h = await env.up(ref, '/w')
+    fail = true
+    await expect(env.down(h)).resolves.toBeUndefined()
+    expect(removed).toEqual(['/t1'])
+  })
+  it('refuses a handle it did not bring up, and runs nothing for it', async () => {
+    const calls: string[] = []
+    const env = new DockerEnvironment({ ...cfg, trusted: trustedStub(), run: async (c) => { calls.push(c); return { exitCode: 0, output: '' } } })
+    await expect(env.runCommand({ workdir: '/w' }, 'ls')).rejects.toThrow(/trusted checkout/)
+    await expect(env.down({ workdir: '/w' })).resolves.toBeUndefined()
+    expect(calls).toEqual([])
+  })
+  it('runs an arbitrary command through the exec prefix and passes the timeout', async () => {
+    const seen: Call[] = []
+    const env = new DockerEnvironment({ ...cfg, trusted: trustedStub(), timeoutMs: 5, run: async (c, o) => { seen.push({ c, ...o }); return { exitCode: 2, output: 'x' } } })
+    expect(await env.runCommand({ workdir: '/w', hostDir: '/t' }, 'ls')).toEqual({ exitCode: 2, output: 'x' })
+    expect(seen).toEqual([{ c: "docker compose exec -T app sh -c 'ls'", cwd: '/t', timeoutMs: 5, env: { RUMBA_WORKDIR: '/w' } }])
   })
 })
 
@@ -74,6 +137,15 @@ describe('shellRunner', () => {
       expect(await shellRunner('printf "%s" "$RUMBA_TEST_PLAIN"', { cwd: process.cwd(), timeoutMs: 5000 })).toEqual({ exitCode: 0, output: 'kept' })
     } finally {
       delete process.env.RUMBA_TEST_PLAIN
+    }
+  })
+  it('adds the variables it is given, over the inherited ones', async () => {
+    process.env.RUMBA_WORKDIR = '/inherited'
+    try {
+      const r = await shellRunner('printf "%s" "$RUMBA_WORKDIR"', { cwd: process.cwd(), timeoutMs: 5000, env: { RUMBA_WORKDIR: '/given' } })
+      expect(r).toEqual({ exitCode: 0, output: '/given' })
+    } finally {
+      delete process.env.RUMBA_WORKDIR
     }
   })
   it('reports exit code 124 on timeout', async () => {

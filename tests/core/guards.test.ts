@@ -1,3 +1,4 @@
+import { DEFAULT_DOCKER_PROTECTED } from '../../src/config/schema.js'
 import { describe, expect, it } from 'vitest'
 import { changedChecks, outsideScope, protectedViolations } from '../../src/core/guards.js'
 
@@ -10,7 +11,12 @@ describe('guards', () => {
     expect(changedChecks({ a: '1', b: '2' }, { a: '1', b: '3' })).toEqual(['b'])
     expect(changedChecks({ a: '1' }, {})).toEqual(['a'])
   })
-  it('lists files outside scope, ignoring check files', () => {
+  it('protects, by default for docker, the files that define the containers', () => {
+  const changed = ['docker-compose.yml', 'apps/hub/compose.override.yaml', 'Dockerfile', 'apps/hub/Dockerfile.dev', 'docker/api.dockerfile', '.dockerignore', 'src/docker.ts', 'docs/docker.md']
+  expect(protectedViolations(changed, DEFAULT_DOCKER_PROTECTED))
+    .toEqual(['docker-compose.yml', 'apps/hub/compose.override.yaml', 'Dockerfile', 'apps/hub/Dockerfile.dev', 'docker/api.dockerfile', '.dockerignore'])
+})
+it('lists files outside scope, ignoring check files', () => {
     expect(outsideScope(['apps/hub/x.ts', 'packages/ui/y.ts', 'tests/rumba/c1.test.ts'], ['apps/hub/**'], ['tests/rumba/c1.test.ts'])).toEqual(['packages/ui/y.ts'])
     expect(outsideScope(['anything.ts'], [], [])).toEqual([])
   })

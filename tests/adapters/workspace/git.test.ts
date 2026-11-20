@@ -252,6 +252,103 @@ describe('GitWorkspace', () => {
     expect(existsSync(hookMarker)).toBe(false)
   })
 
+  describe('trustedCheckout', () => {
+    it('gives a checkout of the commit the branch started from, whatever the branch changed', async () => {
+      await write(clone, 'scripts/up.sh', 'echo trusted\n')
+      await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'add script'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(workdir, 'scripts/up.sh', 'echo agent\n'); await write(workdir, 'new.txt', 'x')
+      await ws.commit(workdir, 'agent change')
+
+      const trusted = await ws.trustedCheckout('rumba/hub/1')
+      expect(trusted).not.toBe(workdir)
+      expect(trusted).toBe(await realpath(trusted))
+      expect(await readFile(path.join(trusted, 'scripts/up.sh'), 'utf8')).toBe('echo trusted\n')
+      expect(existsSync(path.join(trusted, 'new.txt'))).toBe(false)
+      expect(await git(trusted, 'rev-parse', 'HEAD')).toBe(baseSha)
+      // Detached: it holds no branch, so the fix branch can still be checked out elsewhere.
+      expect(await git(trusted, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('HEAD')
+    })
+
+    it('stays at the commit the branch started from when the default branch moves on', async () => {
+      const { baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(clone, 'later.txt', 'x')
+      await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'later'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main'); await git(clone, 'fetch', '-q', 'origin')
+      const trusted = await ws.trustedCheckout('rumba/hub/1')
+      expect(await git(trusted, 'rev-parse', 'HEAD')).toBe(baseSha)
+      expect(existsSync(path.join(trusted, 'later.txt'))).toBe(false)
+    })
+
+    it('is never handed out as the checkout of the branch', async () => {
+      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      await ws.cleanup(first.workdir)
+      const trusted = await ws.trustedCheckout('rumba/hub/1')
+      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      expect(again.workdir).not.toBe(trusted)
+      const second = await ws.trustedCheckout('rumba/hub/1')
+      expect(second).not.toBe(trusted)
+    })
+
+    it('is removed by cleanup and by cleanupAll', async () => {
+      await ws.prepare('rumba/hub/1', { fresh: true })
+      const a = await ws.trustedCheckout('rumba/hub/1'); const b = await ws.trustedCheckout('rumba/hub/1')
+      await ws.cleanup(a); expect(existsSync(a)).toBe(false); expect(existsSync(b)).toBe(true)
+      await ws.cleanupAll(); expect(existsSync(b)).toBe(false)
+      expect((await git(clone, 'worktree', 'list', '--porcelain')).split('\n').filter((l) => l.startsWith('worktree '))).toHaveLength(1)
+    })
+
+    it('finds the starting commit of a branch another instance prepared', async () => {
+      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(workdir, 'a.txt', 'x'); await ws.commit(workdir, 'c')
+      const other = new GitWorkspace({ repoRoot: clone, defaultBranch: 'main' })
+      const trusted = await other.trustedCheckout('rumba/hub/1')
+      expect(await git(trusted, 'rev-parse', 'HEAD')).toBe(baseSha)
+      await other.cleanupAll()
+    })
+
+    it('refuses a branch that does not exist', async () => {
+      await expect(ws.trustedCheckout('rumba/hub/404')).rejects.toThrow(/rumba\/hub\/404/)
+    })
+  })
+
+  describe('commit and symbolic links', () => {
+    it('refuses to commit a link that points outside the repository', async () => {
+      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(workdir, 'a.txt', 'x')
+      await symlink('/etc', path.join(workdir, 'config'))
+      await mkdir(path.join(workdir, 'deep/er'), { recursive: true })
+      await symlink('../../../outside', path.join(workdir, 'deep/er/up'))
+      await expect(ws.commit(workdir, 'links')).rejects.toThrow(/outside the repository: config, deep\/er\/up/)
+      expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(baseSha)
+    })
+
+    it('refuses a directory replaced by a link that points outside', async () => {
+      await write(clone, 'config/app.yml', 'a: 1\n')
+      await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'config'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await rm(path.join(workdir, 'config'), { recursive: true })
+      await symlink('/', path.join(workdir, 'config'))
+      await expect(ws.commit(workdir, 'swap')).rejects.toThrow(/outside the repository: config/)
+    })
+
+    it('commits a link that stays inside the repository', async () => {
+      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(workdir, 'docs/a.md', 'x')
+      await symlink('docs/a.md', path.join(workdir, 'A.md'))
+      await symlink('../README.md', path.join(workdir, 'docs/readme'))
+      expect(await ws.commit(workdir, 'links')).toMatch(/^[0-9a-f]{40}$/)
+      expect((await ws.changedFiles(workdir, baseSha)).sort()).toEqual(['A.md', 'docs/a.md', 'docs/readme'])
+    })
+
+    it('leaves alone a link that a person committed earlier', async () => {
+      await symlink('/usr/share', path.join(clone, 'shared'))
+      await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'link'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(workdir, 'a.txt', 'x')
+      expect(await ws.commit(workdir, 'work')).toMatch(/^[0-9a-f]{40}$/)
+    })
+  })
+
   describe('hashFiles', () => {
     it('hashes file contents with SHA-256', async () => {
       const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })

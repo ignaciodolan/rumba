@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -57,6 +58,16 @@ describe('CLI agents', () => {
   it('ignores a stale result from an earlier task', async () => {
     await writeResult({ kind: 'fix', summary: 'old' }); const sandbox = { run: async () => ({ exitCode: 0, output: '' }) }
     await expect(new ClaudeCodeAgent({ sandbox, apiKey: 'k', timeoutMs: 1000 }).run(fixTask, dir)).rejects.toThrow(/did not write/)
+  })
+
+  it('never deletes or reads through a result folder that an earlier task replaced with a link', async () => {
+    const outside = path.join(dir, 'outside'); const work = path.join(dir, 'work')
+    await mkdir(outside); await mkdir(work)
+    await writeFile(path.join(outside, 'result.json'), JSON.stringify({ kind: 'fix', summary: 'from outside' }))
+    await symlink(outside, path.join(work, '.rumba-out'))
+    const sandbox = { run: async () => ({ exitCode: 0, output: '' }) }
+    await expect(new ClaudeCodeAgent({ sandbox, apiKey: 'k', timeoutMs: 1000 }).run(fixTask, work)).rejects.toThrow(/did not write/)
+    expect(existsSync(path.join(outside, 'result.json'))).toBe(true)
   })
 
   it('runs Claude Code headless with permission prompts off and returns the result', async () => {

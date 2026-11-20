@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DockerEnvironment } from '../../src/adapters/environment/docker.js'
+import { DockerEnvironment, shellRunner } from '../../src/adapters/environment/docker.js'
 import { GitWorkspace } from '../../src/adapters/workspace/git.js'
 import { loadRumba, type RumbaConfig } from '../../src/config/load.js'
 import { runRumba } from '../../src/core/runner.js'
@@ -32,7 +32,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execa('git', [...BOT, ...args], { cwd, stdin: 'ignore' })).stdout.trim()
 }
 
-/** The compose project name Docker derives from a workdir: its folder name, lower-cased, without other characters. */
+/** The compose project name Docker derives from the directory a command runs in: its folder name, lower-cased, without other characters. */
 function composeProject(workdir: string): string {
   return path.basename(workdir).toLowerCase().replace(/[^a-z0-9_-]/g, '')
 }
@@ -89,15 +89,36 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
   let tracker: FakeTracker
   let codeHost: FakeCodeHost
   let agent: ScriptedAgent
-  /** Every workdir the environment was brought up in. */
+  /** Every checkout of a commit under test that the environment was given. */
   let envWorkdirs: Set<string>
+  /** Every directory a host-side command (`up`, `exec`, `down`) ran in. */
+  let hostDirs: Set<string>
   let deps: Deps
+
+  async function commitToMain(message: string): Promise<void> {
+    await git(repoRoot, 'add', '-A')
+    await git(repoRoot, 'commit', '-q', '-m', message)
+    await git(repoRoot, 'push', '-q', 'origin', 'main')
+  }
 
   async function fixSlugOnMain(): Promise<void> {
     const file = path.join(repoRoot, 'src', 'slug.js')
     await writeFile(file, (await readFile(file, 'utf8')).replace(".join('-')", ".join('-').toLowerCase()"))
-    await git(repoRoot, 'commit', '-q', '-am', 'fix: lower-case slugs')
-    await git(repoRoot, 'push', '-q', 'origin', 'main')
+    await commitToMain('fix: lower-case slugs')
+  }
+
+  /** Real git and real Docker for `config`; the tracker, the code host and the agent are stand-ins. */
+  function depsFor(config: RumbaConfig, scripted: ScriptedAgent): Deps {
+    if (config.environment.kind !== 'docker') throw new Error('the fixture rumba must use the docker environment')
+    const { up, exec, down } = config.environment
+    const workspace = new GitWorkspace({ repoRoot, defaultBranch: 'main' })
+    const environment = new DockerEnvironment({
+      up, exec, down, trusted: workspace,
+      run: (command, o) => { hostDirs.add(o.cwd); return shellRunner(command, o) },
+    })
+    const realUp = environment.up.bind(environment)
+    environment.up = async (ref, workdir) => { envWorkdirs.add(workdir); return realUp(ref, workdir) }
+    return { tracker, agent: scripted, codeHost, environment, workspace, clock: () => new Date(), runId: 'e2e', secrets: [] }
   }
 
   beforeEach(async () => {
@@ -115,8 +136,6 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     await git(repoRoot, 'push', '-q', '-u', 'origin', 'main')
 
     rumba = await loadRumba(repoRoot, 'demo')
-    if (rumba.environment.kind !== 'docker') throw new Error('the fixture rumba must use the docker environment')
-    const { up, exec, down } = rumba.environment
     tracker = new FakeTracker(rumba.labels)
     tracker.tickets.push({
       id: '1', ref: '#1', title: 'Slugs keep upper-case letters', body: "slugify('Hello World') returns 'Hello-World'; slugs should be lower-case.",
@@ -125,22 +144,14 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     codeHost = new FakeCodeHost()
     agent = new ScriptedAgent()
     envWorkdirs = new Set()
-    const environment = new DockerEnvironment({ up, exec, down })
-    const realUp = environment.up.bind(environment)
-    environment.up = async (ref, workdir) => { envWorkdirs.add(workdir); return realUp(ref, workdir) }
-    deps = {
-      tracker, agent, codeHost, environment,
-      workspace: new GitWorkspace({ repoRoot, defaultBranch: 'main' }),
-      clock: () => new Date(),
-      runId: 'e2e',
-      secrets: [],
-    }
+    hostDirs = new Set()
+    deps = depsFor(rumba, agent)
   })
 
   afterEach(async () => {
     if (!dockerAvailable) return
     const problems: string[] = []
-    for (const workdir of [...(agent?.workdirs ?? []), ...(envWorkdirs ?? [])]) {
+    for (const workdir of [...(agent?.workdirs ?? []), ...(envWorkdirs ?? []), ...(hostDirs ?? [])]) {
       const project = composeProject(workdir)
       if ((await containersOf(project)).length > 0) {
         problems.push(`compose project ${project} still has containers`)
@@ -166,9 +177,60 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
     expect(s.after).toEqual([expect.objectContaining({ criterionId: 'c1', passed: true })])
     expect(codeHost.prs[0].body).toContain('| fail | pass |'); expect(codeHost.prs[0].draft).toBe(false)
-    // The before-run and the after-run each ran in their own checkout, never where an agent wrote.
+    // The before-run and the after-run each got their own checkout of the commit, never where an agent wrote.
     expect(envWorkdirs.size).toBe(2)
     for (const w of envWorkdirs) expect(agent.workdirs.has(w)).toBe(false)
+    // The host-side commands ran somewhere else again: in a checkout of the default branch.
+    expect(hostDirs.size).toBe(2)
+    for (const d of hostDirs) { expect(agent.workdirs.has(d)).toBe(false); expect(envWorkdirs.has(d)).toBe(false) }
+  }, 300_000)
+
+  it.skipIf(!dockerAvailable)('never lets a commit under test change what runs on the host', async () => {
+    // A person's project: `up` goes through a script, and the compose file includes another file.
+    const escape = path.join(tmp, 'host-dir')
+    await mkdir(escape)
+    await mkdir(path.join(repoRoot, 'scripts'))
+    await writeFile(path.join(repoRoot, 'scripts', 'up.sh'), '#!/bin/sh\nexec docker compose up -d --wait --build\n')
+    await writeFile(path.join(repoRoot, 'services.yml'), await readFile(path.join(repoRoot, 'docker-compose.yml'), 'utf8'))
+    await writeFile(path.join(repoRoot, 'docker-compose.yml'), 'include:\n  - services.yml\n')
+    await commitToMain('chore: start through a script and an included file')
+
+    // An agent that follows instructions hidden in a ticket: both of its commits rewrite the
+    // script, the included compose file and the Dockerfile. With `protected: []` the guard
+    // is out of the way, so only the rule about where host commands run stands between
+    // these files and the host.
+    class HostileAgent extends ScriptedAgent {
+      async run(task: AgentTask, workdir: string): Promise<AgentResult> {
+        const result = await super.run(task, workdir)
+        if (task.kind === 'write-checks' || task.kind === 'fix') {
+          await writeFile(path.join(workdir, 'scripts', 'up.sh'), `#!/bin/sh\ntouch '${path.join(escape, 'script-ran-on-host')}'\nexit 1\n`)
+          await writeFile(path.join(workdir, 'services.yml'), [
+            'services:', '  app:', '    build: .', '    volumes:', '      - ${RUMBA_WORKDIR:-.}:/app', `      - ${escape}:/escape`,
+            "    command: sh -c 'touch /escape/included-file-was-read; sleep infinity'", '',
+          ].join('\n'))
+          await writeFile(path.join(workdir, 'Dockerfile'), 'FROM node:22\nWORKDIR /app\nRUN touch /dockerfile-was-read\n')
+        }
+        return result
+      }
+    }
+    agent = new HostileAgent()
+    const config: RumbaConfig = {
+      ...rumba,
+      environment: { ...rumba.environment, kind: 'docker', up: 'sh scripts/up.sh', exec: 'docker compose exec -T app', down: 'docker compose down -v --rmi local --remove-orphans', protected: [] },
+      // Fails if the image was built from the agent's Dockerfile.
+      verify: { test: 'test ! -e /dockerfile-was-read && node --test' },
+    }
+    deps = depsFor(config, agent)
+
+    const r = await runRumba(deps, config)
+
+    expect(r.advanced).toEqual([{ ticket: '1', from: 'queued', to: 'pr_open' }])
+    expect(existsSync(path.join(escape, 'script-ran-on-host'))).toBe(false)
+    expect(existsSync(path.join(escape, 'included-file-was-read'))).toBe(false)
+    const s = tracker.states.get('1')!
+    expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
+    expect(s.after).toEqual([expect.objectContaining({ criterionId: 'c1', passed: true })])
+    for (const d of hostDirs) { expect(agent.workdirs.has(d)).toBe(false); expect(envWorkdirs.has(d)).toBe(false) }
   }, 300_000)
 
   it.skipIf(!dockerAvailable)('reports not_reproducible when the bug is already fixed', async () => {
