@@ -7,6 +7,9 @@ import { transition } from '../states.js'
 import type { Ticket, TicketState } from '../types.js'
 import { cleanupQuietly } from './teardown.js'
 
+/** The agent writes the skip reason, so it is cut before it is posted and stored. */
+const MAX_REASON = 1000
+
 export async function triage(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState): Promise<TicketState> {
   let current = transition(state, 'triaged', deps.clock())
   await deps.tracker.writeState(ticket, current)
@@ -22,8 +25,9 @@ export async function triage(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
     if (result.kind !== 'triage') throw new Error(`Agent returned ${result.kind} for a triage task`)
 
     if (!result.workable) {
-      await deps.tracker.comment(ticket, `Rumba skipped this ticket: ${result.reason}`)
-      current = transition(current, 'skipped', deps.clock(), result.reason)
+      const reason = result.reason.slice(0, MAX_REASON)
+      await deps.tracker.comment(ticket, `Rumba skipped this ticket: ${reason}`)
+      current = transition(current, 'skipped', deps.clock(), reason)
       await deps.tracker.writeState(ticket, current)
       return current
     }

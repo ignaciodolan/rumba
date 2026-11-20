@@ -20,10 +20,26 @@ function forms(secrets: string[]): string[] {
 const CHECK_OUTPUT_BUDGET = 12000
 const MIN_CHECK_OUTPUT = 200
 
+/** Replaces each non-empty secret, and its encoded forms, with '[redacted]'. Cuts nothing. */
+export function redact(text: string, secrets: string[]): string {
+  let out = text
+  for (const form of forms(secrets)) out = out.split(form).join('[redacted]')
+  return out
+}
+
+/** A copy of `value` with every string in it, at any depth, passed through `redact`. */
+export function redactDeep<T>(value: T, secrets: string[]): T {
+  if (typeof value === 'string') return redact(value, secrets) as T
+  if (Array.isArray(value)) return value.map((v: unknown) => redactDeep(v, secrets)) as T
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactDeep(v, secrets)])) as T
+  }
+  return value
+}
+
 /** Replaces each non-empty secret with '[redacted]', then keeps the last `max` characters. */
 export function cleanOutput(output: string, secrets: string[], max = MAX_OUTPUT): string {
-  let text = output
-  for (const form of forms(secrets)) text = text.split(form).join('[redacted]')
+  const text = redact(output, secrets)
   return text.length > max ? CUT_MARK + text.slice(-max) : text
 }
 

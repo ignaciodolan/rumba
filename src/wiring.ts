@@ -10,6 +10,7 @@ import { GitHubTracker } from './adapters/tracker/github.js'
 import { LinearTracker, SdkLinearGateway } from './adapters/tracker/linear.js'
 import { GitWorkspace } from './adapters/workspace/git.js'
 import type { RumbaConfig } from './config/load.js'
+import { redact, redactDeep } from './core/redact.js'
 import { STATE_NAMES } from './core/states.js'
 import type { Agent } from './ports/agent.js'
 import type { CodeHost } from './ports/codeHost.js'
@@ -111,6 +112,36 @@ function environmentFor(rumba: RumbaConfig, env: Env, codeHost: CodeHost, sandbo
   })
 }
 
+/**
+ * The tracker, with every text it posts or stores passed through `redact` first. The ticket
+ * objects are passed through unchanged, so label updates the tracker makes on them still land.
+ */
+export function redactingTracker(inner: Tracker, secrets: string[]): Tracker {
+  const r = (text: string) => redact(text, secrets)
+  return {
+    ensureLabels: () => inner.ensureLabels(),
+    listCandidates: () => inner.listCandidates(),
+    getTicket: (id) => inner.getTicket(id),
+    readState: (t) => inner.readState(t),
+    writeState: (t, s) => inner.writeState(t, redactDeep(s, secrets)),
+    postCriteria: (t, c) => inner.postCriteria(t, c.map((x) => ({ ...x, text: r(x.text) }))),
+    readLinkedDocuments: (t) => inner.readLinkedDocuments(t),
+    removeLabel: (t, label) => inner.removeLabel(t, label),
+    comment: (t, body) => inner.comment(t, r(body)),
+    commentOnce: (t, key, body) => inner.commentOnce(t, key, r(body)),
+  }
+}
+
+/** The code host, with the pull request's title and body passed through `redact` first. */
+export function redactingCodeHost(inner: CodeHost, secrets: string[]): CodeHost {
+  return {
+    defaultBranch: () => inner.defaultBranch(),
+    pushBranch: (workdir, branch, opts) => inner.pushBranch(workdir, branch, opts),
+    deleteBranch: (branch) => inner.deleteBranch(branch),
+    openPullRequest: (pr) => inner.openPullRequest({ ...pr, title: redact(pr.title, secrets), body: redact(pr.body, secrets) }),
+  }
+}
+
 /** Builds the real adapters for one rumba. Constructs objects only: no I/O and no network call. */
 export function buildDeps(
   rumba: RumbaConfig,
@@ -125,14 +156,15 @@ export function buildDeps(
   const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
   const environment = environmentFor(rumba, env, codeHost, sandbox)
   const workspace = new GitWorkspace({ repoRoot: repo.root, defaultBranch: repo.defaultBranch })
+  const secrets = secretValues(env)
   return {
-    tracker,
+    tracker: redactingTracker(tracker, secrets),
     agent,
     environment,
-    codeHost,
+    codeHost: redactingCodeHost(codeHost, secrets),
     workspace,
     clock: () => new Date(),
     runId: randomUUID(),
-    secrets: secretValues(env),
+    secrets,
   }
 }

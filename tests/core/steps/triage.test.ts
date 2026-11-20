@@ -115,5 +115,11 @@ describe('triage', () => {
     const d = makeDeps(); d.agent.script.triage = { ...bug, criteriaSource: 'derived' }
     expect((await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).state).toBe('criteria_ready')
   })
+  it('cuts the skip reason to 1,000 characters', async () => {
+    const d = makeDeps(); d.agent.script.triage = { ...bug, workable: false, reason: 'r'.repeat(1500) }
+    const s = await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    expect(d.tracker.comments.at(-1)?.body).toBe(`Rumba skipped this ticket: ${'r'.repeat(1000)}`)
+    expect(s.history.at(-1)?.note).toBe('r'.repeat(1000))
+  })
 })
 

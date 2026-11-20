@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { GitHubTracker } from '../src/adapters/tracker/github.js'
 import { LinearTracker } from '../src/adapters/tracker/linear.js'
-import { makeRumba } from '../src/testing/fakes.js'
-import { buildDeps, buildTracker, MissingKeyError, parseRemote } from '../src/wiring.js'
+import { GitHubCodeHost } from '../src/adapters/codeHost/github.js'
+import { FakeCodeHost, FakeTracker, failing, makeDeps, makeRumba, makeTicket } from '../src/testing/fakes.js'
+import { buildDeps, buildTracker, MissingKeyError, parseRemote, redactingCodeHost, redactingTracker } from '../src/wiring.js'
 
 const repo = { root: '/repo', owner: 'acme', name: 'shop', defaultBranch: 'main' }
 
@@ -72,3 +73,59 @@ describe('parseRemote', () => {
     }
   })
 })
+
+describe('redacting wrappers', () => {
+  const SECRET = 'tok-s3cret'
+
+  it('buildDeps wraps the tracker and the code host', () => {
+    const d = buildDeps(makeRumba(), { GITHUB_TOKEN: 'g', ANTHROPIC_API_KEY: 'a' }, repo)
+    expect(d.tracker).not.toBeInstanceOf(GitHubTracker); expect(d.codeHost).not.toBeInstanceOf(GitHubCodeHost)
+  })
+
+  it('redacts comments, criteria and every string in the state', async () => {
+    const inner = new FakeTracker(); const t = makeTicket(); inner.tickets.push(t)
+    const tracker = redactingTracker(inner, [SECRET])
+    await tracker.comment(t, `body ${SECRET}`)
+    await tracker.commentOnce(t, 'k', `once ${SECRET}`)
+    await tracker.commentOnce(t, 'k', 'again')
+    expect(inner.comments.map((c) => c.body)).toEqual(['body [redacted]', 'once [redacted]'])
+    await tracker.postCriteria(t, [{ id: 'c1', text: `uses ${SECRET}`, checkable: true }])
+    expect(inner.criteriaPosts[0]!.criteria).toEqual([{ id: 'c1', text: 'uses [redacted]', checkable: true }])
+    const s = failing(makeDeps())
+    s.criteria[0]!.text = `criterion ${SECRET}`
+    s.checks[0]!.command = `curl -H ${SECRET}`
+    s.before![0]!.output = `out ${SECRET}`
+    s.history.push({ state: 'checks_failing', at: 'now', note: `note ${SECRET}` })
+    await tracker.writeState(t, s)
+    const stored = JSON.stringify(inner.states.get('123'))
+    expect(stored).not.toContain(SECRET); expect(stored).toContain('criterion [redacted]')
+    expect(stored).toContain('curl -H [redacted]'); expect(stored).toContain('out [redacted]'); expect(stored).toContain('note [redacted]')
+    expect(s.before![0]!.output).toBe(`out ${SECRET}`)
+  })
+
+  it('delegates every other tracker method, keeping label updates on the same ticket object', async () => {
+    const inner = new FakeTracker(); const t = makeTicket({ labels: ['rumba:hub', 'rumba-approved'] }); inner.tickets.push(t)
+    inner.documents = [{ title: 'Spec', body: 'd' }]
+    const tracker = redactingTracker(inner, [SECRET])
+    await tracker.ensureLabels()
+    expect(await tracker.listCandidates()).toEqual([t])
+    expect(await tracker.getTicket('123')).toBe(t)
+    expect(await tracker.readLinkedDocuments(t)).toEqual([{ title: 'Spec', body: 'd' }])
+    const copy = { ...t, labels: [...t.labels] }
+    await tracker.removeLabel(copy, 'rumba-approved')
+    expect(copy.labels).toEqual(['rumba:hub'])
+    await tracker.writeState(copy, failing(makeDeps()))
+    expect(copy.labels).toContain('rumba-state:checks_failing')
+    expect(await tracker.readState(copy)).toMatchObject({ state: 'checks_failing' })
+  })
+
+  it('redacts the pull request title and body and delegates the rest', async () => {
+    const inner = new FakeCodeHost(); const host = redactingCodeHost(inner, [SECRET])
+    expect(await host.openPullRequest({ title: `t ${SECRET}`, body: `b ${SECRET}`, head: 'h', base: 'main', draft: false })).toBe('https://example.test/pr/1')
+    expect(inner.prs[0]).toEqual({ title: 't [redacted]', body: 'b [redacted]', head: 'h', base: 'main', draft: false })
+    expect(await host.defaultBranch()).toBe('main')
+    await host.pushBranch('/w', 'rumba/hub/1', { force: true }); await host.deleteBranch('rumba/hub/base-1')
+    expect(inner.pushed).toEqual([{ branch: 'rumba/hub/1', force: true }]); expect(inner.deleted).toEqual(['rumba/hub/base-1'])
+  })
+})
+

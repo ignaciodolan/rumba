@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_OUTPUT, checkOutputMax, cleanOutput } from '../../src/core/redact.js'
+import { MAX_OUTPUT, checkOutputMax, cleanOutput, redact } from '../../src/core/redact.js'
 
 describe('cleanOutput', () => {
   it('redacts secrets and ignores empty ones', () => {
@@ -37,5 +37,13 @@ describe('checkOutputMax', () => {
     expect(checkOutputMax(4)).toBe(3000)
     expect(checkOutputMax(20)).toBe(600)
     expect(checkOutputMax(100)).toBe(200)
+  })
+})
+
+describe('redact', () => {
+  it('replaces secrets and their encoded forms without cutting', () => {
+    const long = 'x'.repeat(10_000)
+    expect(redact(`${long} s3cret ${Buffer.from('s3cret').toString('base64')}`, ['s3cret', ''])).toBe(`${long} [redacted] [redacted]`)
+    expect(redact('nothing here', [])).toBe('nothing here')
   })
 })
