@@ -14,4 +14,15 @@ describe('guards', () => {
     expect(outsideScope(['apps/hub/x.ts', 'packages/ui/y.ts', 'tests/rumba/c1.test.ts'], ['apps/hub/**'], ['tests/rumba/c1.test.ts'])).toEqual(['packages/ui/y.ts'])
     expect(outsideScope(['anything.ts'], [], [])).toEqual([])
   })
+  it('matches slashless globs by name at any depth', () => {
+    expect(protectedViolations(['apps/hub/docker-compose.yml', 'apps/hub/src/a.ts'], ['docker-compose*.y*ml']))
+      .toEqual(['apps/hub/docker-compose.yml'])
+  })
+  it('keeps globs with a slash anchored to the full path', () => {
+    expect(protectedViolations(['infra/main.tf', 'apps/infra/main.tf'], ['infra/*.tf'])).toEqual(['infra/main.tf'])
+  })
+  it('matches protected paths case-insensitively', () => {
+    expect(protectedViolations(['.Rumba/hub/context.md', 'Docker-Compose.yml'], ['docker-compose*.y*ml']))
+      .toEqual(['.Rumba/hub/context.md', 'Docker-Compose.yml'])
+  })
 })

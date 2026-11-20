@@ -4,8 +4,10 @@ const matcher = (globs: string[]) => picomatch(globs, { dot: true })
 
 /** Changed files that match a protected glob. '.rumba/**' is always protected. */
 export function protectedViolations(changed: string[], protectedGlobs: string[]): string[] {
-  const isProtected = matcher(['.rumba/**', ...protectedGlobs])
-  return changed.filter((f) => isProtected(f))
+  // A glob without a slash matches by file name at any depth; one with a slash matches the full path.
+  const matchers = ['.rumba/**', ...protectedGlobs].map((g) =>
+    picomatch(g, { dot: true, nocase: true, basename: !g.includes('/') }))
+  return changed.filter((f) => matchers.some((m) => m(f)))
 }
 
 /** Check files whose hash differs from the recorded one, or that are gone. */

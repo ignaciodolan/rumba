@@ -22,7 +22,7 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
   const { workdir } = await deps.workspace.prepare(branch, { fresh: false })
   try {
     let failures: Failure[] = fromResults(state.before ?? [], deps.secrets)
-    const checkFiles = state.checks.flatMap((c) => c.files)
+    const checkFiles = [...new Set([...Object.keys(state.checkHashes), ...state.checks.flatMap((c) => c.files)])]
 
     while (current.fixAttempts < rumba.limits.maxFixAttempts) {
       const result = await deps.agent.run({

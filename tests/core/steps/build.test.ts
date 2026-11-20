@@ -45,6 +45,14 @@ describe('build', () => {
     expect((await build(d, rumba, makeTicket(), failing(d))).state).toBe('fix_failed')
     expect(d.environment.ups).toHaveLength(0)
   })
+  it('rejects a fix that edits a helper file hashed from the checks commit', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.environment.passes = () => true
+    d.workspace.hashes = { ...H, 'tests/rumba/helper.ts': 'EDITED' }
+    const st = failing(d); st.checkHashes = { ...H, 'tests/rumba/helper.ts': 'h2' }
+    const s = await build(d, makeRumba(), makeTicket(), st)
+    expect(s.state).toBe('fix_failed'); expect(d.environment.ups).toHaveLength(0)
+    expect(d.agent.calls[1]!.failures?.[0]).toMatchObject({ criterionId: 'guard' })
+  })
   it('fails an attempt when the project tests break', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H
     d.environment.passes = () => true; d.environment.commandExit = 1

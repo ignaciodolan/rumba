@@ -37,7 +37,8 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
     if (checks.length === 0) return await stop(deps, ticket, state, 'needs_human', NO_CHECK)
 
     const checksSha = (await deps.workspace.commit(workdir, `test: rumba checks for ${ticket.ref}`)) ?? baseSha
-    const touched = protectedViolations(await deps.workspace.changedFiles(workdir, baseSha), rumba.environment.protected)
+    const committed = await deps.workspace.changedFiles(workdir, baseSha)
+    const touched = protectedViolations(committed, rumba.environment.protected)
     if (touched.length > 0) throw new AgentError(`The agent changed protected paths: ${touched.join(', ')}`)
     const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before' }, workdir)
     try {
@@ -64,7 +65,7 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
           `These criteria already pass on the current code: ${texts.join('; ')}`)
       }
 
-      const checkHashes = await deps.workspace.hashFiles(workdir, checks.flatMap((c) => c.files))
+      const checkHashes = await deps.workspace.hashFiles(workdir, [...new Set([...checks.flatMap((c) => c.files), ...committed])])
       current = { ...transition(current, 'checks_failing', deps.clock()), checkHashes }
       await deps.tracker.writeState(ticket, current)
       return current

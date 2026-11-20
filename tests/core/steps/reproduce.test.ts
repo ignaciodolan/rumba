@@ -84,6 +84,13 @@ describe('reproduce', () => {
     await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/\.rumba\/hub\/context\.md/)
     expect(d.environment.ups).toEqual([])
   })
+  it('hashes declared check files and every file from the checks commit', async () => {
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['tests/rumba/helper.ts']
+    const asked: string[][] = []
+    d.workspace.hashFiles = async (_w, files) => { asked.push(files); return {} }
+    await reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))
+    expect(asked[0]).toEqual(expect.arrayContaining(['tests/rumba/c1.test.ts', 'tests/rumba/helper.ts']))
+  })
   it('throws on a state that is not criteria_ready', async () => {
     const d = makeDeps()
     await expect(reproduce(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).rejects.toThrow()
