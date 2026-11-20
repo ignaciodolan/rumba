@@ -248,3 +248,40 @@ export function failing(d: FakeDeps): TicketState {
     before: [{ criterionId: 'c1', passed: false, exitCode: 1, output: 'check failed' }],
   }
 }
+
+/** A 'verified' state: the same data as failing(d), built through 'building', plus an after result and a second criterion that cannot be checked. */
+export function verified(d: FakeDeps): TicketState {
+  const now = d.clock()
+  const f = failing(d)
+  const s = transition(transition(f, 'building', now), 'verified', now)
+  return {
+    ...s,
+    criteria: [...f.criteria, { id: 'c2', text: 'C2', checkable: false }],
+    after: [{ criterionId: 'c1', passed: true, exitCode: 0, output: 'check passed' }],
+  }
+}
+
+export const happyTriage: Extract<AgentResult, { kind: 'triage' }> = {
+  kind: 'triage', workable: true, reason: '', ticketKind: 'bug',
+  criteria: [{ id: 'c1', text: 'Saving a profile no longer returns 500', checkable: true }],
+}
+
+/** Scripts a bug that triages straight to criteria, fails before the fix and passes after it. */
+export function scriptHappyBug(d: FakeDeps): void {
+  d.agent.script.triage = happyTriage
+  d.agent.script['write-checks'] = {
+    kind: 'write-checks',
+    checks: [{ criterionId: 'c1', command: 'npm test -- c1', files: ['tests/rumba/c1.test.ts'] }],
+  }
+  d.agent.script.fix = { kind: 'fix', summary: 'fixed' }
+  d.workspace.hashes = { 'tests/rumba/c1.test.ts': 'h1' }
+}
+
+/** Scripts a feature whose ticket has no criteria, so Rumba drafts some and waits. */
+export function scriptFeatureWithoutCriteria(d: FakeDeps): void {
+  d.agent.script.triage = { ...happyTriage, ticketKind: 'feature', criteria: null }
+  d.agent.script['draft-criteria'] = {
+    kind: 'draft-criteria',
+    criteria: [{ id: 'c1', text: 'Export button exists', checkable: true }],
+  }
+}
