@@ -12,6 +12,7 @@ export interface VercelClient {
 }
 
 const API = 'https://api.vercel.com/v7/deployments'
+const REQUEST_TIMEOUT_MS = 30 * 1000
 
 /** Every state the API documents, onto the five the environment knows. */
 const STATES: Record<string, DeploymentState> = {
@@ -55,7 +56,10 @@ export class HttpVercelClient implements VercelClient {
   async findDeployment({ sha }: { sha: string }): Promise<Deployment | null> {
     const query = new URLSearchParams({ projectId: this.o.projectId, sha })
     if (this.o.teamId !== undefined) query.set('teamId', this.o.teamId)
-    const res = await this.fetch(`${API}?${query}`, { headers: { Authorization: `Bearer ${this.o.token}` } })
+    const res = await this.fetch(`${API}?${query}`, {
+      headers: { Authorization: `Bearer ${this.o.token}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
     if (!res.ok) throw new Error(`Vercel API request to list deployments failed with status ${res.status}.`)
     const body = (await res.json()) as { deployments?: unknown }
     if (!Array.isArray(body.deployments)) throw new Error('Vercel API returned no deployments list.')
@@ -74,6 +78,8 @@ const DEFAULT_POLL_MS = 10 * 1000
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000
 const BARE_HOST = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$/
+/** Failed lookups in a row that `up` waits through; the next one ends the wait. */
+const MAX_FAILED_LOOKUPS = 3
 
 export class VercelPreviewEnvironment implements Environment {
   private readonly pollMs: number
@@ -133,13 +139,28 @@ export class VercelPreviewEnvironment implements Environment {
     await this.deleteQuietly(branch)
   }
 
-  /** Polls until the deployment for `sha` is READY and returns its host name. */
+  /**
+   * Polls until the deployment for `sha` is READY and returns its host name. A production
+   * deployment is never used: it counts as not there yet, since a preview may still follow.
+   */
   private async waitForReady(sha: string): Promise<string> {
     let elapsed = 0
+    let failedLookups = 0
+    let sawProduction = false
+    let sawOther = false
     for (;;) {
-      const d = await this.o.client.findDeployment({ sha })
-      if (d !== null) {
-        if (d.target === 'production') throw new Error('Refusing to run checks against a production deployment.')
+      let d: Deployment | null = null
+      try {
+        d = await this.o.client.findDeployment({ sha })
+        failedLookups = 0
+      } catch (err) {
+        failedLookups += 1
+        if (failedLookups > MAX_FAILED_LOOKUPS) throw err
+      }
+      if (d !== null && d.target === 'production') {
+        sawProduction = true
+      } else if (d !== null) {
+        sawOther = true
         if (d.state === 'ERROR' || d.state === 'CANCELED') throw new Error(`Vercel deployment for ${sha} ended in state ${d.state}.`)
         if (d.state === 'READY') {
           if (!BARE_HOST.test(d.url)) throw new Error(`Vercel deployment for ${sha} has a URL that is not a bare host name.`)
@@ -147,7 +168,10 @@ export class VercelPreviewEnvironment implements Environment {
         }
       }
       if (elapsed + this.pollMs > this.timeoutMs) {
-        throw new Error(`Vercel deployment for ${sha} did not become ready within ${this.timeoutMs} ms.`)
+        const onlyProduction = sawProduction && !sawOther
+          ? ' Only a production deployment was found. Refusing to run checks against a production deployment.'
+          : ''
+        throw new Error(`Vercel deployment for ${sha} did not become ready within ${this.timeoutMs} ms.${onlyProduction}`)
       }
       await this.sleep(this.pollMs)
       elapsed += this.pollMs

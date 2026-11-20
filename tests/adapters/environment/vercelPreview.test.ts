@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HttpVercelClient, VercelPreviewEnvironment } from '../../../src/adapters/environment/vercelPreview.js'
 import { makeDeps } from '../../../src/testing/fakes.js'
 
@@ -110,6 +110,28 @@ describe('VercelPreviewEnvironment', () => {
       .toEqual({ criterionId: 'c1', passed: false, exitCode: 3, output: ' raw output\n' })
     expect(calls).toEqual([{ workdir: '/w', command: ['sh', '-c', 'node check.cjs'], env: { RUMBA_BASE_URL: 'https://x.vercel.app' }, timeoutMs: 1234 }])
   })
+  it('skips a production deployment while waiting and uses the preview that follows', async () => {
+    const { env } = mk([{ state: 'READY', url: 'app.com', target: 'production' }, { state: 'READY', url: 'x.vercel.app', target: 'preview' }])
+    expect((await env.up({ branch: 'b', sha: 's', role: 'after' }, '/w')).baseUrl).toBe('https://x.vercel.app')
+  })
+  it('names production in the timeout when only production deployments were seen', async () => {
+    const err = await mk([{ state: 'READY', url: 'app.com', target: 'production' }]).env.up({ branch: 'b', sha: 's', role: 'after' }, '/w').then(() => new Error('resolved'), (e: Error) => e)
+    expect(err.message).toMatch(/did not become ready/); expect(err.message).toMatch(/production/)
+    const other = await mk([{ state: 'BUILDING', url: 'app.com', target: 'production' }, { state: 'BUILDING', url: 'x.vercel.app', target: 'preview' }])
+      .env.up({ branch: 'b', sha: 's', role: 'after' }, '/w').then(() => new Error('resolved'), (e: Error) => e)
+    expect(other.message).toMatch(/did not become ready/); expect(other.message).not.toMatch(/production/)
+  })
+  it('tolerates up to three failed lookups in a row', async () => {
+    const ready = { state: 'READY', url: 'x.vercel.app', target: 'preview' }
+    const flaky = (script: (Error | object | null)[]) => {
+      let i = 0
+      return mk([], { client: { findDeployment: async () => { const x = script[i++]; if (x instanceof Error) throw x; return x ?? null } } }).env
+    }
+    const e = () => new Error('lookup failed')
+    expect((await flaky([e(), e(), e(), ready]).up({ branch: 'b', sha: 's', role: 'after' }, '/w')).baseUrl).toBe('https://x.vercel.app')
+    expect((await flaky([e(), e(), e(), null, e(), e(), e(), ready]).up({ branch: 'b', sha: 's', role: 'after' }, '/w')).baseUrl).toBe('https://x.vercel.app')
+    await expect(flaky([e(), e(), e(), e(), ready]).up({ branch: 'b', sha: 's', role: 'after' }, '/w')).rejects.toThrow('lookup failed')
+  })
   it('passes a check that exits 0 and uses a ten minute check timeout by default', async () => {
     const { env, sandboxCalls } = mk([{ state: 'READY', url: 'x.vercel.app', target: 'preview' }])
     const h = await env.up({ branch: 'b', sha: 's', role: 'after' }, '/w')
@@ -130,6 +152,14 @@ const stubFetch = (status: number, body: unknown) => {
 const dep = (over: Record<string, unknown> = {}) => ({ uid: 'dpl_1', url: 'x.vercel.app', readyState: 'READY', state: 'READY', target: null, created: 1, createdAt: 1, ...over })
 
 describe('HttpVercelClient', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  it('gives each request a 30 second timeout', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    const { fetch, calls } = stubFetch(200, { deployments: [] })
+    await new HttpVercelClient({ token: 't', projectId: 'p', fetch }).findDeployment({ sha: 's' })
+    expect(timeout).toHaveBeenCalledWith(30_000)
+    expect(calls[0]!.init?.signal).toBe(timeout.mock.results[0]!.value)
+  })
   it('lists deployments of the project by SHA with a bearer token', async () => {
     const { fetch, calls } = stubFetch(200, { deployments: [dep()], pagination: {} })
     const c = new HttpVercelClient({ token: 'tok-secret', projectId: 'prj_1', fetch })
