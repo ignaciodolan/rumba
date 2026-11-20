@@ -12,6 +12,11 @@ export interface EnvHandle {
 }
 
 export interface Environment {
+  /**
+   * `workdir` is a checkout of the commit under test, so it holds files an agent wrote. An
+   * environment may hand it to a container, as a mount or a build context. It must never
+   * start a host-side command in it, or one that reads from it.
+   */
   up(ref: { branch: string; sha: string; role: 'before' | 'after' }, workdir: string): Promise<EnvHandle>
   runCheck(h: EnvHandle, check: Check): Promise<CheckResult>
   /** Null when the environment cannot run commands. */
