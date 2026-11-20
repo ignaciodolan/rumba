@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { AgentError, type AgentResult, type AgentTaskKind } from '../../ports/agent.js'
@@ -34,13 +35,49 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
   fix: z.object({ kind: z.literal('fix'), summary: z.string() }),
 }
 
-export async function readAgentResult(workdir: string, expected: AgentTaskKind): Promise<AgentResult> {
-  let raw: string
+/** More than any real result needs; a larger file is not read. */
+const MAX_RESULT_BYTES = 1_000_000
+
+// The result file is the one thing the Rumba process itself reads from a directory the agent
+// wrote to. The agent could have put a symbolic link, a named pipe or a huge file there, so
+// the folder must be a real directory and the file a regular one, opened without following a
+// link or blocking, and read through that one handle.
+
+/** Removes a result left by an earlier task, without ever following a link the agent made. */
+export async function clearAgentResult(workdir: string): Promise<void> {
+  const dir = path.join(workdir, path.dirname(RESULT_PATH))
+  const stat = await lstat(dir).catch(() => null)
+  if (stat === null) return
+  // rm without `recursive` removes a link or a file itself, never what a link points at.
+  if (!stat.isDirectory()) await rm(dir, { force: true })
+  else await rm(path.join(workdir, RESULT_PATH), { force: true, recursive: true })
+}
+
+async function readResultFile(workdir: string): Promise<string> {
+  const notRegular = new AgentError(`The agent's ${RESULT_PATH} is not a regular file in a regular folder.`)
+  const dir = await lstat(path.join(workdir, path.dirname(RESULT_PATH))).catch(() => null)
+  if (dir === null) throw new AgentError(`The agent did not write ${RESULT_PATH}.`)
+  if (!dir.isDirectory()) throw notRegular
+  let handle
   try {
-    raw = await readFile(path.join(workdir, RESULT_PATH), 'utf8')
-  } catch {
-    throw new AgentError(`The agent did not write ${RESULT_PATH}.`)
+    handle = await open(path.join(workdir, RESULT_PATH), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') throw new AgentError(`The agent did not write ${RESULT_PATH}.`)
+    throw notRegular
   }
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile()) throw notRegular
+    if (stat.size > MAX_RESULT_BYTES) throw new AgentError(`The agent's ${RESULT_PATH} is too large (${stat.size} bytes).`)
+    return await handle.readFile('utf8')
+  } finally {
+    await handle.close()
+  }
+}
+
+export async function readAgentResult(workdir: string, expected: AgentTaskKind): Promise<AgentResult> {
+  const raw = await readResultFile(workdir)
   let value: unknown
   try {
     value = JSON.parse(raw)
