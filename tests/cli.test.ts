@@ -17,7 +17,6 @@ function harness(overrides: CliOverrides = {}) {
     repoRoot: async () => '/repo',
     remoteUrl: async () => 'https://github.com/acme/shop.git',
     defaultBranch: async () => 'main',
-    ensureSandboxImage: async () => {},
     loadRumbas: async () => [makeRumba()],
     loadRumba: async (_root, name) => makeRumba({ name }),
     buildDeps: () => makeDeps(),
@@ -80,17 +79,6 @@ describe('rumba', () => {
     expect(process.exitCode).toBe(1)
   })
 
-  it('builds the sandbox image once before the first rumba', async () => {
-    const images: string[] = []
-    const h = harness({
-      loadRumbas: async () => [makeRumba({ name: 'api' }), makeRumba({ name: 'hub' })],
-      ensureSandboxImage: async (image, dir) => { images.push(`${image} ${dir}`) },
-      runRumba: async (_d, rumba) => ({ rumba: rumba.name, advanced: [], left: [] }),
-    })
-    await h.parse('run')
-    expect(images).toHaveLength(1)
-    expect(images[0]).toMatch(/^rumba-sandbox:local .*sandbox$/)
-  })
 
   it('fails the whole command on a ConfigError', async () => {
     let ran = false

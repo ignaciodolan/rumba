@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { Octokit } from '@octokit/rest'
 import { ClaudeCodeAgent } from './adapters/agent/claudeCode.js'
 import { GeminiCliAgent } from './adapters/agent/geminiCli.js'
@@ -20,6 +21,9 @@ import type { Sandbox } from './ports/sandbox.js'
 import type { Tracker } from './ports/tracker.js'
 
 export class MissingKeyError extends Error {}
+
+/** The package's sandbox folder, holding the image's Dockerfile; the same relative path from `src/` and from `dist/`. */
+export const SANDBOX_DIR = fileURLToPath(new URL('../sandbox', import.meta.url))
 
 type Env = Record<string, string | undefined>
 
@@ -151,7 +155,7 @@ export function buildDeps(
   const token = githubToken(rumba, env)
   const octokit = new Octokit({ auth: token })
   const tracker = trackerFor(rumba, env, repo, () => octokit)
-  const sandbox = new DockerSandbox()
+  const sandbox = new DockerSandbox({ dockerfileDir: SANDBOX_DIR })
   const agent = agentFor(rumba, env, sandbox)
   const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
   const environment = environmentFor(rumba, env, codeHost, sandbox)

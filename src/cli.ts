@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { Command, CommanderError } from 'commander'
 import { execa } from 'execa'
-import { ensureSandboxImage, SANDBOX_IMAGE } from './adapters/sandbox/docker.js'
 import { ConfigError, loadRumba, loadRumbas, type RumbaConfig } from './config/load.js'
 import { cleanOutput } from './core/redact.js'
 import { runRumba, type RunSummary } from './core/runner.js'
@@ -34,11 +33,7 @@ export interface CliOverrides {
   buildTracker?: (rumba: RumbaConfig, env: Env, repo: { owner: string; name: string }) => Tracker
   runRumba?: (deps: Deps, rumba: RumbaConfig, opts: { ticketId?: string }) => Promise<RunSummary>
   listStatus?: (tracker: Tracker, rumba: RumbaConfig) => Promise<StatusLine[]>
-  ensureSandboxImage?: (image: string, dockerfileDir: string) => Promise<void>
 }
-
-/** The package's sandbox folder; the same relative path from `src/` and from `dist/`. */
-const SANDBOX_DIR = fileURLToPath(new URL('../sandbox', import.meta.url))
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {
   const r = await execa('git', args, { cwd, reject: false })
@@ -94,7 +89,6 @@ export function buildProgram(io: Io, overrides: CliOverrides = {}): Command {
     buildTracker,
     runRumba,
     listStatus: trackerStatus,
-    ensureSandboxImage,
     ...overrides,
   }
   const secrets = secretValues(o.env)
@@ -136,7 +130,6 @@ export function buildProgram(io: Io, overrides: CliOverrides = {}): Command {
       let defaultBranch: string
       try {
         defaultBranch = await o.defaultBranch(setup.root)
-        await o.ensureSandboxImage(SANDBOX_IMAGE, SANDBOX_DIR)
       } catch (e) {
         return fail(messageOf(e))
       }

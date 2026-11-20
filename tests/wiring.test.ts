@@ -1,9 +1,11 @@
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { GitHubTracker } from '../src/adapters/tracker/github.js'
 import { LinearTracker } from '../src/adapters/tracker/linear.js'
 import { GitHubCodeHost } from '../src/adapters/codeHost/github.js'
 import { FakeCodeHost, FakeTracker, failing, makeDeps, makeRumba, makeTicket } from '../src/testing/fakes.js'
-import { buildDeps, buildTracker, MissingKeyError, parseRemote, redactingCodeHost, redactingTracker } from '../src/wiring.js'
+import { buildDeps, buildTracker, MissingKeyError, parseRemote, redactingCodeHost, redactingTracker, SANDBOX_DIR } from '../src/wiring.js'
 
 const repo = { root: '/repo', owner: 'acme', name: 'shop', defaultBranch: 'main' }
 
@@ -45,6 +47,13 @@ describe('buildDeps', () => {
       RUMBA_GITHUB_LOGIN: 'bot',
     }, repo)
     expect(d.secrets.sort()).toEqual(['a1', 'b1', 'g1', 'l1', 'r1', 'v1'])
+  })
+})
+
+describe('SANDBOX_DIR', () => {
+  it("is the package's sandbox folder, which holds the image's Dockerfile", () => {
+    expect(path.basename(SANDBOX_DIR)).toBe('sandbox')
+    expect(existsSync(path.join(SANDBOX_DIR, 'Dockerfile'))).toBe(true)
   })
 })
 

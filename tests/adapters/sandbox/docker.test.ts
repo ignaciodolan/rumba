@@ -84,6 +84,53 @@ describe('DockerSandbox', () => {
   })
 })
 
+describe('DockerSandbox image', () => {
+  const run = { workdir: '/w', command: ['true'], env: {}, timeoutMs: 1000 }
+  const ok = { exitCode: 0, output: '' }
+
+  it('checks the image once, before the first run, and not again', async () => {
+    const calls: RunnerCall[] = []
+    const sandbox = new DockerSandbox({ image: 'img', dockerfileDir: '/pkg/sandbox', runner: recordingRunner(calls, async () => ok) })
+    await sandbox.run(run); await sandbox.run(run)
+    expect(calls.map((c) => c.args[0])).toEqual(['image', 'run', 'run'])
+    expect(calls[0]!.args).toEqual(['image', 'inspect', 'img'])
+  })
+
+  it('checks nothing when the sandbox is never used', () => {
+    const calls: RunnerCall[] = []
+    new DockerSandbox({ image: 'img', dockerfileDir: '/pkg/sandbox', runner: recordingRunner(calls, async () => ok) })
+    expect(calls).toEqual([])
+  })
+
+  it('builds a missing image from the folder before the first run', async () => {
+    const calls: RunnerCall[] = []
+    const runner = recordingRunner(calls, async (args) => (args[0] === 'image' ? { exitCode: 1, output: 'No such image' } : ok))
+    await new DockerSandbox({ image: 'img', dockerfileDir: '/pkg/sandbox', runner }).run(run)
+    expect(calls.map((c) => c.args)).toEqual([['image', 'inspect', 'img'], ['build', '-t', 'img', '/pkg/sandbox'], expect.arrayContaining(['run', 'img'])])
+  })
+
+  it('throws on a failed build, and tries again on the next run', async () => {
+    const calls: RunnerCall[] = []
+    let builds = 0
+    const runner = recordingRunner(calls, async (args) => {
+      if (args[0] === 'image') return { exitCode: 1, output: '' }
+      if (args[0] === 'build') return ++builds === 1 ? { exitCode: 1, output: 'no space left on device' } : ok
+      return ok
+    })
+    const sandbox = new DockerSandbox({ image: 'img', dockerfileDir: '/pkg/sandbox', runner })
+    await expect(sandbox.run(run)).rejects.toThrow(/docker build -t img failed:\nno space left on device/)
+    expect(calls.some((c) => c.args[0] === 'run')).toBe(false)
+    await expect(sandbox.run(run)).resolves.toEqual(ok)
+    expect(calls.map((c) => c.args[0])).toEqual(['image', 'build', 'image', 'build', 'run'])
+  })
+
+  it('checks no image without a dockerfileDir', async () => {
+    const calls: RunnerCall[] = []
+    await new DockerSandbox({ image: 'img', runner: recordingRunner(calls, async () => ok) }).run(run)
+    expect(calls.map((c) => c.args[0])).toEqual(['run'])
+  })
+})
+
 describe('dockerRunner', () => {
   it('returns the start failure message when the docker binary cannot start', async () => {
     const result = await dockerRunner('rumba-no-such-docker-binary')(['version'], { env: {} })

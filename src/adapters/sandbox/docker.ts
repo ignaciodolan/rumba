@@ -61,14 +61,20 @@ export class DockerSandbox implements Sandbox {
   private readonly image: string
   private readonly runner: DockerRunner
   private readonly killGraceMs: number
+  private readonly dockerfileDir: string | undefined
+  /** Set once the image is known to exist; cleared again when ensuring it failed. */
+  private imageReady: Promise<void> | undefined
 
-  constructor(o: { image?: string; runner?: DockerRunner; killGraceMs?: number } = {}) {
+  /** With `dockerfileDir`, the image is built from that folder before the first run if it is missing. */
+  constructor(o: { image?: string; runner?: DockerRunner; killGraceMs?: number; dockerfileDir?: string } = {}) {
     this.image = o.image ?? SANDBOX_IMAGE
     this.runner = o.runner ?? dockerRunner()
     this.killGraceMs = o.killGraceMs ?? DEFAULT_KILL_GRACE_MS
+    this.dockerfileDir = o.dockerfileDir
   }
 
   async run(o: { workdir: string; command: string[]; env: Record<string, string>; timeoutMs: number }): Promise<{ exitCode: number; output: string }> {
+    await this.ensureImage()
     const name = `rumba-${randomUUID()}`
     const args = dockerArgs({ ...o, image: this.image, user: callerUser(), name, harden: true })
     const running = this.runner(args, { env: o.env })
@@ -85,12 +91,22 @@ export class DockerSandbox implements Sandbox {
     grace.cancel()
     return { exitCode: TIMEOUT_EXIT_CODE, output: last?.output ?? '' }
   }
-}
 
-/** Builds the image from `dockerfileDir` only when `docker image inspect` cannot find it. */
-export async function ensureSandboxImage(image: string, dockerfileDir: string): Promise<void> {
-  const inspect = await execa('docker', ['image', 'inspect', image], { reject: false })
-  if (inspect.exitCode === 0) return
-  const build = await execa('docker', ['build', '-t', image, dockerfileDir], { all: true, reject: false })
-  if (build.exitCode !== 0) throw new Error(`docker build -t ${image} failed:\n${(build.all ?? '').slice(-2000)}`)
+  /** Once per instance; a failure is thrown and not remembered, so the next run tries again. */
+  private ensureImage(): Promise<void> {
+    if (this.dockerfileDir === undefined) return Promise.resolve()
+    this.imageReady ??= this.buildIfMissing(this.dockerfileDir).catch((e: unknown) => {
+      this.imageReady = undefined
+      throw e
+    })
+    return this.imageReady
+  }
+
+  /** Builds the image from `dockerfileDir` only when `docker image inspect` cannot find it. */
+  private async buildIfMissing(dockerfileDir: string): Promise<void> {
+    const inspect = await this.runner(['image', 'inspect', this.image], { env: {} })
+    if (inspect.exitCode === 0) return
+    const build = await this.runner(['build', '-t', this.image, dockerfileDir], { env: {} })
+    if (build.exitCode !== 0) throw new Error(`docker build -t ${this.image} failed:\n${build.output.slice(-2000)}`)
+  }
 }
