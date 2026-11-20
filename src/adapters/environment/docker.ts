@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { execa } from 'execa'
 import type { Environment, EnvHandle } from '../../ports/environment.js'
 import type { Check, CheckResult } from '../../core/types.js'
@@ -13,17 +14,20 @@ export type Exec = (
  * written to. `GitWorkspace` provides them.
  */
 export interface TrustedCheckouts {
-  /** A new checkout of the default-branch commit that `branch` started from. */
+  /** A new checkout, in a folder of its own, of the default-branch commit that `branch` started from. */
   trustedCheckout(branch: string): Promise<string>
   /** Throws unless the checkout still holds exactly its commit. */
   verifyTrusted(dir: string): Promise<void>
-  /** Replaces the checkout, at the same path, with a new one of the same commit. */
-  restoreTrusted(dir: string): Promise<void>
   cleanup(dir: string): Promise<void>
 }
 
 /** The variable that tells the host-side commands where the commit under test is checked out. */
 export const WORKDIR_VARIABLE = 'RUMBA_WORKDIR'
+/**
+ * Compose reads its project name from this variable. Rumba sets it, because each command runs
+ * in a different folder and compose would otherwise name the project after the folder.
+ */
+export const PROJECT_VARIABLE = 'COMPOSE_PROJECT_NAME'
 
 const TIMEOUT_EXIT_CODE = 124
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
@@ -78,13 +82,19 @@ function shellQuote(text: string): string {
  * Brings a project up with the rumba's `up`, `exec` and `down` commands.
  *
  * Those commands run on the host, and a commit under test holds files an agent wrote. So no
- * command ever runs in the checkout of that commit: every one runs in a trusted checkout of
- * the default-branch commit the fix branch started from, and gets the path of the commit
- * under test in `RUMBA_WORKDIR`. Whatever a command reads by relative path (compose files
- * and what they include, `.env`, a Makefile, a script, a Dockerfile) is therefore a file a
- * person merged. The code under test reaches a container only as a mount or a build context
- * that the trusted files point at `RUMBA_WORKDIR`. Before each command the trusted checkout
- * is compared with its commit, and nothing runs there once it differs.
+ * command ever runs in the checkout of that commit. Each runs in a trusted checkout of the
+ * default-branch commit the fix branch started from, and gets the path of the commit under
+ * test in `RUMBA_WORKDIR`. Whatever a command reads by relative path (compose files and what
+ * they include, `.env`, a Makefile, a script, a Dockerfile) is therefore a file a person
+ * merged. The code under test reaches a container only as a mount or a build context that
+ * the trusted files point at `RUMBA_WORKDIR`.
+ *
+ * Code in a container must not be able to change what a later command reads either, and the
+ * compose file may have given a container the folder `up` ran in. So no command runs in a
+ * folder that existed while an earlier one ran: every `exec`, and `down`, gets a checkout
+ * made for it. The folder `up` ran in is kept until `down`, because containers may have
+ * files of it mounted, but nothing runs there again; if it no longer matches its commit when
+ * `up` returns, the run stops.
  */
 export class DockerEnvironment implements Environment {
   private readonly run: Exec
@@ -96,11 +106,15 @@ export class DockerEnvironment implements Environment {
   }
 
   async up(ref: { branch: string; sha: string; role: 'before' | 'after' }, workdir: string): Promise<EnvHandle> {
-    const hostDir = await this.o.trusted.trustedCheckout(ref.branch)
-    const handle: EnvHandle = { workdir, hostDir }
+    const upDir = await this.o.trusted.trustedCheckout(ref.branch)
+    const host = { branch: ref.branch, project: `rumba-${randomUUID().replaceAll('-', '').slice(0, 16)}`, upDir }
+    const handle: EnvHandle = { workdir, host }
     let result: { exitCode: number; output: string }
     try {
-      result = await this.onHost(handle, this.o.up)
+      result = await this.start(handle, upDir, this.o.up)
+      // A container that `up` started may have written into the folder while `up` was still
+      // reading from it. That cannot be undone, so the run stops here.
+      await this.o.trusted.verifyTrusted(upDir)
     } catch (e) {
       await this.down(handle)
       throw e
@@ -122,45 +136,40 @@ export class DockerEnvironment implements Environment {
   }
 
   /**
-   * Never throws. Does nothing for a handle this environment did not bring up. If the
-   * trusted checkout was changed, the down command runs from a restored one, or not at all.
+   * Never throws. Does nothing for a handle this environment did not bring up. The down
+   * command runs in a checkout made for it; if none can be made, it does not run.
    */
   async down(h: EnvHandle): Promise<void> {
-    if (h.hostDir === undefined) return
-    const hostDir = h.hostDir
-    const intact = await this.o.trusted.verifyTrusted(hostDir).then(() => true, () => false)
-    const usable = intact || await this.o.trusted.restoreTrusted(hostDir).then(() => this.o.trusted.verifyTrusted(hostDir)).then(() => true, () => false)
-    if (usable) {
-      try {
-        await this.start(h, hostDir, this.o.down)
-      } catch {
-        // A failed teardown must not hide the result of the run.
-      }
+    if (h.host === undefined) return
+    try {
+      await this.inNewCheckout(h, this.o.down)
+    } catch {
+      // A failed teardown must not hide the result of the run.
     }
     try {
-      await this.o.trusted.cleanup(hostDir)
+      await this.o.trusted.cleanup(h.host.upDir)
     } catch {
       // A checkout left behind is pruned by a later run.
     }
   }
 
   private runInside(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
-    return this.onHost(h, `${this.o.exec} sh -c ${shellQuote(command)}`)
+    return this.inNewCheckout(h, `${this.o.exec} sh -c ${shellQuote(command)}`)
   }
 
-  /**
-   * Runs a host-side command for a handle: only in its trusted checkout, never in
-   * `h.workdir`, and only while that checkout still holds exactly its commit. Code in a
-   * container may have been given the folder, so it is checked before every command.
-   */
-  private async onHost(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
-    if (h.hostDir === undefined) throw new Error('This environment has no trusted checkout to run host commands in; it was not brought up here.')
-    await this.o.trusted.verifyTrusted(h.hostDir)
-    return this.start(h, h.hostDir, command)
+  /** Runs one command in a trusted checkout made for it and removed after it. */
+  private async inNewCheckout(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
+    if (h.host === undefined) throw new Error('This environment was not brought up here, so it has no trusted checkout to run host commands in.')
+    const dir = await this.o.trusted.trustedCheckout(h.host.branch)
+    try {
+      return await this.start(h, dir, command)
+    } finally {
+      await this.o.trusted.cleanup(dir).catch(() => undefined)
+    }
   }
 
-  /** The only place a host-side command is started. */
-  private start(h: EnvHandle, hostDir: string, command: string): Promise<{ exitCode: number; output: string }> {
-    return this.run(command, { cwd: hostDir, timeoutMs: this.timeoutMs, env: { [WORKDIR_VARIABLE]: h.workdir } })
+  /** The only place a host-side command is started: in a trusted checkout, never in `h.workdir`. */
+  private start(h: EnvHandle, dir: string, command: string): Promise<{ exitCode: number; output: string }> {
+    return this.run(command, { cwd: dir, timeoutMs: this.timeoutMs, env: { [WORKDIR_VARIABLE]: h.workdir, [PROJECT_VARIABLE]: h.host?.project ?? '' } })
   }
 }

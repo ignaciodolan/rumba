@@ -5,10 +5,11 @@ export interface EnvHandle {
   workdir: string
   baseUrl?: string
   /**
-   * Set by an environment that starts commands on the host: the trusted checkout those
-   * commands run in. It is never `workdir`, which holds files an agent wrote.
+   * Set by an environment that starts commands on the host, for its own use: the fix branch,
+   * the name its containers share, and the trusted checkout `up` ran in. No host command
+   * ever runs in `workdir`, which holds files an agent wrote.
    */
-  hostDir?: string
+  host?: { branch: string; project: string; upDir: string }
 }
 
 export interface Environment {
