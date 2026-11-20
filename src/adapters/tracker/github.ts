@@ -6,7 +6,6 @@ import type { Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketSt
 import type { Tracker } from '../../ports/tracker.js'
 
 const PER_PAGE = 100
-const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 
 interface IssueData {
   number: number
@@ -19,8 +18,7 @@ interface IssueData {
 interface CommentData {
   id: number
   body?: string
-  author_association?: string
-  user: { type: string } | null
+  user: { login: string; type: string } | null
 }
 
 function httpStatus(e: unknown): number | undefined {
@@ -29,11 +27,12 @@ function httpStatus(e: unknown): number | undefined {
 }
 
 /**
- * Comments on a public repository are untrusted: anyone could forge a state comment.
- * Only comments by owners, members, collaborators or bots are read.
+ * Comments are untrusted: anyone who can comment, including members who cannot label
+ * tickets, could forge a state comment. Only comments by Rumba's own account are read.
+ * When that account cannot be looked up, any bot's comment is the fallback.
  */
-function isTrusted(c: CommentData): boolean {
-  return TRUSTED_ASSOCIATIONS.has(c.author_association ?? '') || c.user?.type === 'Bot'
+function isTrusted(c: CommentData, self: string | null): boolean {
+  return self === null ? c.user?.type === 'Bot' : c.user?.login === self
 }
 
 function labelNames(labels: IssueData['labels']): string[] {
@@ -54,6 +53,7 @@ export class GitHubTracker implements Tracker {
   private readonly repo: string
   private readonly labels: LabelNames
   private readonly stateNames: StateName[]
+  private self: Promise<string | null> | undefined
 
   constructor(o: { octokit: Octokit; owner: string; repo: string; labels: LabelNames; stateNames: StateName[] }) {
     this.octokit = o.octokit
@@ -161,7 +161,25 @@ export class GitHubTracker implements Tracker {
     const all = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
       ...this.where(), issue_number: issueNumber(t.id), per_page: PER_PAGE,
     })
-    return all.filter(isTrusted)
+    const self = await this.ownLogin()
+    return all.filter((c) => isTrusted(c, self))
+  }
+
+  /** The login Rumba runs as, looked up once: GraphQL viewer, then REST GET /user, else null. */
+  private ownLogin(): Promise<string | null> {
+    this.self ??= (async () => {
+      try {
+        const r = await this.octokit.graphql<{ viewer: { login: string } }>('query { viewer { login } }')
+        return r.viewer.login
+      } catch {
+        try {
+          return (await this.octokit.rest.users.getAuthenticated()).data.login
+        } catch {
+          return null
+        }
+      }
+    })()
+    return this.self
   }
 
   /** The last trusted comment that holds a valid state. */

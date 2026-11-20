@@ -12,7 +12,7 @@ const BASIC = Buffer.from(`x-access-token:${TOKEN}`).toString('base64')
 
 interface Pull { number: number; html_url: string; head: string; title: string; body: string }
 
-function makeHost(o: { html_url?: string; existing?: Pull[]; remoteUrl?: string; deleteStatus?: number } = {}) {
+function makeHost(o: { html_url?: string; existing?: Pull[]; remoteUrl?: string; repoRoot?: string; deleteStatus?: number } = {}) {
   const pulls = [...(o.existing ?? [])]
   const requests: Record<string, unknown>[] = []
   const stub = stubOctokit([
@@ -34,7 +34,7 @@ function makeHost(o: { html_url?: string; existing?: Pull[]; remoteUrl?: string;
       return null
     }),
   ])
-  const host = new GitHubCodeHost({ octokit: stub.octokit, owner: 'o', repo: 'r', token: TOKEN, remoteUrl: o.remoteUrl })
+  const host = new GitHubCodeHost({ octokit: stub.octokit, owner: 'o', repo: 'r', token: TOKEN, repoRoot: o.repoRoot ?? path.join(tmpdir(), 'rumba-unused-checkout'), remoteUrl: o.remoteUrl })
   return { host, requests, pulls, calls: stub.requests }
 }
 
@@ -89,19 +89,30 @@ describe('gitAuthEnv', () => {
 describe('GitHubCodeHost.pushBranch', () => {
   let root: string
   let remote: string
+  let repo: string
 
   const git = (cwd: string, ...args: string[]) =>
     execa('git', ['-c', 'user.name=rumba', '-c', 'user.email=rumba@users.noreply.github.com', '-c', 'init.defaultBranch=main', ...args], { cwd })
 
+  let n = 0
+  /** A worktree of the trusted repo holding one commit of `file`, with history unrelated to any other worktree's. */
   async function workdirWith(file: string): Promise<string> {
-    const dir = await mkdtemp(path.join(root, 'work-'))
-    await git(dir, 'init', '-q')
-    await writeFile(path.join(dir, file), file)
-    await git(dir, 'add', '.')
-    await git(dir, 'commit', '-q', '-m', file)
+    n += 1
+    const dir = path.join(root, `wt-${n}`)
+    await git(repo, 'worktree', 'add', '-q', '--detach', dir)
+    await git(dir, 'checkout', '-q', '--orphan', `wt-${n}`)
+    await git(dir, 'rm', '-rfq', '.')
+    await commitFile(dir, file)
     return dir
   }
 
+  async function commitFile(dir: string, file: string): Promise<void> {
+    await writeFile(path.join(dir, file), file)
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', file)
+  }
+
+  const host = () => makeHost({ remoteUrl: remote, repoRoot: repo }).host
   const remoteSha = async (branch: string) => (await git(remote, 'rev-parse', `refs/heads/${branch}`)).stdout.trim()
   const headSha = async (dir: string) => (await git(dir, 'rev-parse', 'HEAD')).stdout.trim()
 
@@ -111,6 +122,10 @@ describe('GitHubCodeHost.pushBranch', () => {
     remote = path.join(root, TOKEN, 'remote.git')
     await mkdir(remote, { recursive: true })
     await git(remote, 'init', '-q', '--bare')
+    repo = path.join(root, 'repo')
+    await mkdir(repo)
+    await git(repo, 'init', '-q')
+    await commitFile(repo, 'base.txt')
   })
 
   afterEach(async () => {
@@ -119,28 +134,28 @@ describe('GitHubCodeHost.pushBranch', () => {
 
   it('creates the branch on the first push', async () => {
     const work = await workdirWith('a.txt')
-    await makeHost({ remoteUrl: remote }).host.pushBranch(work, 'rumba/hub/1')
+    await host().pushBranch(work, 'rumba/hub/1')
     expect(await remoteSha('rumba/hub/1')).toBe(await headSha(work))
   })
 
   it('replaces a branch left by an earlier attempt when forced', async () => {
-    const { host } = makeHost({ remoteUrl: remote })
-    await host.pushBranch(await workdirWith('a.txt'), 'rumba/hub/1')
+    const h = host()
+    await h.pushBranch(await workdirWith('a.txt'), 'rumba/hub/1')
     const again = await workdirWith('b.txt')
-    await host.pushBranch(again, 'rumba/hub/1', { force: true })
+    await h.pushBranch(again, 'rumba/hub/1', { force: true })
     expect(await remoteSha('rumba/hub/1')).toBe(await headSha(again))
   })
 
   it('creates the branch when forced and the branch does not exist yet', async () => {
     const work = await workdirWith('a.txt')
-    await makeHost({ remoteUrl: remote }).host.pushBranch(work, 'rumba/hub/1', { force: true })
+    await host().pushBranch(work, 'rumba/hub/1', { force: true })
     expect(await remoteSha('rumba/hub/1')).toBe(await headSha(work))
   })
 
   it('rejects an unrelated history without force, with no token in the error', async () => {
-    const { host } = makeHost({ remoteUrl: remote })
-    await host.pushBranch(await workdirWith('a.txt'), 'rumba/hub/1')
-    const error = await host.pushBranch(await workdirWith('b.txt'), 'rumba/hub/1').then(() => null, (e: unknown) => e as Error)
+    const h = host()
+    await h.pushBranch(await workdirWith('a.txt'), 'rumba/hub/1')
+    const error = await h.pushBranch(await workdirWith('b.txt'), 'rumba/hub/1').then(() => null, (e: unknown) => e as Error)
     expect(error).toBeInstanceOf(Error)
     expect(error!.message).toMatch(/rejected/)
     expect(error!.message).not.toContain(TOKEN)
@@ -148,13 +163,41 @@ describe('GitHubCodeHost.pushBranch', () => {
     expect(error!.message).toContain('[redacted]')
   })
 
-  it('runs no hook from the working copy', async () => {
+  it('runs no hook, even from the trusted checkout', async () => {
     const work = await workdirWith('a.txt')
     const marker = path.join(root, 'hook-ran')
-    const hook = path.join(work, '.git', 'hooks', 'pre-push')
+    const hook = path.join(repo, '.git', 'hooks', 'pre-push')
     await writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`)
     await chmod(hook, 0o755)
-    await makeHost({ remoteUrl: remote }).host.pushBranch(work, 'rumba/hub/1')
+    await host().pushBranch(work, 'rumba/hub/1')
     expect(existsSync(marker)).toBe(false)
+  })
+
+  it('ignores git metadata the agent planted in the workdir', async () => {
+    const work = await workdirWith('a.txt')
+    const h = host()
+    await h.pushBranch(work, 'rumba/hub/1')
+    await commitFile(work, 'b.txt')
+    const want = await headSha(work)
+    // The agent swaps the worktree's .git pointer file for a directory with its own config and hooks.
+    const marker = path.join(root, 'planted-ran')
+    const planted = path.join(work, '.git')
+    await rm(planted)
+    await mkdir(path.join(planted, 'hooks'), { recursive: true })
+    await writeFile(path.join(planted, 'config'), `[core]\n\tfsmonitor = touch '${marker}'\n\thooksPath = ${path.join(planted, 'hooks')}\n`)
+    await writeFile(path.join(planted, 'hooks', 'pre-push'), `#!/bin/sh\ntouch '${marker}'\n`)
+    await chmod(path.join(planted, 'hooks', 'pre-push'), 0o755)
+    await writeFile(path.join(planted, 'HEAD'), 'ref: refs/heads/main\n')
+    await h.pushBranch(work, 'rumba/hub/1')
+    expect(await remoteSha('rumba/hub/1')).toBe(want)
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('refuses a workdir that is not a worktree of the trusted checkout', async () => {
+    const stray = path.join(root, 'stray')
+    await mkdir(stray)
+    await git(stray, 'init', '-q')
+    await commitFile(stray, 'a.txt')
+    await expect(host().pushBranch(stray, 'rumba/hub/1')).rejects.toThrow(/not a worktree/)
   })
 })

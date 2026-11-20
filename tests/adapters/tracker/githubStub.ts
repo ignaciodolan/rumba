@@ -60,8 +60,10 @@ export interface StoredComment {
   issue: number
   body: string
   author_association: string
-  user: { type: string }
+  user: { login: string; type: string }
 }
+
+export type Author = Pick<StoredComment, 'author_association' | 'user'>
 
 /** Pages a list the way GitHub does: per_page (default 30) and page, with a rel="next" Link header. */
 function paged<T>(req: StubRequest, items: T[]): { data: T[]; link: string } {
@@ -84,7 +86,12 @@ export class GitHubStore {
   /** Comment ids whose edit is refused with a 403. */
   refuseEdits = new Set<number>()
   /** Who the API caller is, for comments it creates. */
-  author = { author_association: 'OWNER', user: { type: 'User' } }
+  author: Author = { author_association: 'OWNER', user: { login: 'rumba-bot', type: 'User' } }
+  /** The caller's login as GraphQL `viewer` and REST `GET /user` answer it; null makes that lookup fail. */
+  viewerLogin: string | null = 'rumba-bot'
+  userLogin: string | null = 'rumba-bot'
+  /** How many times the caller's login was asked for, over either API. */
+  loginLookups = 0
   private nextId = 1
 
   addIssue(o: Partial<Omit<StoredIssue, 'number'>> = {}): StoredIssue {
@@ -93,7 +100,7 @@ export class GitHubStore {
     return issue
   }
 
-  addComment(issue: number, body: string, author = this.author): StoredComment {
+  addComment(issue: number, body: string, author: Author = this.author): StoredComment {
     const c: StoredComment = { id: this.nextId++, issue, body, ...structuredClone(author) }
     this.comments.push(c)
     return c
@@ -124,6 +131,17 @@ export class GitHubStore {
   routes(): Route[] {
     const repo = '/repos/o/r'
     return [
+      route('POST', /^\/graphql$/, (req) => {
+        this.loginLookups += 1
+        if (!String(req.body.query).includes('viewer')) throw httpError(400)
+        if (this.viewerLogin === null) return { data: null, errors: [{ message: 'Resource not accessible by integration' }] }
+        return { data: { viewer: { login: this.viewerLogin } } }
+      }),
+      route('GET', /^\/user$/, () => {
+        this.loginLookups += 1
+        if (this.userLogin === null) throw httpError(403, 'Resource not accessible by integration')
+        return { login: this.userLogin, type: 'User' }
+      }),
       route('GET', new RegExp(`^${repo}/issues$`), (req) => {
         const state = req.query.get('state') ?? 'open'
         const wanted = (req.query.get('labels') ?? '').split(',').filter(Boolean)

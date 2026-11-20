@@ -9,6 +9,8 @@ import { trackerContract } from '../../../src/testing/trackerContract.js'
 import { GitHubStore, stubOctokit } from './githubStub.js'
 
 const NOW = new Date('2026-01-01T00:00:00Z')
+const OWNER = { author_association: 'OWNER', user: { login: 'someone', type: 'User' } }
+const OTHER_BOT = { author_association: 'NONE', user: { login: 'other[bot]', type: 'Bot' } }
 
 function makeGitHub(o: { labels?: string[] } = {}) {
   const store = new GitHubStore()
@@ -83,28 +85,56 @@ describe('GitHubTracker', () => {
     expect((await tracker.readState(t))?.state).toBe('triaged')
   })
 
-  it('ignores a state comment from an untrusted author', async () => {
+  it('reads a state comment by its own login and ignores an owner or another bot', async () => {
     const { tracker, store } = makeGitHub()
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
     store.addComment(Number(t.id), encodeStateComment(state('triaged')))
-    store.addComment(Number(t.id), encodeStateComment(state('verified')), { author_association: 'NONE', user: { type: 'User' } })
+    store.addComment(Number(t.id), encodeStateComment(state('verified')), OWNER)
+    store.addComment(Number(t.id), encodeStateComment(state('pr_open')), OTHER_BOT)
     expect((await tracker.readState(t))?.state).toBe('triaged')
   })
 
-  it('trusts members, collaborators and bots, and the last trusted state wins', async () => {
+  it('takes the last of its own state comments', async () => {
     const { tracker, store } = makeGitHub()
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
-    store.addComment(Number(t.id), encodeStateComment(state('queued')), { author_association: 'MEMBER', user: { type: 'User' } })
-    store.addComment(Number(t.id), encodeStateComment(state('triaged')), { author_association: 'COLLABORATOR', user: { type: 'User' } })
+    store.addComment(Number(t.id), encodeStateComment(state('queued')))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')))
     expect((await tracker.readState(t))?.state).toBe('triaged')
-    store.addComment(Number(t.id), encodeStateComment(state('criteria_ready')), { author_association: 'NONE', user: { type: 'Bot' } })
-    expect((await tracker.readState(t))?.state).toBe('criteria_ready')
+  })
+
+  it('uses the REST login when the GraphQL viewer lookup fails', async () => {
+    const { tracker, store } = makeGitHub()
+    store.viewerLogin = null
+    store.userLogin = 'rest-bot'
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')), { author_association: 'NONE', user: { login: 'rest-bot', type: 'User' } })
+    store.addComment(Number(t.id), encodeStateComment(state('verified')))
+    expect((await tracker.readState(t))?.state).toBe('triaged')
+  })
+
+  it('trusts bot comments only when both login lookups fail', async () => {
+    const { tracker, store } = makeGitHub()
+    store.viewerLogin = null
+    store.userLogin = null
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')), OTHER_BOT)
+    store.addComment(Number(t.id), encodeStateComment(state('verified')), OWNER)
+    expect((await tracker.readState(t))?.state).toBe('triaged')
+  })
+
+  it('looks its login up once across calls', async () => {
+    const { tracker, store } = makeGitHub()
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
+    await Promise.all([tracker.readState(t), tracker.readState(t)])
+    await tracker.writeState(t, state('queued'))
+    await tracker.commentOnce(t, 'k', 'Body')
+    expect(store.loginLookups).toBe(1)
   })
 
   it('writes a new state comment instead of editing an untrusted one', async () => {
     const { tracker, store } = makeGitHub()
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
-    const forged = store.addComment(Number(t.id), encodeStateComment(state('verified')), { author_association: 'NONE', user: { type: 'User' } })
+    const forged = store.addComment(Number(t.id), encodeStateComment(state('verified')), OWNER)
     await tracker.writeState(t, state('queued'))
     expect(forged.body).toBe(encodeStateComment(state('verified')))
     expect(store.commentsOn(Number(t.id))).toHaveLength(2)
@@ -114,7 +144,7 @@ describe('GitHubTracker', () => {
   it('creates a new state comment when editing the old one is refused', async () => {
     const { tracker, store } = makeGitHub()
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
-    const old = store.addComment(Number(t.id), encodeStateComment(state('queued')), { author_association: 'MEMBER', user: { type: 'User' } })
+    const old = store.addComment(Number(t.id), encodeStateComment(state('queued')))
     store.refuseEdits.add(old.id)
     await tracker.writeState(t, state('triaged', 1))
     expect(store.commentsOn(Number(t.id))).toHaveLength(2)
@@ -143,7 +173,7 @@ describe('GitHubTracker', () => {
   it('marks commentOnce comments with their key and ignores keys in untrusted comments', async () => {
     const { tracker, store } = makeGitHub()
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
-    store.addComment(Number(t.id), 'rumba-note: done', { author_association: 'NONE', user: { type: 'User' } })
+    store.addComment(Number(t.id), 'rumba-note: done', OWNER)
     await tracker.commentOnce(t, 'done', 'All done')
     const bodies = store.commentsOn(Number(t.id)).map((c) => c.body)
     expect(bodies).toHaveLength(2)
