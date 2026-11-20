@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
@@ -71,6 +71,27 @@ describe('GitWorkspace', () => {
     const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true }); await write(workdir, 'a.txt', 'x'); await ws.commit(workdir, 'c')
     const h = await ws.hashFiles(workdir, ['a.txt', 'missing.txt']); expect(Object.keys(h)).toEqual(['a.txt'])
     await ws.reset(workdir, baseSha); expect(await ws.changedFiles(workdir, baseSha)).toEqual([])
+  })
+
+  it('reports unusual file names exactly', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const names = ['.rumba/hub/é.md', `a b"c'.txt`, 'tab\there.txt', 'new\nline.txt']
+    for (const name of names) await write(workdir, name, 'x')
+    await ws.commit(workdir, 'unusual names')
+    expect((await ws.changedFiles(workdir, baseSha)).sort()).toEqual([...names].sort())
+  })
+
+  it('cleanupAll never throws and removes the worktrees it can', async () => {
+    const a = await ws.prepare('rumba/hub/1', { fresh: true }); const b = await ws.prepare('rumba/hub/2', { fresh: true })
+    // Unregister a's worktree behind the workspace's back, so removing it fails.
+    const gitDir = (await readFile(path.join(a.workdir, '.git'), 'utf8')).replace(/^gitdir: /, '').trim()
+    await rm(gitDir, { recursive: true, force: true })
+    try {
+      await expect(ws.cleanupAll()).resolves.toBeUndefined()
+      expect(existsSync(b.workdir)).toBe(false)
+    } finally {
+      await rm(a.workdir, { recursive: true, force: true })
+    }
   })
 
   it('cleanupAll removes every worktree it made', async () => {
@@ -196,6 +217,18 @@ describe('GitWorkspace', () => {
       await symlink(outside, path.join(workdir, 'link'))
       expect(await ws.hashFiles(workdir, ['link'])).toEqual({ link: createHash('sha256').update(outside).digest('hex') })
     })
+
+    it('refuses a directory', async () => {
+      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await mkdir(path.join(workdir, 'dir'))
+      await expect(ws.hashFiles(workdir, ['dir'])).rejects.toThrow(/dir is not a regular file/)
+    })
+
+    it.skipIf(process.platform === 'win32')('refuses a FIFO without blocking on it', async () => {
+      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      await execa('mkfifo', [path.join(workdir, 'pipe')])
+      await expect(ws.hashFiles(workdir, ['pipe'])).rejects.toThrow(/pipe is not a regular file/)
+    }, 3000)
 
     it('refuses a path that resolves outside the workdir', async () => {
       const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })

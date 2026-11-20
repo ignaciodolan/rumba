@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { lstat, mkdtemp, readdir, readFile, readlink, realpath, rm } from 'node:fs/promises'
+import { constants, existsSync } from 'node:fs'
+import { lstat, mkdtemp, open, readdir, readFile, readlink, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
@@ -98,8 +98,8 @@ export class GitWorkspace implements Workspace {
 
   async changedFiles(workdir: string, sinceSha: string): Promise<string[]> {
     const wt = await this.worktree(workdir)
-    const out = (await this.inWorktree(wt, workdir, ['diff', '--name-only', '--no-ext-diff', '--no-renames', sinceSha, 'HEAD'])).stdout
-    return out.split('\n').filter((l) => l !== '')
+    const out = (await this.inWorktree(wt, workdir, ['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', '--no-ext-diff', '--no-renames', sinceSha, 'HEAD'])).stdout
+    return out.split('\0').filter((p) => p !== '')
   }
 
   async hashFiles(workdir: string, files: string[]): Promise<Record<string, string>> {
@@ -113,8 +113,7 @@ export class GitWorkspace implements Workspace {
         // Resolve the directories on the way, not the file itself: a link is hashed, never followed.
         const target = path.join(await realpath(path.dirname(full)), path.basename(full))
         if (!inside(root, target)) throw new Error(`${file} resolves outside the workdir`)
-        const stat = await lstat(target)
-        content = stat.isSymbolicLink() ? Buffer.from(await readlink(target)) : await readFile(target)
+        content = await readRegularOrLink(target, file)
       } catch (e) {
         if (missing(e)) continue
         throw e
@@ -144,15 +143,10 @@ export class GitWorkspace implements Workspace {
   }
 
   async cleanupAll(): Promise<void> {
-    const failures: string[] = []
     for (const dir of [...this.worktrees.keys()]) {
-      try {
-        await this.cleanup(dir)
-      } catch (e) {
-        failures.push(`${dir}: ${(e as Error).message}`)
-      }
+      // Never throws: it runs in the engine's finally. A worktree left behind is pruned by a later prepare.
+      await this.cleanup(dir).catch(() => undefined)
     }
-    if (failures.length) throw new Error(`Could not remove worktrees:\n${failures.join('\n')}`)
   }
 
   /** The recorded worktree for `workdir`, or one registered in `repoRoot` with the same real path. */
@@ -181,13 +175,18 @@ export class GitWorkspace implements Workspace {
 
   /** Real paths of the worktrees `repoRoot` has registered for `branch`. */
   private async registered(branch: string): Promise<string[]> {
-    const listed = await this.git(['worktree', 'list', '--porcelain'])
+    // -z: each field ends in NUL and each entry in an extra NUL, so no path is quoted or split.
+    const fields = (await this.git(['worktree', 'list', '--porcelain', '-z'])).split('\0')
     const dirs: string[] = []
-    for (const entry of listed.split(/\n\n+/)) {
-      const lines = entry.split('\n')
-      const dir = lines.find((l) => l.startsWith('worktree '))?.slice('worktree '.length)
-      if (dir === undefined || !lines.includes(`branch refs/heads/${branch}`)) continue
-      dirs.push(await realpath(dir).catch(() => dir))
+    let entry: string[] = []
+    for (const field of fields) {
+      if (field !== '') {
+        entry.push(field)
+        continue
+      }
+      const dir = entry.find((l) => l.startsWith('worktree '))?.slice('worktree '.length)
+      if (dir !== undefined && entry.includes(`branch refs/heads/${branch}`)) dirs.push(await realpath(dir).catch(() => dir))
+      entry = []
     }
     return dirs
   }
@@ -223,6 +222,27 @@ export class GitWorkspace implements Workspace {
 function inside(root: string, p: string): boolean {
   const rel = path.relative(root, p)
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
+}
+
+/**
+ * The bytes of a regular file, or the target string of a symbolic link, read through one
+ * handle opened without following a link or blocking, so the path cannot change in between.
+ */
+async function readRegularOrLink(target: string, file: string): Promise<Buffer> {
+  let handle
+  try {
+    handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ELOOP' && (await lstat(target)).isSymbolicLink()) return Buffer.from(await readlink(target))
+    if (missing(e)) throw e
+    throw new Error(`${file} could not be opened: ${(e as Error).message}`)
+  }
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error(`${file} is not a regular file`)
+    return await handle.readFile()
+  } finally {
+    await handle.close()
+  }
 }
 
 function missing(e: unknown): boolean {
