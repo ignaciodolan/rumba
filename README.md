@@ -55,7 +55,7 @@ On each run Rumba takes each opted-in ticket as far as it can:
 1. `queued`: the ticket has the opt-in label and no state yet.
 2. `triaged`: the agent read the ticket and the repository and decided whether it is a bug or a feature, and whether Rumba can work it.
 3. `criteria_ready`: the acceptance criteria are fixed. A bug gets one criterion derived from the report. A feature uses the criteria written on the ticket, in files it names, or in documents native to the tracker.
-4. `awaiting_criteria`: a feature without usable criteria. Rumba posts a draft and waits. Add `rumba-approved` to accept the draft as posted, or write the final criteria in the ticket description under an "Acceptance criteria" heading and then add the label.
+4. `awaiting_criteria`: a feature whose criteria are not written anywhere. Rumba never treats criteria it wrote itself as approved: it posts them as a draft and waits. Add `rumba-approved` to accept the draft as posted, or write the final criteria in the ticket description under an "Acceptance criteria" heading and then add the label.
 5. `env_ready` → `checks_failing`: the environment is up at the base commit, the agent writes one check per criterion, and every check fails there, as it should.
 6. `building` → `verified`: the agent changes the code on the branch `rumba/<name>/<ticket-id>` until every check passes.
 7. `pr_open`: the pull request is open, with the before and after results of each check. Criteria that no command can check are listed as not verified, and the pull request is then opened as a draft.

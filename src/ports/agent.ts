@@ -17,7 +17,11 @@ export interface AgentTask {
 }
 
 export type AgentResult =
-  | { kind: 'triage'; workable: boolean; reason: string; ticketKind: Kind; criteria: Criterion[] | null }
+  | {
+    kind: 'triage'; workable: boolean; reason: string; ticketKind: Kind; criteria: Criterion[] | null
+    /** 'written': copied from the ticket, a file it names or a document. 'derived': the agent's own wording. */
+    criteriaSource?: 'written' | 'derived'
+  }
   | { kind: 'draft-criteria'; criteria: Criterion[] }
   | { kind: 'write-checks'; checks: Check[] }
   | { kind: 'fix'; summary: string }

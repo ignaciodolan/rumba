@@ -27,6 +27,7 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
     reason: z.string(),
     ticketKind: z.enum(['bug', 'feature']),
     criteria: criteria.nullable(),
+    criteriaSource: z.enum(['written', 'derived']).optional(),
   }),
   'draft-criteria': z.object({ kind: z.literal('draft-criteria'), criteria }),
   'write-checks': z.object({ kind: z.literal('write-checks'), checks: z.array(check).max(MAX_ITEMS) }),

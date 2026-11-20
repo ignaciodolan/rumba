@@ -94,5 +94,14 @@ describe('readAgentResult', () => {
     await writeResult(value)
     await expect(readAgentResult(dir, kind)).rejects.toThrow(AgentError)
   })
+  it('reads a triage criteriaSource and refuses an unknown one', async () => {
+    const criteria = [{ id: 'c1', text: 'Login works', checkable: true }]
+    for (const criteriaSource of ['written', 'derived'] as const) {
+      await writeResult({ kind: 'triage', workable: true, reason: '', ticketKind: 'feature', criteria, criteriaSource })
+      expect(await readAgentResult(dir, 'triage')).toMatchObject({ criteriaSource })
+    }
+    await writeResult({ kind: 'triage', workable: true, reason: '', ticketKind: 'feature', criteria, criteriaSource: 'mine' })
+    await expect(readAgentResult(dir, 'triage')).rejects.toThrow(/criteriaSource/)
+  })
 })
 

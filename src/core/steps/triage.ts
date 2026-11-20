@@ -28,25 +28,33 @@ export async function triage(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
       return current
     }
 
-    const written = extractAcceptanceCriteria(ticket.body)
+    // Criteria written in the description always win.
+    const kind = result.ticketKind
+    const fromDescription = extractAcceptanceCriteria(ticket.body)
     const agentCriteria = result.criteria !== null && result.criteria.length > 0 ? result.criteria : null
-    const criteria = written ?? agentCriteria
-    if (criteria) {
-      current = { ...transition(current, 'criteria_ready', deps.clock()), kind: result.ticketKind, criteria }
+    // A bug's one criterion comes from the report. A feature skips approval only when its
+    // criteria were written by people; criteria the agent wrote itself wait for a person.
+    const approved = fromDescription ?? (agentCriteria && (kind === 'bug' || result.criteriaSource === 'written') ? agentCriteria : null)
+    if (approved) {
+      current = { ...transition(current, 'criteria_ready', deps.clock()), kind, criteria: approved }
       await deps.tracker.writeState(ticket, current)
       return current
     }
 
-    const drafted = await deps.agent.run(task('draft-criteria'), workdir)
-    if (drafted.kind !== 'draft-criteria' || drafted.criteria.length === 0) {
-      throw new Error('Agent did not draft any acceptance criteria')
+    let draft = agentCriteria
+    if (draft === null) {
+      const drafted = await deps.agent.run(task('draft-criteria'), workdir)
+      if (drafted.kind !== 'draft-criteria' || drafted.criteria.length === 0) {
+        throw new Error('Agent did not draft any acceptance criteria')
+      }
+      draft = drafted.criteria
     }
     // A label left from an earlier draft must not approve this one.
     if (ticket.labels.includes(rumba.labels.approved)) {
       await deps.tracker.removeLabel(ticket, rumba.labels.approved)
     }
-    await deps.tracker.postCriteria(ticket, drafted.criteria)
-    current = { ...transition(current, 'awaiting_criteria', deps.clock()), kind: result.ticketKind, criteria: drafted.criteria }
+    await deps.tracker.postCriteria(ticket, draft)
+    current = { ...transition(current, 'awaiting_criteria', deps.clock()), kind, criteria: draft }
     await deps.tracker.writeState(ticket, current)
     return current
   } finally {

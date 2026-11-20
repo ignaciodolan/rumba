@@ -92,5 +92,12 @@ describe('buildPrompt', () => {
     expect(p).toContain('These files are locked. You must not change, move or delete them:\n- tests/rumba/c1.test.ts\n- tests/rumba/helper.ts')
     expect(buildPrompt({ kind: 'fix', ticket: makeTicket(), context: '', environmentKind: 'docker' })).not.toContain('locked')
   })
+  it('tells triage where criteria come from and never to pass its own wording off as written', () => {
+    const p = buildPrompt({ kind: 'triage', ticket: makeTicket(), context: '', environmentKind: 'docker' })
+    expect(p).toContain('For a bug, derive exactly one criterion from the report and set "criteriaSource" to "derived".')
+    expect(p).toContain('set "criteriaSource" to "written" only when')
+    expect(p).toContain('Never present your own wording as written.')
+    expect(p).toContain('"criteriaSource": "derived"')
+  })
 })
 

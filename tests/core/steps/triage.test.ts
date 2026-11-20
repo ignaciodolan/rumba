@@ -88,4 +88,32 @@ describe('triage', () => {
     d.workspace.cleanup = async () => { throw new Error('cannot delete') }
     expect((await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).state).toBe('criteria_ready')
   })
+  it('parks a feature with derived criteria, posts them, and asks for no other draft', async () => {
+    const d = makeDeps()
+    const proposed = [{ id: 'c1', text: 'The orders page has an export button', checkable: true }]
+    d.agent.script.triage = { ...bug, ticketKind: 'feature', criteria: proposed, criteriaSource: 'derived' }
+    const t = makeTicket({ labels: ['rumba:hub', 'rumba-approved'] })
+    const s = await triage(d, makeRumba(), t, newState('hub', d.clock()))
+    expect(s.state).toBe('awaiting_criteria'); expect(s.kind).toBe('feature'); expect(s.criteria).toEqual(proposed)
+    expect(d.tracker.criteriaPosts).toEqual([{ ticketId: '123', criteria: proposed }])
+    expect(d.agent.calls.map((c) => c.kind)).toEqual(['triage'])
+    expect(t.labels).not.toContain('rumba-approved')
+    expect(d.tracker.states.get('123')?.state).toBe('awaiting_criteria')
+  })
+  it('parks a feature whose criteria have no source', async () => {
+    const d = makeDeps(); d.agent.script.triage = { ...bug, ticketKind: 'feature' }
+    const s = await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    expect(s.state).toBe('awaiting_criteria'); expect(d.tracker.criteriaPosts[0]!.criteria).toEqual(bug.criteria)
+    expect(d.agent.calls.map((c) => c.kind)).toEqual(['triage'])
+  })
+  it('sends a feature with written criteria to criteria_ready', async () => {
+    const d = makeDeps(); d.agent.script.triage = { ...bug, ticketKind: 'feature', criteriaSource: 'written' }
+    const s = await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    expect(s.state).toBe('criteria_ready'); expect(s.criteria).toEqual(bug.criteria); expect(d.tracker.criteriaPosts).toHaveLength(0)
+  })
+  it('sends a bug with derived criteria to criteria_ready', async () => {
+    const d = makeDeps(); d.agent.script.triage = { ...bug, criteriaSource: 'derived' }
+    expect((await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).state).toBe('criteria_ready')
+  })
 })
+
