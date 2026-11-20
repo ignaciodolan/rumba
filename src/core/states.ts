@@ -1,5 +1,11 @@
 import type { StateName, TicketState } from './types.js'
 
+export const STATE_NAMES = [
+  'queued', 'triaged', 'awaiting_criteria', 'criteria_ready', 'env_ready',
+  'checks_failing', 'building', 'verified', 'pr_open',
+  'skipped', 'not_reproducible', 'needs_human', 'fix_failed',
+] as const satisfies readonly StateName[]
+
 export const DURABLE: readonly StateName[] = [
   'queued', 'awaiting_criteria', 'criteria_ready', 'pr_open',
   'skipped', 'not_reproducible', 'needs_human', 'fix_failed',

@@ -1,15 +1,10 @@
 import { z } from 'zod'
-import { DURABLE } from './states.js'
+import { DURABLE, STATE_NAMES } from './states.js'
 import { isValidRumbaName } from './labels.js'
-import type { StateName, TicketState } from './types.js'
+import type { TicketState } from './types.js'
 
 export const STATE_MARKER = 'rumba-state-v1'
 
-const STATE_NAMES = [
-  'queued', 'triaged', 'awaiting_criteria', 'criteria_ready', 'env_ready',
-  'checks_failing', 'building', 'verified', 'pr_open',
-  'skipped', 'not_reproducible', 'needs_human', 'fix_failed',
-] as const satisfies readonly StateName[]
 const stateName = z.enum(STATE_NAMES)
 const durableState = z.enum(STATE_NAMES).refine(s => DURABLE.includes(s))
 const count = z.number().int().nonnegative()
