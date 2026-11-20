@@ -179,6 +179,25 @@ describe('docker environment: what the host-side commands read', () => {
     expect(await logged()).toEqual(['FROM trusted'])
   })
 
+  it('stops when something rewrote the trusted checkout during the run, and takes the environment down from a clean one', async () => {
+    const script = (who: string) => `#!/bin/sh\nprintf '%s:${who}\\n' "$1" >> '${log}'\nshift\n[ "$#" -eq 0 ] || exec "$@"\n`
+    await mergeToMain({ 'scripts/up.sh': script('trusted'), 'scripts/exec.sh': script('trusted'), 'scripts/down.sh': script('trusted') })
+    const env = environment({ up: 'sh scripts/up.sh up', exec: 'sh scripts/exec.sh exec', down: 'sh scripts/down.sh down' })
+    const c = await candidateWith({ 'src/a.txt': 'x\n' }, { fresh: true })
+    const h = await env.up({ branch: BRANCH, sha: c.sha, role: 'before' }, c.workdir)
+
+    // What code in a container could do if the merged compose file mounted `.` read-write.
+    await writeFile(path.join(h.hostDir!, 'scripts/exec.sh'), script('AGENT'))
+    await writeFile(path.join(h.hostDir!, 'scripts/down.sh'), script('AGENT'))
+    await writeFile(path.join(h.hostDir!, '.env'), 'COMPOSE_FILE=elsewhere.yml\n')
+
+    await expect(env.runCheck(h, { criterionId: 'c1', command: 'echo checked', files: [] })).rejects.toThrow(/no longer matches its commit/)
+    await env.down(h)
+
+    expect(await logged()).toEqual(['up:trusted', 'down:trusted'])
+    expect(existsSync(h.hostDir!)).toBe(false)
+  })
+
   it('hands the commit under test to the commands as RUMBA_WORKDIR and runs them somewhere else', async () => {
     await mergeToMain({ 'app.txt': 'base\n' })
     const env = environment({ up: `printf '%s\\n%s\\n' "$PWD" "$RUMBA_WORKDIR" >> '${log}'; cat "$RUMBA_WORKDIR/app.txt" >> '${log}'` })
@@ -188,6 +207,7 @@ describe('docker environment: what the host-side commands read', () => {
     const [cwd, handed, content] = await logged()
     expect(handed).toBe(c.workdir)
     expect(cwd).not.toBe(c.workdir)
+    expect(path.dirname(cwd)).not.toBe(path.dirname(c.workdir))
     expect(content).toBe('candidate')
     // The directory the commands run in holds the default branch's files, not the candidate's.
     expect(await readFile(path.join(cwd, 'app.txt'), 'utf8')).toBe('base\n')
