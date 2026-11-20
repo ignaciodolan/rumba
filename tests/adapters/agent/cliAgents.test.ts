@@ -78,6 +78,11 @@ describe('CLI agents', () => {
     expect(call.command.slice(-2)).toEqual(['-m', 'gemini-x'])
   })
 
+  it('says so when a failed run printed nothing', async () => {
+    const sandbox = { run: async () => ({ exitCode: 1, output: '' }) }
+    await expect(new ClaudeCodeAgent({ sandbox, apiKey: 'k', timeoutMs: 1000 }).run(fixTask, dir)).rejects.toThrow(/exited with code 1:\n\(no output\)/)
+  })
+
   it('throws AgentError with only the last 2000 characters of output on a timeout', async () => {
     const output = 'h'.repeat(3000) + 't'.repeat(2000)
     const sandbox = { run: async () => ({ exitCode: 124, output }) }

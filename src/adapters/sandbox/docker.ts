@@ -5,8 +5,16 @@ import type { Sandbox } from '../../ports/sandbox.js'
 export const SANDBOX_IMAGE = 'rumba-sandbox:local'
 
 const TIMEOUT_EXIT_CODE = 124
+const DEFAULT_KILL_GRACE_MS = 10_000
 
-/** Only the keys in `env` reach the container; nothing comes from process.env. */
+/** Runs the docker client with `args`; `env` is added to the client's own environment. */
+export type DockerRunner = (args: string[], o: { env: Record<string, string> }) => Promise<{ exitCode: number; output: string }>
+
+/**
+ * Each key of `env` is passed as `-e NAME` only. Docker then takes the value from the client's
+ * environment, so values never show in the host process list. Nothing else from process.env
+ * reaches the container.
+ */
 export function dockerArgs(o: {
   workdir: string
   command: string[]
@@ -14,13 +22,28 @@ export function dockerArgs(o: {
   image: string
   user?: string
   name?: string
+  harden?: boolean
 }): string[] {
   const args = ['run', '--rm']
   if (o.user !== undefined) args.push('--user', o.user)
   if (o.name !== undefined) args.push('--name', o.name)
+  if (o.harden === true) args.push('--cap-drop=ALL', '--security-opt=no-new-privileges')
   args.push('-v', `${o.workdir}:/work`, '-w', '/work')
-  for (const [key, value] of Object.entries(o.env)) args.push('-e', `${key}=${value}`)
+  for (const key of Object.keys(o.env)) args.push('-e', key)
   return [...args, o.image, ...o.command]
+}
+
+/** The real runner. A client that cannot start (for example, docker is not installed) reports why in `output`. */
+export function dockerRunner(binary = 'docker'): DockerRunner {
+  return async (args, o) => {
+    const result = await execa(binary, args, { all: true, reject: false, stdin: 'ignore', env: o.env })
+    const output = result.all ?? ''
+    if (result.exitCode === undefined) {
+      const reason = result.shortMessage ?? result.message ?? `${binary} could not start`
+      return { exitCode: 1, output: output === '' ? reason : `${output}\n${reason}` }
+    }
+    return { exitCode: result.exitCode, output }
+  }
 }
 
 function callerUser(): string | undefined {
@@ -28,30 +51,39 @@ function callerUser(): string | undefined {
   return `${process.getuid()}:${process.getgid()}`
 }
 
+function wait(ms: number): { done: Promise<void>; cancel: () => void } {
+  let timer: NodeJS.Timeout | undefined
+  const done = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms) })
+  return { done, cancel: () => clearTimeout(timer) }
+}
+
 export class DockerSandbox implements Sandbox {
   private readonly image: string
+  private readonly runner: DockerRunner
+  private readonly killGraceMs: number
 
-  constructor(o: { image?: string } = {}) {
+  constructor(o: { image?: string; runner?: DockerRunner; killGraceMs?: number } = {}) {
     this.image = o.image ?? SANDBOX_IMAGE
+    this.runner = o.runner ?? dockerRunner()
+    this.killGraceMs = o.killGraceMs ?? DEFAULT_KILL_GRACE_MS
   }
 
   async run(o: { workdir: string; command: string[]; env: Record<string, string>; timeoutMs: number }): Promise<{ exitCode: number; output: string }> {
     const name = `rumba-${randomUUID()}`
-    const args = dockerArgs({ ...o, image: this.image, user: callerUser(), name })
-    // Values in `env` are passed as -e KEY=VALUE arguments; the docker client process gets no extra environment.
-    const subprocess = execa('docker', args, { all: true, reject: false, stdin: 'ignore' })
-    let timedOut = false
-    const timer = setTimeout(() => {
-      timedOut = true
-      void execa('docker', ['kill', name], { reject: false })
-    }, o.timeoutMs)
-    try {
-      const result = await subprocess
-      const output = result.all ?? ''
-      return { exitCode: timedOut ? TIMEOUT_EXIT_CODE : (result.exitCode ?? 1), output }
-    } finally {
-      clearTimeout(timer)
-    }
+    const args = dockerArgs({ ...o, image: this.image, user: callerUser(), name, harden: true })
+    const running = this.runner(args, { env: o.env })
+
+    const timeout = wait(o.timeoutMs)
+    const first = await Promise.race([running, timeout.done.then(() => null)])
+    timeout.cancel()
+    if (first !== null) return first
+
+    // Timed out: stop the container, then collect what it printed. A failed kill must not hide the timeout.
+    await this.runner(['kill', name], { env: {} }).catch(() => undefined)
+    const grace = wait(this.killGraceMs)
+    const last = await Promise.race([running.catch(() => null), grace.done.then(() => null)])
+    grace.cancel()
+    return { exitCode: TIMEOUT_EXIT_CODE, output: last?.output ?? '' }
   }
 }
 

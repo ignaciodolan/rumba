@@ -21,7 +21,7 @@ export async function runCliAgent(o: {
   const { exitCode, output } = await o.sandbox.run({ workdir: o.workdir, command: o.command, env: o.env, timeoutMs: o.timeoutMs })
   if (exitCode !== 0) {
     const reason = exitCode === 124 ? `timed out after ${o.timeoutMs} ms` : `exited with code ${exitCode}`
-    throw new AgentError(`${o.name} ${reason}:\n${output.slice(-OUTPUT_TAIL)}`)
+    throw new AgentError(`${o.name} ${reason}:\n${output === '' ? '(no output)' : output.slice(-OUTPUT_TAIL)}`)
   }
   return readAgentResult(o.workdir, o.task.kind)
 }
