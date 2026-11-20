@@ -83,4 +83,9 @@ describe('triage', () => {
     const resumed = await resumeCriteria(d, makeRumba(), t, s)
     expect(resumed.state).toBe('awaiting_criteria')
   })
+  it('returns its state when the cleanup fails', async () => {
+    const d = makeDeps(); d.agent.script.triage = bug
+    d.workspace.cleanup = async () => { throw new Error('cannot delete') }
+    expect((await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).state).toBe('criteria_ready')
+  })
 })

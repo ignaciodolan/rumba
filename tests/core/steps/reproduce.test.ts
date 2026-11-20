@@ -9,6 +9,15 @@ const ready = (d: ReturnType<typeof makeDeps>, kind: 'bug' | 'feature', n = 1) =
 const checksFor = (n: number) => ({ kind: 'write-checks' as const,
   checks: Array.from({ length: n }, (_, i) => ({ criterionId: `c${i + 1}`, command: `npm test -- c${i + 1}`, files: [`tests/rumba/c${i + 1}.test.ts`] })) })
 
+/** Adds hashing and the environment's up and down to the workspace's call log. */
+function trace(d: ReturnType<typeof makeDeps>): void {
+  const { workspace: ws, environment: env } = d
+  const hash = ws.hashFiles.bind(ws); const up = env.up.bind(env); const down = env.down.bind(env)
+  ws.hashFiles = async (w, f) => { ws.log.push(`hash ${w}`); return hash(w, f) }
+  env.up = async (r, w) => { ws.log.push(`up ${w}`); return up(r, w) }
+  env.down = async (h) => { ws.log.push(`down ${h.workdir}`); return down(h) }
+}
+
 describe('reproduce', () => {
   it('reaches checks_failing when every check fails on the base', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.hashes = { 'tests/rumba/c1.test.ts': 'h1' }
@@ -53,11 +62,41 @@ describe('reproduce', () => {
     expect(s.state).toBe('needs_human'); expect(d.environment.ups).toHaveLength(0)
     expect(d.tracker.comments.at(-1)?.body).toBe('Rumba could not write a check for any criterion.')
   })
-  it('uses the base sha when the agent needs no new files', async () => {
+  it('throws when the workspace makes no checks commit', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1)
     d.workspace.commit = async () => null
+    await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/checks commit/)
+    expect(d.environment.ups).toEqual([])
+  })
+  it('runs the environment in a new checkout, prepared after the agent worktree was cleaned up', async () => {
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); trace(d)
     const s = await reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))
-    expect(s.checksSha).toBe('base000'); expect(d.environment.ups[0]!.sha).toBe('base000')
+    expect(s.state).toBe('checks_failing')
+    const [agentDir] = d.agent.workdirs; const [envDir] = d.environment.upWorkdirs
+    expect(envDir).not.toBe(agentDir)
+    expect(d.workspace.log).toEqual([
+      `prepare rumba/hub/123 fresh ${agentDir}`,
+      `commit ${agentDir} allowEmpty`,
+      `hash ${agentDir}`,
+      `cleanup ${agentDir}`,
+      `prepare rumba/hub/123 existing ${envDir}`,
+      `up ${envDir}`,
+      `down ${envDir}`,
+      `cleanup ${envDir}`,
+    ])
+  })
+  it('cleans up the agent worktree and prepares no environment when a protected path changed', async () => {
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['.env']; trace(d)
+    await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/\.env/)
+    const [agentDir] = d.agent.workdirs
+    expect(d.workspace.log).toEqual([`prepare rumba/hub/123 fresh ${agentDir}`, `commit ${agentDir} allowEmpty`, `cleanup ${agentDir}`])
+  })
+  it('returns its state when a cleanup fails', async () => {
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1)
+    d.workspace.cleanup = async () => { throw new Error('cannot delete') }
+    expect((await reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).state).toBe('checks_failing')
+    d.environment.up = async () => { throw new Error('no env') }
+    await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow('no env')
   })
   it('writes env_ready before running the checks', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1)

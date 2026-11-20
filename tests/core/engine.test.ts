@@ -47,4 +47,12 @@ describe('advanceTicket', () => {
     const s = transition(newState('hub', d.clock()), 'needs_human', d.clock())
     expect(await advanceTicket(d, makeRumba(), makeTicket(), s)).toBe(s)
   })
+  it('keeps its result and its error when cleanupAll fails', async () => {
+    const d = makeDeps(); scriptHappyBug(d)
+    d.workspace.cleanupAll = async () => { throw new Error('cannot delete') }
+    expect((await advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).state).toBe('pr_open')
+    const e = makeDeps(); e.workspace.cleanupAll = async () => { throw new Error('cannot delete') }
+    const s = transition(newState('hub', e.clock()), 'triaged', e.clock())
+    await expect(advanceTicket(e, makeRumba(), makeTicket(), s)).rejects.toThrow(/No step for state triaged/)
+  })
 })

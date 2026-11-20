@@ -81,12 +81,13 @@ export class GitWorkspace implements Workspace {
     return workdir
   }
 
-  async commit(workdir: string, message: string): Promise<string | null> {
+  async commit(workdir: string, message: string, opts: { allowEmpty?: boolean } = {}): Promise<string | null> {
     const wt = await this.worktree(workdir)
     await this.inWorktree(wt, workdir, ['add', '-A', '--', '.', `:(top,exclude)${OUTPUT_DIR}`])
     const staged = await this.inWorktree(wt, workdir, ['diff', '--cached', '--quiet', '--no-ext-diff'], [0, 1])
-    if (staged.exitCode === 0) return null
-    await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', message], [0], BOT_ENV)
+    if (staged.exitCode === 0 && opts.allowEmpty !== true) return null
+    const empty = opts.allowEmpty === true ? ['--allow-empty'] : []
+    await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', ...empty, '-m', message], [0], BOT_ENV)
     return (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD'])).stdout
   }
 
@@ -123,21 +124,34 @@ export class GitWorkspace implements Workspace {
     return hashes
   }
 
+  /** Never throws. A directory that is not one of repoRoot's worktrees is left alone. */
   async cleanup(workdir: string): Promise<void> {
-    await this.removeWorktree(await realpath(workdir).catch(() => path.resolve(workdir)))
+    try {
+      await this.removeWorktree(await realpath(workdir).catch(() => path.resolve(workdir)))
+    } catch {
+      // A worktree left behind is pruned or replaced by a later prepare.
+    }
   }
 
   /**
    * Removes a linked worktree of repoRoot, leaving its branch. Refuses any other directory,
-   * the main checkout included, unless it is already gone.
+   * the main checkout included, unless it is already gone. When the directory cannot be
+   * deleted (files owned by another user, say), its registration is dropped on the trusted
+   * side so the branch is free again, and the directory is left behind.
    */
   private async removeWorktree(real: string): Promise<void> {
     this.worktrees.delete(real)
     if (existsSync(real)) {
-      await this.findGitDir(real)
-      const removed = await this.gitResult(['worktree', 'remove', '--force', real], [0, 128])
+      const gitDir = await this.findGitDir(real)
       // git refuses a worktree whose .git pointer the agent replaced; it is still a registered worktree.
-      if (removed.exitCode !== 0) await rm(real, { recursive: true, force: true })
+      const removed = await this.gitResult(['worktree', 'remove', '--force', real], [0, 128]).catch(() => null)
+      if (removed === null || removed.exitCode !== 0) {
+        try {
+          await rm(real, { recursive: true, force: true })
+        } catch {
+          await rm(gitDir, { recursive: true, force: true })
+        }
+      }
     }
     await this.git(['worktree', 'prune'])
   }

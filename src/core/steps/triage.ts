@@ -5,6 +5,7 @@ import { extractAcceptanceCriteria } from '../criteria.js'
 import { fixBranch } from '../labels.js'
 import { transition } from '../states.js'
 import type { Ticket, TicketState } from '../types.js'
+import { cleanupQuietly } from './teardown.js'
 
 export async function triage(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState): Promise<TicketState> {
   let current = transition(state, 'triaged', deps.clock())
@@ -49,6 +50,6 @@ export async function triage(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
     await deps.tracker.writeState(ticket, current)
     return current
   } finally {
-    await deps.workspace.cleanup(workdir)
+    await cleanupQuietly(deps.workspace, workdir)
   }
 }

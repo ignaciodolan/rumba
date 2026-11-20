@@ -5,6 +5,14 @@ import { failing, makeDeps, makeRumba, makeTicket } from '../../../src/testing/f
 const H = { 'tests/rumba/c1.test.ts': 'h1' }
 const fix = { kind: 'fix' as const, summary: 'fixed' }
 
+/** Adds the environment's up and down to the workspace's call log. */
+function trace(d: ReturnType<typeof makeDeps>): void {
+  const { workspace: ws, environment: env } = d
+  const up = env.up.bind(env); const down = env.down.bind(env)
+  env.up = async (r, w) => { ws.log.push(`up ${w}`); return up(r, w) }
+  env.down = async (h) => { ws.log.push(`down ${h.workdir}`); return down(h) }
+}
+
 describe('build', () => {
   it('verifies when the checks pass after the fix', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H
@@ -107,5 +115,30 @@ describe('build', () => {
     const start = failing(d); const copy = structuredClone(start)
     await build(d, makeRumba(), makeTicket(), start)
     expect(start).toEqual(copy)
+  })
+  it('runs each attempt in a new agent worktree and the environment in a new checkout after it', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.environment.passes = () => false; trace(d)
+    await build(d, makeRumba(), makeTicket(), failing(d))
+    const [a1, a2] = d.agent.workdirs; const [e1, e2] = d.environment.upWorkdirs
+    expect(new Set([a1, a2, e1, e2]).size).toBe(4)
+    const attempt = (a: string | undefined, e: string | undefined) => [
+      `prepare rumba/hub/123 existing ${a}`, `commit ${a}`, `cleanup ${a}`,
+      `prepare rumba/hub/123 existing ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`,
+    ]
+    expect(d.workspace.log).toEqual([...attempt(a1, e1), ...attempt(a2, e2)])
+  })
+  it('resets and cleans up the agent worktree on a guard violation, and prepares no environment', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.workspace.changed = ['.github/workflows/ci.yml']; trace(d)
+    expect((await build(d, makeRumba(), makeTicket(), failing(d))).state).toBe('fix_failed')
+    const [a1] = d.agent.workdirs
+    expect(d.workspace.log.slice(0, 4)).toEqual([`prepare rumba/hub/123 existing ${a1}`, `commit ${a1}`, `reset ${a1} sha1`, `cleanup ${a1}`])
+    expect(d.environment.upWorkdirs).toEqual([])
+  })
+  it('returns its state when a cleanup fails', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.environment.passes = () => true
+    d.workspace.cleanup = async () => { throw new Error('cannot delete') }
+    expect((await build(d, makeRumba(), makeTicket(), failing(d))).state).toBe('verified')
+    d.environment.runCheck = async () => { throw new Error('boom') }
+    await expect(build(d, makeRumba(), makeTicket(), failing(d))).rejects.toThrow('boom')
   })
 })

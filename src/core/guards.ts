@@ -2,10 +2,16 @@ import picomatch from 'picomatch'
 
 const matcher = (globs: string[]) => picomatch(globs, { dot: true })
 
-/** Changed files that match a protected glob. '.rumba/**' is always protected. */
+/**
+ * Always protected: Rumba's own folder, the repository's GitHub config (workflows run with
+ * repository secrets), and any `.env`, which docker compose reads when the environment starts.
+ */
+const ALWAYS_PROTECTED = ['.rumba/**', '.github/**', '.env']
+
+/** Changed files that match a protected glob, or one of ALWAYS_PROTECTED. */
 export function protectedViolations(changed: string[], protectedGlobs: string[]): string[] {
   // A glob without a slash matches by file name at any depth; one with a slash matches the full path.
-  const matchers = ['.rumba/**', ...protectedGlobs].map((g) =>
+  const matchers = [...ALWAYS_PROTECTED, ...protectedGlobs].map((g) =>
     picomatch(g, { dot: true, nocase: true, basename: !g.includes('/') }))
   return changed.filter((f) => matchers.some((m) => m(f)))
 }

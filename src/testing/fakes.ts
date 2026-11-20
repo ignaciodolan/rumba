@@ -101,11 +101,14 @@ export class FakeTracker implements Tracker {
 
 export class FakeAgent implements Agent {
   calls: AgentTask[] = []
+  /** The workdir of each call, in order. */
+  workdirs: string[] = []
   script: Partial<Record<AgentTaskKind, AgentResult | Error | (AgentResult | Error)[]>> = {}
   private played: Partial<Record<AgentTaskKind, number>> = {}
 
-  async run(task: AgentTask, _workdir: string): Promise<AgentResult> {
+  async run(task: AgentTask, workdir: string): Promise<AgentResult> {
     this.calls.push(task)
+    this.workdirs.push(workdir)
     const entry = this.script[task.kind]
     if (entry === undefined) throw new Error(`FakeAgent has no script for task kind ${task.kind}`)
     let item: AgentResult | Error
@@ -123,6 +126,8 @@ export class FakeAgent implements Agent {
 
 export class FakeEnvironment implements Environment {
   ups: { branch: string; sha: string; role: Role }[] = []
+  /** The workdir of each up, in order. */
+  upWorkdirs: string[] = []
   downs = 0
   canRunCommands = true
   commandExit = 0
@@ -131,6 +136,7 @@ export class FakeEnvironment implements Environment {
 
   async up(ref: { branch: string; sha: string; role: Role }, workdir: string): Promise<EnvHandle> {
     this.ups.push({ ...ref })
+    this.upWorkdirs.push(workdir)
     const h: EnvHandle = { workdir }
     this.roles.set(h, ref.role)
     return h
@@ -180,18 +186,27 @@ export class FakeWorkspace implements Workspace {
   commits: string[] = []
   resets: string[] = []
   cleanedAll = 0
+  /** Every prepare, commit, reset and cleanup, in order, e.g. `prepare rumba/hub/123 fresh /fake/1`. */
+  log: string[] = []
+  private prepared = 0
 
-  async prepare(branch: string, _opts: { fresh: boolean }): Promise<{ workdir: string; baseSha: string }> {
-    return { workdir: `/fake/${branch}`, baseSha: 'base000' }
+  async prepare(branch: string, opts: { fresh: boolean }): Promise<{ workdir: string; baseSha: string }> {
+    // Each call gets its own directory, as a real worktree would.
+    this.prepared += 1
+    const workdir = `/fake/${this.prepared}/${branch}`
+    this.log.push(`prepare ${branch} ${opts.fresh ? 'fresh' : 'existing'} ${workdir}`)
+    return { workdir, baseSha: 'base000' }
   }
 
-  async commit(_workdir: string, message: string): Promise<string | null> {
+  async commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null> {
     this.commits.push(message)
+    this.log.push(`commit ${workdir}${opts?.allowEmpty === true ? ' allowEmpty' : ''}`)
     return `sha${this.commits.length}`
   }
 
-  async reset(_workdir: string, sha: string): Promise<void> {
+  async reset(workdir: string, sha: string): Promise<void> {
     this.resets.push(sha)
+    this.log.push(`reset ${workdir} ${sha}`)
   }
 
   async changedFiles(_workdir: string, _sinceSha: string): Promise<string[]> {
@@ -202,7 +217,9 @@ export class FakeWorkspace implements Workspace {
     return this.hashes
   }
 
-  async cleanup(_workdir: string): Promise<void> {}
+  async cleanup(workdir: string): Promise<void> {
+    this.log.push(`cleanup ${workdir}`)
+  }
 
   async cleanupAll(): Promise<void> {
     this.cleanedAll += 1

@@ -5,7 +5,8 @@ import { protectedViolations } from '../guards.js'
 import { fixBranch } from '../labels.js'
 import { cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
-import type { CheckResult, Ticket, TicketState } from '../types.js'
+import type { Check, CheckResult, Criterion, Ticket, TicketState } from '../types.js'
+import { cleanupQuietly, downQuietly } from './teardown.js'
 
 const NO_CHECK = 'Rumba could not write a check for any criterion.'
 
@@ -25,21 +26,13 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
   if (checkable.length === 0) return stop(deps, ticket, state, 'needs_human', NO_CHECK)
 
   const branch = fixBranch(rumba.name, ticket.id)
-  const { workdir, baseSha } = await deps.workspace.prepare(branch, { fresh: true })
+  const written = await writeChecks(deps, rumba, ticket, checkable, branch)
+  if (written === null) return stop(deps, ticket, state, 'needs_human', NO_CHECK)
+  const { baseSha, checksSha, checks, checkHashes } = written
+
+  // The environment never runs where the agent wrote: it gets a new checkout of the commit.
+  const { workdir } = await deps.workspace.prepare(branch, { fresh: false })
   try {
-    const result = await deps.agent.run({
-      kind: 'write-checks', ticket, context: rumba.context, environmentKind: rumba.environment.kind, criteria: checkable,
-    }, workdir)
-    if (result.kind !== 'write-checks') throw new Error(`Agent returned ${result.kind} for a write-checks task`)
-
-    const known = new Set(checkable.map((c) => c.id))
-    const checks = result.checks.filter((c) => known.has(c.criterionId))
-    if (checks.length === 0) return await stop(deps, ticket, state, 'needs_human', NO_CHECK)
-
-    const checksSha = (await deps.workspace.commit(workdir, `test: rumba checks for ${ticket.ref}`)) ?? baseSha
-    const committed = await deps.workspace.changedFiles(workdir, baseSha)
-    const touched = protectedViolations(committed, rumba.environment.protected)
-    if (touched.length > 0) throw new AgentError(`The agent changed protected paths: ${touched.join(', ')}`)
     const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before' }, workdir)
     try {
       let current: TicketState = {
@@ -65,14 +58,44 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
           `These criteria already pass on the current code: ${texts.join('; ')}`)
       }
 
-      const checkHashes = await deps.workspace.hashFiles(workdir, [...new Set([...checks.flatMap((c) => c.files), ...committed])])
       current = { ...transition(current, 'checks_failing', deps.clock()), checkHashes }
       await deps.tracker.writeState(ticket, current)
       return current
     } finally {
-      await deps.environment.down(handle)
+      await downQuietly(deps.environment, handle)
     }
   } finally {
-    await deps.workspace.cleanup(workdir)
+    await cleanupQuietly(deps.workspace, workdir)
+  }
+}
+
+/**
+ * Has the agent write the checks in a new worktree, commits them, guards and hashes the
+ * commit, and removes the worktree. Null when no check matches a checkable criterion.
+ */
+async function writeChecks(
+  deps: Deps, rumba: RumbaConfig, ticket: Ticket, checkable: Criterion[], branch: string,
+): Promise<{ baseSha: string; checksSha: string; checks: Check[]; checkHashes: Record<string, string> } | null> {
+  const { workdir, baseSha } = await deps.workspace.prepare(branch, { fresh: true })
+  try {
+    const result = await deps.agent.run({
+      kind: 'write-checks', ticket, context: rumba.context, environmentKind: rumba.environment.kind, criteria: checkable,
+    }, workdir)
+    if (result.kind !== 'write-checks') throw new Error(`Agent returned ${result.kind} for a write-checks task`)
+
+    const known = new Set(checkable.map((c) => c.id))
+    const checks = result.checks.filter((c) => known.has(c.criterionId))
+    if (checks.length === 0) return null
+
+    // Always a new commit, so the before-run never points at the default branch's own commit.
+    const checksSha = await deps.workspace.commit(workdir, `test: rumba checks for ${ticket.ref}`, { allowEmpty: true })
+    if (checksSha === null) throw new Error('The workspace made no checks commit.')
+    const committed = await deps.workspace.changedFiles(workdir, baseSha)
+    const touched = protectedViolations(committed, rumba.environment.protected)
+    if (touched.length > 0) throw new AgentError(`The agent changed protected paths: ${touched.join(', ')}`)
+    const checkHashes = await deps.workspace.hashFiles(workdir, [...new Set([...checks.flatMap((c) => c.files), ...committed])])
+    return { baseSha, checksSha, checks, checkHashes }
+  } finally {
+    await cleanupQuietly(deps.workspace, workdir)
   }
 }

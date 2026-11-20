@@ -39,6 +39,7 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
       }
     }
   } finally {
-    await deps.workspace.cleanupAll()
+    // Never replaces the result or the error of a step. A worktree left behind is pruned by a later prepare.
+    await deps.workspace.cleanupAll().catch(() => undefined)
   }
 }

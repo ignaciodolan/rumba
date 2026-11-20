@@ -25,4 +25,12 @@ describe('guards', () => {
     expect(protectedViolations(['.Rumba/hub/context.md', 'Docker-Compose.yml'], ['docker-compose*.y*ml']))
       .toEqual(['.Rumba/hub/context.md', 'Docker-Compose.yml'])
   })
+  it('always protects .github/** with no protected globs configured', () => {
+    expect(protectedViolations(['.github/workflows/ci.yml', '.github/CODEOWNERS', 'src/github.ts', 'docs/.github/x'], []))
+      .toEqual(['.github/workflows/ci.yml', '.github/CODEOWNERS'])
+  })
+  it('always protects a file named .env at any depth, and only that name', () => {
+    expect(protectedViolations(['.env', 'apps/hub/.env', 'src/.ENV', '.env.example', 'src/env.ts'], []))
+      .toEqual(['.env', 'apps/hub/.env', 'src/.ENV'])
+  })
 })

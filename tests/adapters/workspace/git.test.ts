@@ -163,8 +163,57 @@ describe('GitWorkspace', () => {
   it('never removes the main checkout, even when it has the branch checked out', async () => {
     await git(clone, 'checkout', '-q', '-b', 'rumba/hub/1')
     await expect(ws.prepare('rumba/hub/1', { fresh: true })).rejects.toThrow(/not a worktree/)
-    await expect(ws.cleanup(clone)).rejects.toThrow(/not a worktree/)
+    // cleanup never throws, so refusing the main checkout means leaving it alone.
+    await expect(ws.cleanup(clone)).resolves.toBeUndefined()
     expect(existsSync(path.join(clone, 'README.md'))).toBe(true)
+    expect(await git(clone, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('rumba/hub/1')
+  })
+
+  it('gives a checkout of only the committed tree after a cleanup', async () => {
+    const first = await ws.prepare('rumba/hub/1', { fresh: true })
+    await write(first.workdir, '.gitignore', '.env\n')
+    await write(first.workdir, 'kept.txt', 'committed')
+    await write(first.workdir, '.env', 'COMPOSE_FILE=evil.yml')
+    await ws.commit(first.workdir, 'work')
+    await write(first.workdir, 'untracked.txt', 'later')
+    await ws.cleanup(first.workdir)
+    const again = await ws.prepare('rumba/hub/1', { fresh: false })
+    expect(again.workdir).not.toBe(first.workdir)
+    expect(existsSync(path.join(again.workdir, 'kept.txt'))).toBe(true)
+    expect(existsSync(path.join(again.workdir, '.env'))).toBe(false)
+    expect(existsSync(path.join(again.workdir, 'untracked.txt'))).toBe(false)
+  })
+
+  it('commits with nothing staged when allowEmpty is set', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    expect(await ws.commit(workdir, 'nothing')).toBeNull()
+    const sha = await ws.commit(workdir, 'test: empty', { allowEmpty: true })
+    expect(sha).toMatch(/^[0-9a-f]{40}$/); expect(sha).not.toBe(baseSha)
+    expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(sha)
+    expect(await ws.changedFiles(workdir, baseSha)).toEqual([])
+  })
+
+  describe('when a worktree cannot be deleted', () => {
+    let locked: string | undefined
+    afterEach(async () => {
+      if (locked !== undefined) await chmod(locked, 0o755).catch(() => undefined)
+      locked = undefined
+    })
+
+    it('cleanup resolves, frees the branch, and a later prepare gets a new directory', async () => {
+      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      await write(first.workdir, 'locked/file.txt', 'x')
+      await ws.commit(first.workdir, 'work')
+      locked = path.join(first.workdir, 'locked')
+      await chmod(locked, 0o555)
+      await expect(ws.cleanup(first.workdir)).resolves.toBeUndefined()
+      expect(await git(clone, 'worktree', 'list', '--porcelain')).not.toContain('branch refs/heads/rumba/hub/1')
+      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      expect(again.workdir).not.toBe(first.workdir)
+      expect(existsSync(path.join(again.workdir, 'locked', 'file.txt'))).toBe(true)
+      await chmod(locked, 0o755); locked = undefined
+      await rm(first.workdir, { recursive: true, force: true })
+    })
   })
 
   it('finds a worktree another instance made', async () => {

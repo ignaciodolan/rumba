@@ -89,6 +89,8 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
   let tracker: FakeTracker
   let codeHost: FakeCodeHost
   let agent: ScriptedAgent
+  /** Every workdir the environment was brought up in. */
+  let envWorkdirs: Set<string>
   let deps: Deps
 
   async function fixSlugOnMain(): Promise<void> {
@@ -122,9 +124,12 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     })
     codeHost = new FakeCodeHost()
     agent = new ScriptedAgent()
+    envWorkdirs = new Set()
+    const environment = new DockerEnvironment({ up, exec, down })
+    const realUp = environment.up.bind(environment)
+    environment.up = async (ref, workdir) => { envWorkdirs.add(workdir); return realUp(ref, workdir) }
     deps = {
-      tracker, agent, codeHost,
-      environment: new DockerEnvironment({ up, exec, down }),
+      tracker, agent, codeHost, environment,
       workspace: new GitWorkspace({ repoRoot, defaultBranch: 'main' }),
       clock: () => new Date(),
       runId: 'e2e',
@@ -135,7 +140,7 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
   afterEach(async () => {
     if (!dockerAvailable) return
     const problems: string[] = []
-    for (const workdir of agent?.workdirs ?? []) {
+    for (const workdir of [...(agent?.workdirs ?? []), ...(envWorkdirs ?? [])]) {
       const project = composeProject(workdir)
       if ((await containersOf(project)).length > 0) {
         problems.push(`compose project ${project} still has containers`)
@@ -161,6 +166,9 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
     expect(s.after).toEqual([expect.objectContaining({ criterionId: 'c1', passed: true })])
     expect(codeHost.prs[0].body).toContain('| fail | pass |'); expect(codeHost.prs[0].draft).toBe(false)
+    // The before-run and the after-run each ran in their own checkout, never where an agent wrote.
+    expect(envWorkdirs.size).toBe(2)
+    for (const w of envWorkdirs) expect(agent.workdirs.has(w)).toBe(false)
   }, 300_000)
 
   it.skipIf(!dockerAvailable)('reports not_reproducible when the bug is already fixed', async () => {

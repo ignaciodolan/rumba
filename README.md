@@ -129,7 +129,7 @@ labels:                     # optional: rename the labels
 - `tracker`: a Linear label is shared across a workspace, so a Linear tracker must name a team, and may name a project.
 - `environment.docker`: the commands that bring the project up, run a command inside it, and take it down. Checks run through `exec`.
 - `environment.vercel-preview`: Rumba pushes a throwaway branch `rumba/<name>/base-<ticket-id>` at the base commit and the fix branch, waits for each preview deployment, and runs the checks against it. It never runs checks against a production deployment. Checks can only see what is visible over HTTP or in a browser.
-- `environment.protected`: globs of files the agent may not change. The docker default is the compose files (`docker-compose*.y*ml`, `compose*.y*ml`); the vercel-preview default is none. Anything under `.rumba/` is always protected.
+- `environment.protected`: globs of files the agent may not change. The docker default is the compose files (`docker-compose*.y*ml`, `compose*.y*ml`); the vercel-preview default is none. Anything under `.rumba/` or `.github/`, and any file named `.env` at any depth, is always protected.
 - `limits.minutes_per_ticket` is also the time limit of each agent call.
 
 The `max_review_rounds` limit in the design belongs to stage 2 and is not read yet.
@@ -161,8 +161,9 @@ Ticket text, and anything the agent reads, is untrusted input, and the coding ag
 - The agent runs in a throwaway container with only the working copy of the fix branch mounted. That container gets the model key and nothing else. Tracker, GitHub and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself.
 - The container has network access, because the agent must reach its model and install packages. Restricting it is not part of stage 1.
 - A check container gets only what the check needs, such as the preview URL and the Vercel bypass secret. Rumba replaces known secret values with `[redacted]` in check output and error messages before posting or printing them, and cuts each check's output to 4,000 characters.
-- The agent may not change anything under `.rumba/` or any path in `environment.protected`. A change there fails verification.
-- With the docker environment, the project's own containers start from files in the repository. List in `environment.protected` every file that changes how they start, for example `.env`, because only the compose files are protected by default.
+- The agent may not change anything under `.rumba/` or `.github/`, any file named `.env`, or any path in `environment.protected`. A change there fails verification.
+- The environment never runs where the agent wrote. After each agent call Rumba commits the change, checks the commit against the protected paths, and removes the agent's working copy. `up`, `exec` and `down` then run on the host in a clean checkout of the commit under test, so a file the agent left out of the commit, such as a git-ignored `.env`, is not there.
+- With the docker environment, `up`, `exec` and `down` run on the host with the repository's files. Keep them plain commands, such as `docker compose up -d --wait`, and do not call scripts from the repository in them: a script is a file the agent can change. List in `environment.protected` every other file that changes how the project's containers start, such as a Dockerfile, because only the compose files, `.github/` and `.env` are protected by default.
 - Rumba reads state only from comments written by the account it runs as. Changing the token to one of another account makes open tickets start again from `queued`.
 - When Rumba runs with the Actions token and cannot look up its own login, set the repository variable `RUMBA_GITHUB_LOGIN` to `github-actions[bot]`. Without a known login Rumba stops with an error rather than trust comments from any account.
 - Do not run Rumba as root. The sandbox runs as the calling user, and Claude Code refuses to run without permission prompts as root.
