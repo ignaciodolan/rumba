@@ -79,6 +79,7 @@ function checkRules(task: AgentTask): string {
   if (task.environmentKind === 'vercel-preview') {
     rules.push(
       'The checks run against a deployed preview. A check reads the address of its target from the RUMBA_BASE_URL environment variable and may only use HTTP or a browser.',
+      'The preview may be protected: when the VERCEL_AUTOMATION_BYPASS_SECRET environment variable is set, send its value in the x-vercel-protection-bypass header on every request to the preview.',
       "The check container has Node.js, the Playwright library and Chromium installed. A CommonJS script (a .cjs file run with node) can load it with require('playwright'), for example: const { chromium } = require('playwright'); const browser = await chromium.launch().",
     )
   }

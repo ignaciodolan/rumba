@@ -26,6 +26,13 @@ describe('buildPrompt', () => {
     expect(docker).not.toContain('RUMBA_BASE_URL')
   })
 
+  it('tells URL checks how to reach a protected preview', () => {
+    const p = buildPrompt({ kind: 'write-checks', ticket: makeTicket(), context: '', environmentKind: 'vercel-preview', criteria: [] })
+    expect(p).toContain('VERCEL_AUTOMATION_BYPASS_SECRET'); expect(p).toContain('x-vercel-protection-bypass')
+    const docker = buildPrompt({ kind: 'write-checks', ticket: makeTicket(), context: '', environmentKind: 'docker', criteria: [] })
+    expect(docker).not.toContain('x-vercel-protection-bypass')
+  })
+
   it('tells checks where their files live and that .rumba-out is never committed', () => {
     const p = buildPrompt({ kind: 'write-checks', ticket: makeTicket(), context: '', environmentKind: 'docker', criteria: [] })
     expect(p).toContain('tests/rumba/'); expect(p).toContain('files'); expect(p).toContain('Never commit .rumba-out/')
