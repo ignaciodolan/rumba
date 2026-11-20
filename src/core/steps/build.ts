@@ -25,7 +25,7 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
 
   while (current.fixAttempts < rumba.limits.maxFixAttempts) {
     const fixed = await fixOnce(deps, rumba, ticket, current, failures, checkFiles)
-    const outcome = 'sha' in fixed ? await verify(deps, rumba, current, fixed.sha) : fixed
+    const outcome = 'sha' in fixed ? await verify(deps, rumba, current, fixed.sha, checkFiles) : fixed
 
     if ('passed' in outcome) {
       current = { ...transition(current, 'verified', deps.clock()), after: outcome.passed }
@@ -63,7 +63,7 @@ async function fixOnce(
 
     const sha = await deps.workspace.commit(workdir, `fix: ${ticket.title} (${ticket.ref})`)
     if (sha === null) return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }] }
-    const guard = await guardFailure(deps, rumba, workdir, state, checkFiles)
+    const guard = await protectedFailure(deps, rumba, workdir, state)
     if (guard) {
       await deps.workspace.reset(workdir, state.checksSha!)
       return { failures: [{ criterionId: 'guard', output: guard }] }
@@ -74,13 +74,23 @@ async function fixOnce(
   }
 }
 
-/** Runs the checks, then the project tests, in a new checkout of the committed fix. */
+/**
+ * In a new checkout of the committed fix: compares the check files with their recorded hashes,
+ * then runs the checks and the project tests. A changed check file is reset off the branch.
+ */
 async function verify(
-  deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string,
+  deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checkFiles: string[],
 ): Promise<{ passed: CheckResult[] } | { failures: Failure[] }> {
   // The environment never runs where the agent wrote, and nothing it leaves behind is committed.
   const { workdir } = await deps.workspace.prepare(state.branch!, { fresh: false })
   try {
+    // Hashed in the checkout that runs, so what is compared is what would be executed.
+    const edited = changedChecks(state.checkHashes, await deps.workspace.hashFiles(workdir, checkFiles))
+    if (edited.length > 0) {
+      await deps.workspace.reset(workdir, state.checksSha!)
+      return { failures: [{ criterionId: 'guard', output: `The fix changed or deleted check files, which must stay as written: ${edited.join(', ')}` }] }
+    }
+
     const handle = await deps.environment.up({ branch: state.branch!, sha, role: 'after' }, workdir)
     try {
       const results: CheckResult[] = []
@@ -107,12 +117,8 @@ async function verify(
   }
 }
 
-async function guardFailure(
-  deps: Deps, rumba: RumbaConfig, workdir: string, state: TicketState, checkFiles: string[],
-): Promise<string | null> {
+/** Protected paths in git's list of committed changes since the checks commit. */
+async function protectedFailure(deps: Deps, rumba: RumbaConfig, workdir: string, state: TicketState): Promise<string | null> {
   const touched = protectedViolations(await deps.workspace.changedFiles(workdir, state.checksSha!), rumba.environment.protected)
-  if (touched.length > 0) return `The fix changed protected paths, which the agent must not change: ${touched.join(', ')}`
-  const edited = changedChecks(state.checkHashes, await deps.workspace.hashFiles(workdir, checkFiles))
-  if (edited.length > 0) return `The fix changed or deleted check files, which must stay as written: ${edited.join(', ')}`
-  return null
+  return touched.length > 0 ? `The fix changed protected paths, which the agent must not change: ${touched.join(', ')}` : null
 }

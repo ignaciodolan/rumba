@@ -30,11 +30,18 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
   const branch = fixBranch(rumba.name, ticket.id)
   const written = await writeChecks(deps, rumba, ticket, checkable, branch)
   if (written === null) return stop(deps, ticket, state, 'needs_human', NO_CHECK)
-  const { baseSha, checksSha, checks, checkHashes } = written
+  const { baseSha, checksSha, checks, committed } = written
 
   // The environment never runs where the agent wrote: it gets a new checkout of the commit.
   const { workdir } = await deps.workspace.prepare(branch, { fresh: false })
   try {
+    // Hashed here, in the checkout that runs, so what is guarded later is what was executed.
+    const declared = [...new Set(checks.flatMap((c) => c.files))]
+    const checkHashes = await deps.workspace.hashFiles(workdir, [...new Set([...declared, ...committed])])
+    const missing = declared.filter((f) => !Object.hasOwn(checkHashes, f))
+    if (missing.length === 1) throw new AgentError(`The check file ${missing[0]} was not committed; is it ignored by git?`)
+    if (missing.length > 1) throw new AgentError(`The check files ${missing.join(', ')} were not committed; are they ignored by git?`)
+
     const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before' }, workdir)
     try {
       let current: TicketState = {
@@ -78,12 +85,12 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
 }
 
 /**
- * Has the agent write the checks in a new worktree, commits them, guards and hashes the
- * commit, and removes the worktree. Null when no check matches a checkable criterion.
+ * Has the agent write the checks in a new worktree, commits them, guards the commit, and
+ * removes the worktree. Null when no check matches a checkable criterion.
  */
 async function writeChecks(
   deps: Deps, rumba: RumbaConfig, ticket: Ticket, checkable: Criterion[], branch: string,
-): Promise<{ baseSha: string; checksSha: string; checks: Check[]; checkHashes: Record<string, string> } | null> {
+): Promise<{ baseSha: string; checksSha: string; checks: Check[]; committed: string[] } | null> {
   const { workdir, baseSha } = await deps.workspace.prepare(branch, { fresh: true })
   try {
     const result = await deps.agent.run({
@@ -101,8 +108,7 @@ async function writeChecks(
     const committed = await deps.workspace.changedFiles(workdir, baseSha)
     const touched = protectedViolations(committed, rumba.environment.protected)
     if (touched.length > 0) throw new AgentError(`The agent changed protected paths: ${touched.join(', ')}`)
-    const checkHashes = await deps.workspace.hashFiles(workdir, [...new Set([...checks.flatMap((c) => c.files), ...committed])])
-    return { baseSha, checksSha, checks, checkHashes }
+    return { baseSha, checksSha, checks, committed }
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }

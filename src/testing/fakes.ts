@@ -182,7 +182,8 @@ export class FakeCodeHost implements CodeHost {
 
 export class FakeWorkspace implements Workspace {
   changed: string[] = []
-  hashes: Record<string, string> = {}
+  /** What hashFiles returns, whatever the directory. Unset: the same hash for every file asked for. */
+  hashes: Record<string, string> | undefined = undefined
   commits: string[] = []
   resets: string[] = []
   cleanedAll = 0
@@ -213,8 +214,8 @@ export class FakeWorkspace implements Workspace {
     return this.changed
   }
 
-  async hashFiles(_workdir: string, _files: string[]): Promise<Record<string, string>> {
-    return this.hashes
+  async hashFiles(_workdir: string, files: string[]): Promise<Record<string, string>> {
+    return this.hashes ?? Object.fromEntries(files.map((f) => [f, 'h0']))
   }
 
   async cleanup(workdir: string): Promise<void> {

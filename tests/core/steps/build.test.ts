@@ -8,7 +8,8 @@ const fix = { kind: 'fix' as const, summary: 'fixed' }
 /** Adds the environment's up and down to the workspace's call log. */
 function trace(d: ReturnType<typeof makeDeps>): void {
   const { workspace: ws, environment: env } = d
-  const up = env.up.bind(env); const down = env.down.bind(env)
+  const up = env.up.bind(env); const down = env.down.bind(env); const hash = ws.hashFiles.bind(ws)
+  ws.hashFiles = async (w, f) => { ws.log.push(`hash ${w}`); return hash(w, f) }
   env.up = async (r, w) => { ws.log.push(`up ${w}`); return up(r, w) }
   env.down = async (h) => { ws.log.push(`down ${h.workdir}`); return down(h) }
 }
@@ -123,7 +124,7 @@ describe('build', () => {
     expect(new Set([a1, a2, e1, e2]).size).toBe(4)
     const attempt = (a: string | undefined, e: string | undefined) => [
       `prepare rumba/hub/123 existing ${a}`, `commit ${a}`, `cleanup ${a}`,
-      `prepare rumba/hub/123 existing ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`,
+      `prepare rumba/hub/123 existing ${e}`, `hash ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`,
     ]
     expect(d.workspace.log).toEqual([...attempt(a1, e1), ...attempt(a2, e2)])
   })
@@ -147,6 +148,19 @@ describe('build', () => {
     const st = failing(d); st.checkHashes = { ...H, 'tests/rumba/helper.ts': 'h2' }
     await build(d, makeRumba(), makeTicket(), st)
     expect(d.agent.calls[0]!.lockedFiles).toEqual(['tests/rumba/c1.test.ts', 'tests/rumba/helper.ts'])
+  })
+  it('compares check hashes in the clean checkout before up, and resets the branch there on a difference', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = { 'tests/rumba/c1.test.ts': 'CHANGED' }; trace(d)
+    expect((await build(d, makeRumba(), makeTicket(), failing(d))).state).toBe('fix_failed')
+    const [a1] = d.agent.workdirs
+    const e1 = d.workspace.log[3]!.split(' ').at(-1)
+    expect(e1).not.toBe(a1)
+    expect(d.workspace.log.slice(0, 7)).toEqual([
+      `prepare rumba/hub/123 existing ${a1}`, `commit ${a1}`, `cleanup ${a1}`,
+      `prepare rumba/hub/123 existing ${e1}`, `hash ${e1}`, `reset ${e1} sha1`, `cleanup ${e1}`,
+    ])
+    expect(d.environment.ups).toEqual([])
+    expect(d.agent.calls[1]!.failures?.[0]).toMatchObject({ criterionId: 'guard', output: expect.stringContaining('tests/rumba/c1.test.ts') })
   })
 })
 

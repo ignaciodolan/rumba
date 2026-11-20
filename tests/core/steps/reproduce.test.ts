@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { newState, transition } from '../../../src/core/states.js'
 import { reproduce } from '../../../src/core/steps/reproduce.js'
+import { AgentError } from '../../../src/ports/agent.js'
 import { makeDeps, makeRumba, makeTicket } from '../../../src/testing/fakes.js'
 
 const ready = (d: ReturnType<typeof makeDeps>, kind: 'bug' | 'feature', n = 1) => ({
@@ -77,9 +78,9 @@ describe('reproduce', () => {
     expect(d.workspace.log).toEqual([
       `prepare rumba/hub/123 fresh ${agentDir}`,
       `commit ${agentDir} allowEmpty`,
-      `hash ${agentDir}`,
       `cleanup ${agentDir}`,
       `prepare rumba/hub/123 existing ${envDir}`,
+      `hash ${envDir}`,
       `up ${envDir}`,
       `down ${envDir}`,
       `cleanup ${envDir}`,
@@ -126,7 +127,7 @@ describe('reproduce', () => {
   it('hashes declared check files and every file from the checks commit', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['tests/rumba/helper.ts']
     const asked: string[][] = []
-    d.workspace.hashFiles = async (_w, files) => { asked.push(files); return {} }
+    d.workspace.hashFiles = async (_w, files) => { asked.push(files); return Object.fromEntries(files.map((f) => [f, 'h'])) }
     await reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))
     expect(asked[0]).toEqual(expect.arrayContaining(['tests/rumba/c1.test.ts', 'tests/rumba/helper.ts']))
   })
@@ -151,4 +152,15 @@ describe('reproduce', () => {
     expect(d.environment.downs).toBe(1)
     expect(d.tracker.states.get('123')?.state).toBe('env_ready')
   })
+  it('rejects a declared check file missing from the clean checkout, before up', async () => {
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(2); trace(d)
+    d.workspace.hashes = { 'tests/rumba/c1.test.ts': 'h1' }
+    const err = await reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug', 2)).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(AgentError)
+    expect((err as Error).message).toBe('The check file tests/rumba/c2.test.ts was not committed; is it ignored by git?')
+    expect(d.environment.ups).toEqual([])
+    const [envDir] = d.workspace.log.filter((l) => l.startsWith('hash ')).map((l) => l.slice(5))
+    expect(d.workspace.log.slice(-3)).toEqual([`prepare rumba/hub/123 existing ${envDir}`, `hash ${envDir}`, `cleanup ${envDir}`])
+  })
 })
+
