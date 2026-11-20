@@ -1,5 +1,3 @@
 # Rumba
 
-Rumba takes labelled tickets from an issue tracker to pull requests. It only opens a pull request after it has evidence: checks that fail on the current code and pass on the change.
-
-Work in progress.
+Rumba is an open-source tool that picks up labelled tickets from an issue tracker and takes each one to a pull request. It only opens the pull request after it has evidence: checks that fail on the current code and pass on the change.
