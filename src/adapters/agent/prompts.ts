@@ -148,10 +148,14 @@ function fixRules(task: AgentTask): string {
  * documents go first, then the context is cut, and as a last resort everything between the
  * rules and the result is cut. The task, the rules and the result shape are never cut.
  */
+/** Rumba refuses a working directory that holds either; saying so saves the agent a wasted attempt. */
+const NO_REPOSITORIES =
+  'Do not create or clone a git repository inside the working directory, and do not add a symbolic link that leads outside it. Rumba commits your changes itself; do not run git.'
+
 export function buildPrompt(task: AgentTask): string {
   const head = [
     `# Task\n${TASKS[task.kind]}`,
-    `# Rules\n- ${UNTRUSTED}\n- Do not change anything under .rumba/.`,
+    `# Rules\n- ${UNTRUSTED}\n- Do not change anything under .rumba/.\n- ${NO_REPOSITORIES}`,
   ].join('\n\n')
   const result = `# Result\nWhen you are done, write this JSON to ${RESULT_PATH}, creating the folder if needed:\n${SHAPES[task.kind]}`
 
