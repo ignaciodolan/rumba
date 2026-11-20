@@ -296,6 +296,8 @@ describe('GitWorkspace against hostile content', () => {
         child.kill('SIGKILL')
         await child
         expect(await readdir(victim)).toHaveLength(100)
+        // The racing writer may have kept the removal from finishing; what is left is this test's to remove.
+        await rm(path.dirname(workdir), { recursive: true, force: true })
       }
     }, 60_000)
   })

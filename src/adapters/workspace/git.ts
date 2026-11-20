@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { constants, existsSync } from 'node:fs'
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rm, rmdir } from 'node:fs/promises'
+import { lstat, mkdtemp, open, readdir, readFile, readlink, realpath, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
 import type { Workspace } from '../../ports/workspace.js'
+import { removeTree } from './removeTree.js'
 import { compareWithTree, type TreeEntry } from './treeCheck.js'
 import { nestedGitEntries, resolveLink } from './untrustedTree.js'
 
@@ -12,17 +13,21 @@ const BOT_NAME = 'Rumba'
 const BOT_EMAIL = 'rumba@users.noreply.github.com'
 const OUTPUT_DIR = '.rumba-out'
 /**
- * Config for every git process: no hook and no fsmonitor command ever runs, and files are
+ * Config for every git process: no hook and no fsmonitor command ever runs, no attributes
+ * file outside the repository is read, no command recurses into submodules, and files are
  * checked out byte for byte.
  */
-const SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.autocrlf=false']
+const SAFE = [
+  '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.autocrlf=false',
+  '-c', 'core.attributesFile=/dev/null', '-c', 'submodule.recurse=false',
+]
 /** Inherited variables that would point git at another repository, index or object store. */
 const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_ATTR_SOURCE']
 const BOT_ENV = { GIT_AUTHOR_NAME: BOT_NAME, GIT_AUTHOR_EMAIL: BOT_EMAIL, GIT_COMMITTER_NAME: BOT_NAME, GIT_COMMITTER_EMAIL: BOT_EMAIL }
 /**
- * For git commands that read files an agent wrote: the user's and the system's git config
- * are not read, so no driver or attributes file defined there applies to those files. These
- * commands name their git directory explicitly, so they need nothing from that config.
+ * For git commands that read or check out files an agent wrote: the user's and the system's
+ * git config are not read, so no driver defined there applies to those files. These commands
+ * name their git directory explicitly, so they need nothing from that config.
  */
 const NO_HOST_CONFIG = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
 
@@ -31,6 +36,8 @@ interface Worktree { branch: string; gitDir: string }
 const DETACHED = ''
 /** A trusted checkout: its commit, that commit's tree, and the `.git` pointer git wrote in it. */
 interface Trusted { sha: string; tree: Map<string, TreeEntry>; pointer: string }
+/** What every git command is started with, found once from the trusted repository. */
+interface Setup { commonDir: string; options: string[] }
 
 /**
  * Worktrees of a trusted checkout, one per fix branch.
@@ -42,9 +49,13 @@ interface Trusted { sha: string; tree: Map<string, TreeEntry>; pointer: string }
  * - git never enters a repository an agent created: a workdir with a `.git` entry below its
  *   root is refused before any command that walks the files, and no gitlink is committed;
  * - git never reads a `.gitattributes` from a workdir or from a commit an agent made:
- *   attributes come from the empty tree, so no filter, diff or merge driver is selected,
- *   and files are stored and checked out byte for byte;
- * - a workdir is removed by deleting it, not by a git command that inspects it.
+ *   attributes come from the empty tree, and no attributes file of the user is read;
+ * - no filter driver runs at all: the commands that read or check out agent-written files
+ *   do not read the user's or the system's config, and every filter driver the repository's
+ *   own config defines is switched off for them, so the repository's `info/attributes`
+ *   cannot select one either. Files are stored and checked out byte for byte;
+ * - a workdir is removed by deleting it, not by a git command that inspects it, and with a
+ *   deletion that cannot be led outside it by swapping a folder for a link.
  */
 export class GitWorkspace implements Workspace {
   private readonly repoRoot: string
@@ -56,7 +67,7 @@ export class GitWorkspace implements Workspace {
   private readonly bases = new Map<string, string>()
   /** Trusted checkouts this instance handed out, by real path. */
   private readonly trusted = new Map<string, Trusted>()
-  private emptyTree: Promise<string> | undefined
+  private setup: Promise<Setup> | undefined
 
   constructor(o: { repoRoot: string; defaultBranch: string; remote?: string }) {
     this.repoRoot = o.repoRoot
@@ -128,16 +139,6 @@ export class GitWorkspace implements Workspace {
     )
   }
 
-  /** Replaces a trusted checkout, at the same path, with a new checkout of the same commit. */
-  async restoreTrusted(dir: string): Promise<void> {
-    const real = await realpath(dir).catch(() => path.resolve(dir))
-    const t = this.trusted.get(real)
-    if (!t) throw new Error(`${dir} is not a trusted checkout of ${this.repoRoot}`)
-    await this.removeWorktree(real)
-    await this.addWorktreeAt(real, ['--detach'], t.sha, DETACHED)
-    this.trusted.set(real, { ...t, pointer: await readFile(path.join(real, '.git'), 'utf8') })
-  }
-
   private forkPoint(branch: string): Promise<string> {
     return this.git(['merge-base', `refs/heads/${branch}`, `refs/remotes/${this.remote}/${this.defaultBranch}`])
   }
@@ -149,16 +150,15 @@ export class GitWorkspace implements Workspace {
    */
   private async addWorktree(flags: string[], start: string, branch: string): Promise<string> {
     const parent = await realpath(await mkdtemp(path.join(tmpdir(), 'rumba-')))
-    return this.addWorktreeAt(path.join(parent, path.basename(parent)), flags, start, branch)
-  }
-
-  private async addWorktreeAt(workdir: string, flags: string[], start: string, branch: string): Promise<string> {
-    await mkdir(path.dirname(workdir), { recursive: true })
+    const workdir = path.join(parent, path.basename(parent))
     try {
-      await this.git(['worktree', 'add', '-q', ...flags, workdir, start])
+      // The checkout may be of a commit an agent made. The git directory is named explicitly,
+      // so this needs no discovery and nothing from the user's or the system's config.
+      const { commonDir } = await this.started()
+      await this.run(['--git-dir', commonDir, ...SAFE, 'worktree', 'add', '-q', ...flags, workdir, start], this.repoRoot, [0], NO_HOST_CONFIG)
       this.worktrees.set(workdir, { branch, gitDir: await this.findGitDir(workdir) })
     } catch (e) {
-      await rm(workdir, { recursive: true, force: true })
+      await removeTree(workdir).catch(() => undefined)
       await removeOwnParent(workdir)
       throw e
     }
@@ -278,16 +278,18 @@ export class GitWorkspace implements Workspace {
    * Removes a linked worktree of repoRoot, leaving its branch. Refuses any other directory,
    * the main checkout included, unless it is already gone. The directory is deleted, not
    * handed to `git worktree remove`: an agent or a container wrote to it, and no git command
-   * should inspect it. When it cannot be deleted (files owned by another user, say), its
+   * should inspect it. Something may even still be writing to it (a container that did not
+   * stop), so it is deleted by a walk that cannot be led outside it (see removeTree). When it cannot be deleted (files owned by another user, say), its
    * registration is dropped on the trusted side so the branch is free again, and the
    * directory is left behind.
    */
   private async removeWorktree(real: string): Promise<void> {
     this.worktrees.delete(real)
+    this.trusted.delete(real)
     if (existsSync(real)) {
       const gitDir = await this.findGitDir(real)
       try {
-        await rm(real, { recursive: true, force: true })
+        await removeTree(real)
       } catch {
         await rm(gitDir, { recursive: true, force: true })
       }
@@ -316,8 +318,7 @@ export class GitWorkspace implements Workspace {
    */
   private async findGitDir(workdir: string): Promise<string> {
     const want = await realpath(workdir).catch(() => path.resolve(workdir))
-    const common = await this.git(['rev-parse', '--path-format=absolute', '--git-common-dir'])
-    const base = path.join(common, 'worktrees')
+    const base = path.join((await this.started()).commonDir, 'worktrees')
     const ids = await readdir(base).catch(() => [] as string[])
     for (const id of ids) {
       const pointer = (await readFile(path.join(base, id, 'gitdir'), 'utf8').catch(() => '')).trim()
@@ -380,14 +381,40 @@ export class GitWorkspace implements Workspace {
   }
 
   /**
-   * Every git command takes its attributes from the empty tree. A `.gitattributes` in a
-   * workdir or in a commit is therefore never read, and cannot route a file through a
-   * filter, diff or merge driver of the host's git config. A git too old to know the option
-   * fails here instead of running without it.
+   * Every git command takes its attributes from the empty tree, so a `.gitattributes` in a
+   * workdir or in a commit is never read, and has every filter driver of the repository's
+   * own config switched off. A git too old to know `--attr-source` fails here instead of
+   * running without it.
    */
   private async run(args: string[], cwd: string, ok: number[], env: Record<string, string> = {}) {
-    this.emptyTree ??= this.spawnGit(['hash-object', '-t', 'tree', '/dev/null'], this.repoRoot, [0], {}).then((r) => r.stdout.trim())
-    return this.spawnGit([`--attr-source=${await this.emptyTree}`, ...args], cwd, ok, env)
+    return this.spawnGit([...(await this.started()).options, ...args], cwd, ok, env)
+  }
+
+  private started(): Promise<Setup> {
+    this.setup ??= this.findSetup().catch((e: unknown) => {
+      this.setup = undefined
+      throw e
+    })
+    return this.setup
+  }
+
+  private async findSetup(): Promise<Setup> {
+    const emptyTree = (await this.spawnGit(['hash-object', '-t', 'tree', '/dev/null'], this.repoRoot, [0], {})).stdout.trim()
+    const commonDir = (await this.spawnGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], this.repoRoot, [0], {})).stdout.trim()
+    // The filter drivers that are left once the user's and the system's config are not read:
+    // those of the repository's own config, and of anything it includes.
+    const listed = await this.spawnGit(['--git-dir', commonDir, 'config', '--name-only', '-z', '--get-regexp', '^filter\\.'], this.repoRoot, [0, 1], NO_HOST_CONFIG)
+    const drivers = new Set<string>()
+    for (const key of listed.stdout.split('\0')) {
+      const name = key.slice('filter.'.length, key.lastIndexOf('.'))
+      if (key.startsWith('filter.') && key.lastIndexOf('.') > 'filter'.length) drivers.add(name)
+    }
+    const off: string[] = []
+    for (const name of drivers) {
+      if (/[=\n]/.test(name)) throw new Error(`Cannot switch off the git filter driver "${name}" of ${this.repoRoot}: its name holds "=" or a line break.`)
+      for (const setting of ['clean=', 'smudge=', 'process=', 'required=false']) off.push('-c', `filter.${name}.${setting}`)
+    }
+    return { commonDir, options: [`--attr-source=${emptyTree}`, ...off] }
   }
 
   /** Starts git with an argument array; no shell is involved. */
