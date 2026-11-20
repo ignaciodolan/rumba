@@ -26,6 +26,8 @@ environment:
   #     volumes:
   #       - ${RUMBA_WORKDIR:-.}:/app
   # Give RUMBA_WORKDIR to Docker only. Never read or run a file under it on the host.
+  # Each command runs in a fresh folder, and Rumba sets COMPOSE_PROJECT_NAME so compose
+  # finds its containers: do not pass -p, and do not mount `.` into a container read-write.
   up: docker compose up -d --wait
   exec: docker compose exec -T app
   down: docker compose down -v
