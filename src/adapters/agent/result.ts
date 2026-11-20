@@ -1,0 +1,53 @@
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { z } from 'zod'
+import { AgentError, type AgentResult, type AgentTaskKind } from '../../ports/agent.js'
+import { RESULT_PATH } from './prompts.js'
+
+const criterion = z.object({ id: z.string().min(1), text: z.string().min(1), checkable: z.boolean() })
+
+/** Check files are hashed and read by Rumba later, so they must stay inside the workdir. */
+const relativeFile = z.string().min(1).refine(
+  (p) => !path.posix.isAbsolute(p) && !p.includes('\\') && !p.split('/').includes('..'),
+  { message: 'must be a relative path inside the repository, with no ".." and no backslashes' },
+)
+
+const check = z.object({ criterionId: z.string().min(1), command: z.string().min(1), files: z.array(relativeFile) })
+
+const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
+  triage: z.object({
+    kind: z.literal('triage'),
+    workable: z.boolean(),
+    reason: z.string(),
+    ticketKind: z.enum(['bug', 'feature']),
+    criteria: z.array(criterion).nullable(),
+  }),
+  'draft-criteria': z.object({ kind: z.literal('draft-criteria'), criteria: z.array(criterion) }),
+  'write-checks': z.object({ kind: z.literal('write-checks'), checks: z.array(check) }),
+  fix: z.object({ kind: z.literal('fix'), summary: z.string() }),
+}
+
+export async function readAgentResult(workdir: string, expected: AgentTaskKind): Promise<AgentResult> {
+  let raw: string
+  try {
+    raw = await readFile(path.join(workdir, RESULT_PATH), 'utf8')
+  } catch {
+    throw new AgentError(`The agent did not write ${RESULT_PATH}.`)
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    throw new AgentError(`The agent's ${RESULT_PATH} is not valid JSON.`)
+  }
+  const kind = typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined
+  if (kind !== expected) {
+    throw new AgentError(`The agent's ${RESULT_PATH} has kind ${JSON.stringify(kind) ?? 'undefined'}; expected a "${expected}" result.`)
+  }
+  const parsed = schemas[expected].safeParse(value)
+  if (!parsed.success) {
+    const problems = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+    throw new AgentError(`The agent's ${RESULT_PATH} has the wrong shape: ${problems}`)
+  }
+  return parsed.data
+}
