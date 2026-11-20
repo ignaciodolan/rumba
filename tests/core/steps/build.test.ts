@@ -141,4 +141,12 @@ describe('build', () => {
     d.environment.runCheck = async () => { throw new Error('boom') }
     await expect(build(d, makeRumba(), makeTicket(), failing(d))).rejects.toThrow('boom')
   })
+  it('tells the fix agent every file whose hash it guards', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.environment.passes = () => true
+    d.workspace.hashes = { ...H, 'tests/rumba/helper.ts': 'h2' }
+    const st = failing(d); st.checkHashes = { ...H, 'tests/rumba/helper.ts': 'h2' }
+    await build(d, makeRumba(), makeTicket(), st)
+    expect(d.agent.calls[0]!.lockedFiles).toEqual(['tests/rumba/c1.test.ts', 'tests/rumba/helper.ts'])
+  })
 })
+

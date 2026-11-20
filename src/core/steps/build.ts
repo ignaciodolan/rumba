@@ -57,7 +57,7 @@ async function fixOnce(
   try {
     const result = await deps.agent.run({
       kind: 'fix', ticket, context: rumba.context, environmentKind: rumba.environment.kind,
-      criteria: state.criteria, checks: state.checks, failures,
+      criteria: state.criteria, checks: state.checks, failures, lockedFiles: checkFiles,
     }, workdir)
     if (result.kind !== 'fix') throw new Error(`Agent returned ${result.kind} for a fix task`)
 

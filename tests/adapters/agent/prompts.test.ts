@@ -84,4 +84,13 @@ describe('buildPrompt', () => {
     expect(shape('write-checks')).toContain('"kind": "write-checks"'); expect(shape('write-checks')).toContain('"criterionId"')
     expect(shape('fix')).toContain('"kind": "fix"'); expect(shape('fix')).toContain('"summary"')
   })
+  it('lists the locked files for the fixer under a line saying they must not be changed', () => {
+    const p = buildPrompt({
+      kind: 'fix', ticket: makeTicket(), context: '', environmentKind: 'docker',
+      lockedFiles: ['tests/rumba/c1.test.ts', 'tests/rumba/helper.ts'],
+    })
+    expect(p).toContain('These files are locked. You must not change, move or delete them:\n- tests/rumba/c1.test.ts\n- tests/rumba/helper.ts')
+    expect(buildPrompt({ kind: 'fix', ticket: makeTicket(), context: '', environmentKind: 'docker' })).not.toContain('locked')
+  })
 })
+

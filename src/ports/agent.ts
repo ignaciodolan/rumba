@@ -12,6 +12,8 @@ export interface AgentTask {
   checks?: Check[]
   /** Also carries guard violations, criterionId 'guard'. */
   failures?: { criterionId: string; output: string }[]
+  /** Fix tasks: files whose content Rumba guards, which the agent must not change. */
+  lockedFiles?: string[]
 }
 
 export type AgentResult =

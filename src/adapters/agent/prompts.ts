@@ -88,6 +88,10 @@ function checkRules(task: AgentTask): string {
 
 function fixRules(task: AgentTask): string {
   const rules = ['- Do not edit the check files, and do not change what the checks test.']
+  const locked = task.lockedFiles ?? []
+  if (locked.length > 0) {
+    rules.push('', 'These files are locked. You must not change, move or delete them:', ...locked.map((f) => `- ${f}`))
+  }
   const failures = task.failures ?? []
   if (failures.length > 0) {
     rules.push('', 'Previous failures:')
