@@ -17,12 +17,12 @@ function trustedStub(o: { changedFrom?: number; restoreFails?: boolean } = {}) {
   return {
     asked, removed, log,
     trustedCheckout: async (branch: string) => { asked.push(branch); return `/t${asked.length}` },
-    verify: async (dir: string) => {
+    verifyTrusted: async (dir: string) => {
       verifications += 1
       log.push(`verify ${dir}`)
       if (o.changedFrom !== undefined && verifications >= o.changedFrom) throw new Error(`The trusted checkout ${dir} no longer matches its commit: compose.yml`)
     },
-    restore: async (dir: string) => {
+    restoreTrusted: async (dir: string) => {
       log.push(`restore ${dir}`)
       if (o.restoreFails) throw new Error('cannot restore')
       verifications = -1000

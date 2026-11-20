@@ -15,6 +15,10 @@ export type Exec = (
 export interface TrustedCheckouts {
   /** A new checkout of the default-branch commit that `branch` started from. */
   trustedCheckout(branch: string): Promise<string>
+  /** Throws unless the checkout still holds exactly its commit. */
+  verifyTrusted(dir: string): Promise<void>
+  /** Replaces the checkout, at the same path, with a new one of the same commit. */
+  restoreTrusted(dir: string): Promise<void>
   cleanup(dir: string): Promise<void>
 }
 
@@ -79,7 +83,8 @@ function shellQuote(text: string): string {
  * under test in `RUMBA_WORKDIR`. Whatever a command reads by relative path (compose files
  * and what they include, `.env`, a Makefile, a script, a Dockerfile) is therefore a file a
  * person merged. The code under test reaches a container only as a mount or a build context
- * that the trusted files point at `RUMBA_WORKDIR`.
+ * that the trusted files point at `RUMBA_WORKDIR`. Before each command the trusted checkout
+ * is compared with its commit, and nothing runs there once it differs.
  */
 export class DockerEnvironment implements Environment {
   private readonly run: Exec
@@ -116,16 +121,24 @@ export class DockerEnvironment implements Environment {
     return this.runInside(h, command)
   }
 
-  /** Never throws. Does nothing for a handle this environment did not bring up. */
+  /**
+   * Never throws. Does nothing for a handle this environment did not bring up. If the
+   * trusted checkout was changed, the down command runs from a restored one, or not at all.
+   */
   async down(h: EnvHandle): Promise<void> {
     if (h.hostDir === undefined) return
-    try {
-      await this.onHost(h, this.o.down)
-    } catch {
-      // A failed teardown must not hide the result of the run.
+    const hostDir = h.hostDir
+    const intact = await this.o.trusted.verifyTrusted(hostDir).then(() => true, () => false)
+    const usable = intact || await this.o.trusted.restoreTrusted(hostDir).then(() => this.o.trusted.verifyTrusted(hostDir)).then(() => true, () => false)
+    if (usable) {
+      try {
+        await this.start(h, hostDir, this.o.down)
+      } catch {
+        // A failed teardown must not hide the result of the run.
+      }
     }
     try {
-      await this.o.trusted.cleanup(h.hostDir)
+      await this.o.trusted.cleanup(hostDir)
     } catch {
       // A checkout left behind is pruned by a later run.
     }
@@ -135,9 +148,19 @@ export class DockerEnvironment implements Environment {
     return this.onHost(h, `${this.o.exec} sh -c ${shellQuote(command)}`)
   }
 
-  /** The only place a host-side command is started: always in the trusted checkout, never in `h.workdir`. */
+  /**
+   * Runs a host-side command for a handle: only in its trusted checkout, never in
+   * `h.workdir`, and only while that checkout still holds exactly its commit. Code in a
+   * container may have been given the folder, so it is checked before every command.
+   */
   private async onHost(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
     if (h.hostDir === undefined) throw new Error('This environment has no trusted checkout to run host commands in; it was not brought up here.')
-    return this.run(command, { cwd: h.hostDir, timeoutMs: this.timeoutMs, env: { [WORKDIR_VARIABLE]: h.workdir } })
+    await this.o.trusted.verifyTrusted(h.hostDir)
+    return this.start(h, h.hostDir, command)
+  }
+
+  /** The only place a host-side command is started. */
+  private start(h: EnvHandle, hostDir: string, command: string): Promise<{ exitCode: number; output: string }> {
+    return this.run(command, { cwd: hostDir, timeoutMs: this.timeoutMs, env: { [WORKDIR_VARIABLE]: h.workdir } })
   }
 }
