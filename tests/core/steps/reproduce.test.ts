@@ -140,4 +140,15 @@ describe('reproduce', () => {
     await reproduce(d, makeRumba(), makeTicket(), start)
     expect(start).toEqual(copy)
   })
+  it.each([124, 126, 127])('throws after taking the environment down when a check could not run (exit %i)', async (code) => {
+    const d = makeDeps(); d.secrets = ['s3cret']; d.agent.script['write-checks'] = checksFor(2)
+    d.environment.runCheck = async (_h, c) => c.criterionId === 'c2'
+      ? { criterionId: 'c2', passed: false, exitCode: code, output: 'sh: s3cret-tool: not found' }
+      : { criterionId: 'c1', passed: false, exitCode: 1, output: 'assertion failed' }
+    const err = await reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug', 2)).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toBe(`Check for c2 could not run (exit ${code}): sh: [redacted]-tool: not found`)
+    expect(d.environment.downs).toBe(1)
+    expect(d.tracker.states.get('123')?.state).toBe('env_ready')
+  })
 })

@@ -9,6 +9,8 @@ import type { Check, CheckResult, Criterion, Ticket, TicketState } from '../type
 import { cleanupQuietly, downQuietly } from './teardown.js'
 
 const NO_CHECK = 'Rumba could not write a check for any criterion.'
+/** Exit codes of a check that timed out (124), could not execute (126) or was not found (127). */
+const COULD_NOT_RUN = [124, 126, 127]
 
 async function stop(
   deps: Deps, ticket: Ticket, state: TicketState, to: 'needs_human' | 'not_reproducible', comment: string,
@@ -46,6 +48,11 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
         before.push({ ...r, output: cleanOutput(r.output, deps.secrets) })
       }
       current = { ...current, before }
+
+      // A timeout, or a command that cannot run or is not found, says nothing about the ticket.
+      // Throwing here takes the environment down first, in the finally below.
+      const broken = before.find((r) => COULD_NOT_RUN.includes(r.exitCode))
+      if (broken) throw new Error(`Check for ${broken.criterionId} could not run (exit ${broken.exitCode}): ${broken.output}`)
 
       const passing = before.filter((r) => r.passed)
       if (state.kind === 'bug' && passing.length > 0) {
