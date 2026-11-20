@@ -90,7 +90,8 @@ describe('GitWorkspace', () => {
       await expect(ws.cleanupAll()).resolves.toBeUndefined()
       expect(existsSync(b.workdir)).toBe(false)
     } finally {
-      await rm(a.workdir, { recursive: true, force: true })
+      // The checkout sits alone in a temp folder of its own; remove that too.
+      await rm(path.dirname(a.workdir), { recursive: true, force: true })
     }
   })
 
@@ -214,7 +215,7 @@ describe('GitWorkspace', () => {
       expect(again.workdir).not.toBe(first.workdir)
       expect(existsSync(path.join(again.workdir, 'locked', 'file.txt'))).toBe(true)
       await chmod(locked, 0o755); locked = undefined
-      await rm(first.workdir, { recursive: true, force: true })
+      await rm(path.dirname(first.workdir), { recursive: true, force: true })
     })
   })
 

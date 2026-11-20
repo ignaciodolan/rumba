@@ -1,30 +1,50 @@
 import { createHash } from 'node:crypto'
 import { constants, existsSync } from 'node:fs'
-import { lstat, mkdtemp, open, readdir, readFile, readlink, realpath, rm } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, realpath, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
 import type { Workspace } from '../../ports/workspace.js'
+import { compareWithTree, type TreeEntry } from './treeCheck.js'
+import { nestedGitEntries, resolveLink } from './untrustedTree.js'
 
 const BOT_NAME = 'Rumba'
 const BOT_EMAIL = 'rumba@users.noreply.github.com'
 const OUTPUT_DIR = '.rumba-out'
-/** Config for every git process: no hook and no fsmonitor command ever runs. */
-const SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
+/**
+ * Config for every git process: no hook and no fsmonitor command ever runs, and files are
+ * checked out byte for byte.
+ */
+const SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.autocrlf=false']
 /** Inherited variables that would point git at another repository, index or object store. */
-const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE']
+const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_ATTR_SOURCE']
 const BOT_ENV = { GIT_AUTHOR_NAME: BOT_NAME, GIT_AUTHOR_EMAIL: BOT_EMAIL, GIT_COMMITTER_NAME: BOT_NAME, GIT_COMMITTER_EMAIL: BOT_EMAIL }
+/**
+ * For git commands that read files an agent wrote: the user's and the system's git config
+ * are not read, so no driver or attributes file defined there applies to those files. These
+ * commands name their git directory explicitly, so they need nothing from that config.
+ */
+const NO_HOST_CONFIG = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
 
 interface Worktree { branch: string; gitDir: string }
 /** The branch recorded for a worktree that is on none; no real branch name is empty. */
 const DETACHED = ''
+/** A trusted checkout: its commit, that commit's tree, and the `.git` pointer git wrote in it. */
+interface Trusted { sha: string; tree: Map<string, TreeEntry>; pointer: string }
 
 /**
  * Worktrees of a trusted checkout, one per fix branch.
  *
- * The agent can write anything inside a workdir, including its .git pointer, so git never
- * discovers a repository from a workdir. The worktree's git directory inside `repoRoot` is
- * found from the trusted side and passed explicitly to every git command for that workdir.
+ * An agent can write anything inside a workdir, and so can code in a container that has it
+ * mounted. Host git is kept away from all of it:
+ * - git never discovers a repository from a workdir: the worktree's git directory inside
+ *   `repoRoot` is found from the trusted side and passed explicitly to every command;
+ * - git never enters a repository an agent created: a workdir with a `.git` entry below its
+ *   root is refused before any command that walks the files, and no gitlink is committed;
+ * - git never reads a `.gitattributes` from a workdir or from a commit an agent made:
+ *   attributes come from the empty tree, so no filter, diff or merge driver is selected,
+ *   and files are stored and checked out byte for byte;
+ * - a workdir is removed by deleting it, not by a git command that inspects it.
  */
 export class GitWorkspace implements Workspace {
   private readonly repoRoot: string
@@ -34,6 +54,9 @@ export class GitWorkspace implements Workspace {
   private readonly worktrees = new Map<string, Worktree>()
   /** The default-branch commit each fix branch was started from by this instance. */
   private readonly bases = new Map<string, string>()
+  /** Trusted checkouts this instance handed out, by real path. */
+  private readonly trusted = new Map<string, Trusted>()
+  private emptyTree: Promise<string> | undefined
 
   constructor(o: { repoRoot: string; defaultBranch: string; remote?: string }) {
     this.repoRoot = o.repoRoot
@@ -81,22 +104,62 @@ export class GitWorkspace implements Workspace {
    */
   async trustedCheckout(branch: string): Promise<string> {
     if (!(await this.branchExists(branch))) throw new Error(`Branch ${branch} does not exist in ${this.repoRoot}`)
-    const base = this.bases.get(branch) ?? (await this.forkPoint(branch))
-    return this.addWorktree(['--detach'], base, DETACHED)
+    const sha = this.bases.get(branch) ?? (await this.forkPoint(branch))
+    const dir = await this.addWorktree(['--detach'], sha, DETACHED)
+    this.trusted.set(dir, { sha, tree: await this.treeOf(sha), pointer: await readFile(path.join(dir, '.git'), 'utf8') })
+    return dir
+  }
+
+  /**
+   * Throws unless the trusted checkout still holds exactly its commit: every file and link
+   * with the content git stored, nothing added, nothing missing. Called before each command
+   * that runs there, because code in a container could have been given the folder.
+   */
+  async verifyTrusted(dir: string): Promise<void> {
+    const real = await realpath(dir).catch(() => path.resolve(dir))
+    const t = this.trusted.get(real)
+    if (!t) throw new Error(`${dir} is not a trusted checkout of ${this.repoRoot}`)
+    const changed = await compareWithTree(real, t.tree, t.pointer)
+    if (changed.length === 0) return
+    const shown = changed.slice(0, 5).join(', ') + (changed.length > 5 ? `, and ${changed.length - 5} more` : '')
+    throw new Error(
+      `The trusted checkout ${real} no longer matches its commit ${t.sha.slice(0, 12)}: ${shown}. ` +
+      'A command on the host must not write into the folder it runs in, and no container may be given that folder to write to.',
+    )
+  }
+
+  /** Replaces a trusted checkout, at the same path, with a new checkout of the same commit. */
+  async restoreTrusted(dir: string): Promise<void> {
+    const real = await realpath(dir).catch(() => path.resolve(dir))
+    const t = this.trusted.get(real)
+    if (!t) throw new Error(`${dir} is not a trusted checkout of ${this.repoRoot}`)
+    await this.removeWorktree(real)
+    await this.addWorktreeAt(real, ['--detach'], t.sha, DETACHED)
+    this.trusted.set(real, { ...t, pointer: await readFile(path.join(real, '.git'), 'utf8') })
   }
 
   private forkPoint(branch: string): Promise<string> {
     return this.git(['merge-base', `refs/heads/${branch}`, `refs/remotes/${this.remote}/${this.defaultBranch}`])
   }
 
-  /** Adds a worktree in a new temp dir and records its git directory before any agent can touch it. */
+  /**
+   * Adds a worktree and records its git directory before any agent can touch it. Each
+   * worktree sits alone in a new temp folder named like it, so climbing out of one, through
+   * `..` or a link, reaches a folder that holds nothing else.
+   */
   private async addWorktree(flags: string[], start: string, branch: string): Promise<string> {
-    const workdir = await realpath(await mkdtemp(path.join(tmpdir(), 'rumba-')))
+    const parent = await realpath(await mkdtemp(path.join(tmpdir(), 'rumba-')))
+    return this.addWorktreeAt(path.join(parent, path.basename(parent)), flags, start, branch)
+  }
+
+  private async addWorktreeAt(workdir: string, flags: string[], start: string, branch: string): Promise<string> {
+    await mkdir(path.dirname(workdir), { recursive: true })
     try {
       await this.git(['worktree', 'add', '-q', ...flags, workdir, start])
       this.worktrees.set(workdir, { branch, gitDir: await this.findGitDir(workdir) })
     } catch (e) {
       await rm(workdir, { recursive: true, force: true })
+      await removeOwnParent(workdir)
       throw e
     }
     return workdir
@@ -104,39 +167,73 @@ export class GitWorkspace implements Workspace {
 
   async commit(workdir: string, message: string, opts: { allowEmpty?: boolean } = {}): Promise<string | null> {
     const wt = await this.worktree(workdir)
+    await this.refuseNestedRepositories(workdir)
     await this.inWorktree(wt, workdir, ['add', '-A', '--', '.', `:(top,exclude)${OUTPUT_DIR}`])
     const staged = await this.inWorktree(wt, workdir, ['diff', '--cached', '--quiet', '--no-ext-diff'], [0, 1])
     if (staged.exitCode === 0 && opts.allowEmpty !== true) return null
-    const links = await this.stagedLinksOut(wt, workdir)
-    if (links.length > 0) throw new Error(`Refusing to commit symbolic links that point outside the repository: ${links.join(', ')}`)
+    await this.refuseLinksOut(wt, workdir)
     const empty = opts.allowEmpty === true ? ['--allow-empty'] : []
     await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', ...empty, '-m', message], [0], BOT_ENV)
     return (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD'])).stdout
   }
 
   /**
-   * Symbolic links this commit would add or change whose target is absolute or climbs out of
-   * the repository. Docker follows such a link on the host when a path below the checkout is
-   * mounted or used as a build context, so Rumba never puts one in a commit it brings up.
+   * git enters a nested repository to see whether it changed, reading that repository's own
+   * config and running the filter drivers it defines. So a workdir holding one is refused
+   * before any git command walks its files.
    */
-  private async stagedLinksOut(wt: Worktree, workdir: string): Promise<string[]> {
-    const raw = (await this.inWorktree(wt, workdir, ['diff', '--cached', '--raw', '-z', '--no-abbrev', '--no-renames', '--no-ext-diff'])).stdout
-    const fields = raw.split('\0')
-    const out: string[] = []
-    // Each entry is ":<old mode> <new mode> <old sha> <new sha> <status>" followed by its path.
-    for (let i = 0; i + 1 < fields.length; i += 2) {
-      const [, mode, , sha] = fields[i].split(' ')
-      if (mode !== '120000') continue
-      const file = fields[i + 1]
-      const target = (await this.inWorktree(wt, workdir, ['cat-file', 'blob', sha])).stdout
-      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), target))
-      if (path.posix.isAbsolute(target) || resolved === '..' || resolved.startsWith('../')) out.push(file)
+  private async refuseNestedRepositories(workdir: string): Promise<void> {
+    const found = await nestedGitEntries(workdir)
+    if (found.length === 0) return
+    throw new Error(`Refusing to run git in ${workdir}: the agent created a git repository inside it (${found.join(', ')}).`)
+  }
+
+  /**
+   * Refuses what is staged if it holds a gitlink the base commit does not have, or a symbolic
+   * link that leads outside the repository. Docker follows a link on the host when a path
+   * below the checkout is mounted or used as a build context, so a link is judged by where
+   * it really leads in this worktree, through every link on the way, not by its text. Every
+   * link in the tree is judged at every commit, because changing a folder elsewhere can
+   * redirect an old link. A link a person committed that plainly points outside is theirs to
+   * keep; a link an agent adds may not go through it.
+   */
+  private async refuseLinksOut(wt: Worktree, workdir: string): Promise<void> {
+    const base = await this.treeOf(this.bases.get(wt.branch) ?? (await this.inWorktree(wt, workdir, ['merge-base', 'HEAD', `refs/remotes/${this.remote}/${this.defaultBranch}`])).stdout)
+    const index = new Map<string, TreeEntry>()
+    for (const record of (await this.inWorktree(wt, workdir, ['ls-files', '-s', '-z'])).stdout.split('\0')) {
+      const tab = record.indexOf('\t')
+      if (tab < 0) continue
+      const [mode, oid] = record.slice(0, tab).split(' ')
+      index.set(record.slice(tab + 1), { mode, oid })
     }
-    return out
+    const unchanged = (file: string) => base.get(file)?.mode === index.get(file)?.mode && base.get(file)?.oid === index.get(file)?.oid
+
+    const gitlinks = [...index].filter(([file, e]) => e.mode === '160000' && !unchanged(file)).map(([file]) => file)
+    if (gitlinks.length > 0) throw new Error(`Refusing to commit a git repository inside the repository: ${gitlinks.join(', ')}`)
+
+    const links = [...index].filter(([, e]) => e.mode === '120000').map(([file]) => file)
+    const texts = new Map<string, string>()
+    for (const file of links) texts.set(file, await readlink(path.join(workdir, file)).catch(() => '/'))
+    /** A link a person committed whose own text points outside: absolute, or climbing above the root. */
+    const personOut = (file: string) => {
+      const text = texts.get(file)
+      if (text === undefined || !unchanged(file)) return false
+      const lexical = path.posix.normalize(path.posix.join(path.posix.dirname(file), text))
+      return path.posix.isAbsolute(text) || lexical === '..' || lexical.startsWith('../')
+    }
+    const out: string[] = []
+    for (const file of links) {
+      if (personOut(file)) continue
+      const leads = await resolveLink(workdir, file, personOut)
+      if (leads === 'inside' || (leads === 'person' && unchanged(file))) continue
+      out.push(file)
+    }
+    if (out.length > 0) throw new Error(`Refusing to commit symbolic links that lead outside the repository: ${out.join(', ')}`)
   }
 
   async reset(workdir: string, sha: string): Promise<void> {
     const wt = await this.worktree(workdir)
+    await this.refuseNestedRepositories(workdir)
     await this.inWorktree(wt, workdir, ['reset', '-q', '--hard', sha])
     await this.inWorktree(wt, workdir, ['clean', '-q', '-ffdx'])
   }
@@ -179,24 +276,23 @@ export class GitWorkspace implements Workspace {
 
   /**
    * Removes a linked worktree of repoRoot, leaving its branch. Refuses any other directory,
-   * the main checkout included, unless it is already gone. When the directory cannot be
-   * deleted (files owned by another user, say), its registration is dropped on the trusted
-   * side so the branch is free again, and the directory is left behind.
+   * the main checkout included, unless it is already gone. The directory is deleted, not
+   * handed to `git worktree remove`: an agent or a container wrote to it, and no git command
+   * should inspect it. When it cannot be deleted (files owned by another user, say), its
+   * registration is dropped on the trusted side so the branch is free again, and the
+   * directory is left behind.
    */
   private async removeWorktree(real: string): Promise<void> {
     this.worktrees.delete(real)
     if (existsSync(real)) {
       const gitDir = await this.findGitDir(real)
-      // git refuses a worktree whose .git pointer the agent replaced; it is still a registered worktree.
-      const removed = await this.gitResult(['worktree', 'remove', '--force', real], [0, 128]).catch(() => null)
-      if (removed === null || removed.exitCode !== 0) {
-        try {
-          await rm(real, { recursive: true, force: true })
-        } catch {
-          await rm(gitDir, { recursive: true, force: true })
-        }
+      try {
+        await rm(real, { recursive: true, force: true })
+      } catch {
+        await rm(gitDir, { recursive: true, force: true })
       }
     }
+    await removeOwnParent(real)
     await this.git(['worktree', 'prune'])
   }
 
@@ -205,12 +301,13 @@ export class GitWorkspace implements Workspace {
       // Never throws: it runs in the engine's finally. A worktree left behind is pruned by a later prepare.
       await this.cleanup(dir).catch(() => undefined)
     }
+    this.trusted.clear()
   }
 
   /** The recorded worktree for `workdir`, or one registered in `repoRoot` with the same real path. */
   private async worktree(workdir: string): Promise<Worktree> {
     const real = await realpath(workdir).catch(() => path.resolve(workdir))
-    return this.worktrees.get(real) ?? { branch: '', gitDir: await this.findGitDir(real) }
+    return this.worktrees.get(real) ?? { branch: DETACHED, gitDir: await this.findGitDir(real) }
   }
 
   /**
@@ -253,9 +350,24 @@ export class GitWorkspace implements Workspace {
     return (await this.gitResult(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], [0, 1])).exitCode === 0
   }
 
-  /** Runs git on one worktree with its git directory and work tree given explicitly. */
+  /** Every file, link and gitlink of a commit, by path, read from the trusted repository's objects. */
+  private async treeOf(sha: string): Promise<Map<string, TreeEntry>> {
+    const tree = new Map<string, TreeEntry>()
+    for (const record of (await this.git(['ls-tree', '-r', '-z', '--full-tree', sha])).split('\0')) {
+      const tab = record.indexOf('\t')
+      if (tab < 0) continue
+      const [mode, , oid] = record.slice(0, tab).split(' ')
+      tree.set(record.slice(tab + 1), { mode, oid })
+    }
+    return tree
+  }
+
+  /**
+   * Runs git on one worktree with its git directory and work tree given explicitly, and
+   * without the user's or the system's git config.
+   */
   private async inWorktree(wt: Worktree, workdir: string, args: string[], ok: number[] = [0], env: Record<string, string> = {}) {
-    return this.run(['--git-dir', wt.gitDir, '--work-tree', workdir, ...SAFE, ...args], workdir, ok, env)
+    return this.run(['--git-dir', wt.gitDir, '--work-tree', workdir, ...SAFE, ...args], workdir, ok, { ...NO_HOST_CONFIG, ...env })
   }
 
   /** Runs git in the trusted checkout and returns its trimmed output. */
@@ -267,7 +379,19 @@ export class GitWorkspace implements Workspace {
     return this.run([...SAFE, ...args], this.repoRoot, ok)
   }
 
+  /**
+   * Every git command takes its attributes from the empty tree. A `.gitattributes` in a
+   * workdir or in a commit is therefore never read, and cannot route a file through a
+   * filter, diff or merge driver of the host's git config. A git too old to know the option
+   * fails here instead of running without it.
+   */
   private async run(args: string[], cwd: string, ok: number[], env: Record<string, string> = {}) {
+    this.emptyTree ??= this.spawnGit(['hash-object', '-t', 'tree', '/dev/null'], this.repoRoot, [0], {}).then((r) => r.stdout.trim())
+    return this.spawnGit([`--attr-source=${await this.emptyTree}`, ...args], cwd, ok, env)
+  }
+
+  /** Starts git with an argument array; no shell is involved. */
+  private async spawnGit(args: string[], cwd: string, ok: number[], env: Record<string, string>) {
     const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !LOCATION_VARS.includes(k)))
     const result = await execa('git', args, {
       cwd, stdin: 'ignore', all: true, reject: false, extendEnv: false, env: { ...base, ...env, GIT_TERMINAL_PROMPT: '0' },
@@ -275,6 +399,12 @@ export class GitWorkspace implements Workspace {
     if (!ok.includes(result.exitCode ?? -1)) throw new Error(`git ${args.join(' ')} failed:\n${result.all ?? ''}`)
     return result
   }
+}
+
+/** Removes the private temp folder a worktree sat in, when it is one and it is now empty. */
+async function removeOwnParent(workdir: string): Promise<void> {
+  const parent = path.dirname(workdir)
+  if (path.basename(parent) === path.basename(workdir)) await rmdir(parent).catch(() => undefined)
 }
 
 function inside(root: string, p: string): boolean {
