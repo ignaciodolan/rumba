@@ -36,4 +36,20 @@ describe('criteria', () => {
     expect(extractAcceptanceCriteria(`${line}x`)).toBeNull()
     expect(Date.now() - t).toBeLessThan(500)
   })
+  it('is linear on a lone carriage return after long whitespace', () => {
+    const heading = '#' + ' '.repeat(200_000) + 'a\rb'
+    const item = '- ' + ' '.repeat(200_000) + 'a\rb'
+    const t = Date.now()
+    expect(extractAcceptanceCriteria(`${heading}\n## Acceptance criteria\n${item}\n${heading}`)).toEqual([
+      { id: 'c1', text: 'a', checkable: true },
+    ])
+    expect(Date.now() - t).toBeLessThan(500)
+  })
+  it('does not treat a heading indented four spaces as a heading', () => {
+    expect(extractAcceptanceCriteria('## Acceptance criteria\n- one\n    ## code\n- two')).toEqual([
+      { id: 'c1', text: 'one', checkable: true },
+      { id: 'c2', text: 'two', checkable: true },
+    ])
+    expect(extractAcceptanceCriteria('    ## Acceptance criteria\n- one')).toBeNull()
+  })
 })

@@ -16,33 +16,41 @@ export function renderCriteriaComment(c: Criterion[], labels: LabelNames): strin
   ].join('\n')
 }
 
-// Applied to trimmed lines, with no overlapping quantifiers: ticket text is untrusted.
-const HEADING = /^#{1,6}\s+(.*)$/
-const ITEM = /^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/
+// Ticket text is untrusted. These patterns match only a prefix and nothing follows them,
+// so they cannot backtrack; the rest of the line is taken with string operations.
+const HEADING_PREFIX = /^#{1,6}\s+/
+const ITEM_PREFIX = /^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/
+const LINE_BREAK = /\r\n|[\r\n\u2028\u2029]/
 
-function headingText(raw: string): string {
-  let end = raw.length
-  while (end > 0 && raw[end - 1] === '#') end--
-  return raw.slice(0, end).trim()
+function headingText(line: string): string | null {
+  const indent = line.length - line.trimStart().length
+  if (indent > 3) return null
+  const trimmed = line.trim()
+  const prefix = HEADING_PREFIX.exec(trimmed)
+  if (!prefix) return null
+  let end = trimmed.length
+  while (end > prefix[0].length && trimmed[end - 1] === '#') end--
+  return trimmed.slice(prefix[0].length, end).trim()
 }
 
 export function extractAcceptanceCriteria(ticketBody: string): Criterion[] | null {
   let inSection = false
   let found = false
   const texts: string[] = []
-  for (const raw of ticketBody.split(/\r?\n/)) {
-    const line = raw.trim()
-    const heading = HEADING.exec(line)
-    if (heading) {
+  for (const line of ticketBody.split(LINE_BREAK)) {
+    const heading = headingText(line)
+    if (heading !== null) {
       if (inSection) break
-      if (headingText(heading[1] ?? '').toLowerCase() === 'acceptance criteria') {
+      if (heading.toLowerCase() === 'acceptance criteria') {
         inSection = true
         found = true
       }
       continue
     }
     if (!inSection) continue
-    const text = ITEM.exec(line)?.[1]?.trim()
+    const trimmed = line.trim()
+    const prefix = ITEM_PREFIX.exec(trimmed)
+    const text = prefix ? trimmed.slice(prefix[0].length).trim() : ''
     if (text) texts.push(text)
   }
   if (!found || texts.length === 0) return null
