@@ -7,6 +7,9 @@ import type { Tracker } from '../../ports/tracker.js'
 
 const PER_PAGE = 100
 
+const UNKNOWN_LOGIN =
+  'Could not determine which GitHub account Rumba runs as. Set RUMBA_GITHUB_LOGIN to its login (for the GitHub Actions token: github-actions[bot]).'
+
 interface IssueData {
   number: number
   title: string
@@ -29,10 +32,9 @@ function httpStatus(e: unknown): number | undefined {
 /**
  * Comments are untrusted: anyone who can comment, including members who cannot label
  * tickets, could forge a state comment. Only comments by Rumba's own account are read.
- * When that account cannot be looked up, any bot's comment is the fallback.
  */
-function isTrusted(c: CommentData, self: string | null): boolean {
-  return self === null ? c.user?.type === 'Bot' : c.user?.login === self
+function isTrusted(c: CommentData, self: string): boolean {
+  return c.user?.login === self
 }
 
 function labelNames(labels: IssueData['labels']): string[] {
@@ -53,14 +55,16 @@ export class GitHubTracker implements Tracker {
   private readonly repo: string
   private readonly labels: LabelNames
   private readonly stateNames: StateName[]
-  private self: Promise<string | null> | undefined
+  private self: Promise<string> | undefined
 
-  constructor(o: { octokit: Octokit; owner: string; repo: string; labels: LabelNames; stateNames: StateName[] }) {
+  /** `login` is the account Rumba runs as; when omitted it is looked up. */
+  constructor(o: { octokit: Octokit; owner: string; repo: string; labels: LabelNames; stateNames: StateName[]; login?: string }) {
     this.octokit = o.octokit
     this.owner = o.owner
     this.repo = o.repo
     this.labels = o.labels
     this.stateNames = o.stateNames
+    if (o.login !== undefined) this.self = Promise.resolve(o.login)
   }
 
   async ensureLabels(): Promise<void> {
@@ -165,21 +169,31 @@ export class GitHubTracker implements Tracker {
     return all.filter((c) => isTrusted(c, self))
   }
 
-  /** The login Rumba runs as, looked up once: GraphQL viewer, then REST GET /user, else null. */
-  private ownLogin(): Promise<string | null> {
-    this.self ??= (async () => {
+  /**
+   * The login Rumba runs as: GraphQL viewer, then REST GET /user. Fails closed when neither
+   * answers. Only a successful lookup is kept; a failed one is tried again on the next call.
+   */
+  private ownLogin(): Promise<string> {
+    if (this.self) return this.self
+    const lookup = this.lookUpLogin()
+    this.self = lookup
+    lookup.catch(() => {
+      if (this.self === lookup) this.self = undefined
+    })
+    return lookup
+  }
+
+  private async lookUpLogin(): Promise<string> {
+    try {
+      const r = await this.octokit.graphql<{ viewer: { login: string } }>('query { viewer { login } }')
+      return r.viewer.login
+    } catch {
       try {
-        const r = await this.octokit.graphql<{ viewer: { login: string } }>('query { viewer { login } }')
-        return r.viewer.login
+        return (await this.octokit.rest.users.getAuthenticated()).data.login
       } catch {
-        try {
-          return (await this.octokit.rest.users.getAuthenticated()).data.login
-        } catch {
-          return null
-        }
+        throw new Error(UNKNOWN_LOGIN)
       }
-    })()
-    return this.self
+    }
   }
 
   /** The last trusted comment that holds a valid state. */

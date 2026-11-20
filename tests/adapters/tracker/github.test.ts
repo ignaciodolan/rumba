@@ -9,14 +9,15 @@ import { trackerContract } from '../../../src/testing/trackerContract.js'
 import { GitHubStore, stubOctokit } from './githubStub.js'
 
 const NOW = new Date('2026-01-01T00:00:00Z')
+const UNKNOWN_LOGIN = 'Could not determine which GitHub account Rumba runs as. Set RUMBA_GITHUB_LOGIN to its login (for the GitHub Actions token: github-actions[bot]).'
 const OWNER = { author_association: 'OWNER', user: { login: 'someone', type: 'User' } }
 const OTHER_BOT = { author_association: 'NONE', user: { login: 'other[bot]', type: 'Bot' } }
 
-function makeGitHub(o: { labels?: string[] } = {}) {
+function makeGitHub(o: { labels?: string[]; login?: string } = {}) {
   const store = new GitHubStore()
   store.labels = [...(o.labels ?? [])]
   const { octokit, requests } = stubOctokit(store.routes())
-  const tracker = new GitHubTracker({ octokit, owner: 'o', repo: 'r', labels: defaultLabels('hub'), stateNames: [...STATE_NAMES] })
+  const tracker = new GitHubTracker({ octokit, owner: 'o', repo: 'r', labels: defaultLabels('hub'), stateNames: [...STATE_NAMES], login: o.login })
   return { tracker, store, requests }
 }
 
@@ -112,14 +113,37 @@ describe('GitHubTracker', () => {
     expect((await tracker.readState(t))?.state).toBe('triaged')
   })
 
-  it('trusts bot comments only when both login lookups fail', async () => {
+  it('fails closed when neither login lookup answers, and reads no bot comment', async () => {
     const { tracker, store } = makeGitHub()
     store.viewerLogin = null
     store.userLogin = null
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
     store.addComment(Number(t.id), encodeStateComment(state('triaged')), OTHER_BOT)
-    store.addComment(Number(t.id), encodeStateComment(state('verified')), OWNER)
+    await expect(tracker.readState(t)).rejects.toThrow(UNKNOWN_LOGIN)
+  })
+
+  it('looks the login up again after a failed lookup', async () => {
+    const { tracker, store } = makeGitHub()
+    store.viewerLogin = null
+    store.userLogin = null
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')))
+    await expect(tracker.readState(t)).rejects.toThrow(UNKNOWN_LOGIN)
+    store.viewerLogin = 'rumba-bot'
     expect((await tracker.readState(t))?.state).toBe('triaged')
+  })
+
+  it('uses a given login without looking it up', async () => {
+    const { tracker, store, requests } = makeGitHub({ login: 'rumba-bot' })
+    store.viewerLogin = 'someone'
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:hub'] }).number))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')))
+    store.addComment(Number(t.id), encodeStateComment(state('verified')), OWNER)
+    store.addComment(Number(t.id), encodeStateComment(state('pr_open')), OTHER_BOT)
+    expect((await tracker.readState(t))?.state).toBe('triaged')
+    await tracker.commentOnce(t, 'k', 'Body')
+    expect(store.loginLookups).toBe(0)
+    expect(requests.some((r) => r.path === '/graphql' || r.path === '/user')).toBe(false)
   })
 
   it('looks its login up once across calls', async () => {
