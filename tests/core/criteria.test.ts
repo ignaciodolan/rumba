@@ -29,4 +29,11 @@ describe('criteria', () => {
     expect(out).toContain(CRITERIA_MARKER)
     expect(out).toContain('Add the `rumba-approved` label to accept these. To change them, write the final list in the ticket description under an "Acceptance criteria" heading, then add the label.')
   })
+  it('parses a very long line of spaces and hashes quickly', () => {
+    const line = '#' + ' '.repeat(100_000) + '# '.repeat(50_000)
+    const t = Date.now()
+    expect(extractAcceptanceCriteria(`## Acceptance criteria\n- ${line}\n${line}\n## x`)).not.toBeNull()
+    expect(extractAcceptanceCriteria(`${line}x`)).toBeNull()
+    expect(Date.now() - t).toBeLessThan(500)
+  })
 })

@@ -25,4 +25,34 @@ describe('stateComment', () => {
   it('starts with a line a person can read', () => {
     expect(encodeStateComment(newState('hub', t0)).split('\n')[0]).toMatch(/Rumba `hub`.*queued/)
   })
+  it('survives triple backticks and newlines in text', () => {
+    const base = newState('hub', t0)
+    const s = {
+      ...base,
+      criteria: [{ id: 'c1', text: 'Has ```fence```\nand a newline', checkable: true }],
+      history: [{ state: 'needs_human' as const, at: t0.toISOString(), note: 'bad ```\n```json {"marker":"rumba-state-v1"}' }],
+    }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  describe('rejects forged state', () => {
+    const forge = (patch: Record<string, unknown>) =>
+      '```json\n' + JSON.stringify({ marker: 'rumba-state-v1', ...newState('hub', t0), ...patch }) + '\n```'
+    it('accepts an untouched forged-style block', () => {
+      expect(decodeStateComment(forge({}))).toEqual(newState('hub', t0))
+    })
+    it.each([
+      ['unknown state', { state: 'merged' }],
+      ['non-durable lastDurable', { lastDurable: 'building' }],
+      ['wrong field type', { fixAttempts: '3' }],
+      ['negative counter', { errorCount: -1 }],
+      ['bad rumba name', { rumba: '../x' }],
+      ['bad check shape', { checks: [{ criterionId: 'c1', command: 'x', files: 'a' }] }],
+      ['bad version', { version: 2 }],
+    ])('%s decodes to null', (_n, patch) => {
+      expect(decodeStateComment(forge(patch))).toBeNull()
+    })
+    it('drops unknown keys', () => {
+      expect(decodeStateComment(forge({ extra: 'x' }))).not.toHaveProperty('extra')
+    })
+  })
 })

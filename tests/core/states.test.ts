@@ -48,4 +48,8 @@ describe('states', () => {
     expect(canTransition('building', 'queued')).toBe(false)
     expect(canTransition('building', 'needs_human')).toBe(true)
   })
+  it('returns false for values that are not states', () => {
+    expect(canTransition('toString' as never, 'triaged')).toBe(false)
+    expect(canTransition('__proto__' as never, 'triaged')).toBe(false)
+  })
 })

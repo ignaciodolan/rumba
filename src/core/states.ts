@@ -30,7 +30,7 @@ export function isDurable(s: StateName): boolean {
 export function canTransition(from: StateName, to: StateName): boolean {
   if (to === 'needs_human') return true
   if (to === 'queued' && (from === 'pr_open' || ENDS.includes(from))) return true
-  return MOVES[from].includes(to)
+  return Object.hasOwn(MOVES, from) && MOVES[from].includes(to)
 }
 
 export function newState(rumba: string, _now: Date): TicketState {

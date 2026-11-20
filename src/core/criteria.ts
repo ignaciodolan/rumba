@@ -16,25 +16,33 @@ export function renderCriteriaComment(c: Criterion[], labels: LabelNames): strin
   ].join('\n')
 }
 
-const HEADING = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/
-const ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*?)\s*$/
+// Applied to trimmed lines, with no overlapping quantifiers: ticket text is untrusted.
+const HEADING = /^#{1,6}\s+(.*)$/
+const ITEM = /^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/
+
+function headingText(raw: string): string {
+  let end = raw.length
+  while (end > 0 && raw[end - 1] === '#') end--
+  return raw.slice(0, end).trim()
+}
 
 export function extractAcceptanceCriteria(ticketBody: string): Criterion[] | null {
   let inSection = false
   let found = false
   const texts: string[] = []
-  for (const line of ticketBody.split(/\r?\n/)) {
+  for (const raw of ticketBody.split(/\r?\n/)) {
+    const line = raw.trim()
     const heading = HEADING.exec(line)
     if (heading) {
       if (inSection) break
-      if (heading[1]?.toLowerCase() === 'acceptance criteria') {
+      if (headingText(heading[1] ?? '').toLowerCase() === 'acceptance criteria') {
         inSection = true
         found = true
       }
       continue
     }
     if (!inSection) continue
-    const text = ITEM.exec(line)?.[1]
+    const text = ITEM.exec(line)?.[1]?.trim()
     if (text) texts.push(text)
   }
   if (!found || texts.length === 0) return null
