@@ -1,0 +1,38 @@
+{
+  "name": "rumba-cli",
+  "version": "0.1.0",
+  "description": "Takes labelled tickets from an issue tracker to pull requests, with evidence.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "rumba": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "sandbox"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node -e \"import('node:fs').then((fs) => fs.cpSync('src/init/templates', 'dist/init/templates', { recursive: true }))\"",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@linear/sdk": "^103.0.0",
+    "@octokit/rest": "^22.0.1",
+    "commander": "^15.1.0",
+    "execa": "^10.2.1",
+    "picomatch": "^4.0.7",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/picomatch": "^4.0.3",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}
