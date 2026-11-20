@@ -32,11 +32,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execa('git', [...BOT, ...args], { cwd, stdin: 'ignore' })).stdout.trim()
 }
 
-/** The compose project name Docker derives from the directory a command runs in: its folder name, lower-cased, without other characters. */
-function composeProject(workdir: string): string {
-  return path.basename(workdir).toLowerCase().replace(/[^a-z0-9_-]/g, '')
-}
-
 async function containersOf(project: string): Promise<string[]> {
   const r = await execa('docker', ['ps', '-a', '-q', '--filter', `label=com.docker.compose.project=${project}`], { stdin: 'ignore' })
   return r.stdout.split('\n').filter((l) => l !== '')
@@ -93,6 +88,8 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
   let envWorkdirs: Set<string>
   /** Every directory a host-side command (`up`, `exec`, `down`) ran in. */
   let hostDirs: Set<string>
+  /** Every compose project name Rumba gave those commands. */
+  let projects: Set<string>
   let deps: Deps
 
   async function commitToMain(message: string): Promise<void> {
@@ -114,7 +111,7 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     const workspace = new GitWorkspace({ repoRoot, defaultBranch: 'main' })
     const environment = new DockerEnvironment({
       up, exec, down, trusted: workspace,
-      run: (command, o) => { hostDirs.add(o.cwd); return shellRunner(command, o) },
+      run: (command, o) => { hostDirs.add(o.cwd); projects.add(o.env?.COMPOSE_PROJECT_NAME ?? ''); return shellRunner(command, o) },
     })
     const realUp = environment.up.bind(environment)
     environment.up = async (ref, workdir) => { envWorkdirs.add(workdir); return realUp(ref, workdir) }
@@ -145,18 +142,20 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     agent = new ScriptedAgent()
     envWorkdirs = new Set()
     hostDirs = new Set()
+    projects = new Set()
     deps = depsFor(rumba, agent)
   })
 
   afterEach(async () => {
     if (!dockerAvailable) return
     const problems: string[] = []
-    for (const workdir of [...(agent?.workdirs ?? []), ...(envWorkdirs ?? []), ...(hostDirs ?? [])]) {
-      const project = composeProject(workdir)
+    for (const project of projects ?? []) {
       if ((await containersOf(project)).length > 0) {
         problems.push(`compose project ${project} still has containers`)
         await execa('docker', ['compose', '-p', project, 'down', '-v', '--rmi', 'local', '--remove-orphans'], { stdin: 'ignore', reject: false })
       }
+    }
+    for (const workdir of [...(agent?.workdirs ?? []), ...(envWorkdirs ?? []), ...(hostDirs ?? [])]) {
       if (existsSync(workdir)) {
         problems.push(`workdir ${workdir} was not removed`)
         await rm(workdir, { recursive: true, force: true })
@@ -180,8 +179,10 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     // The before-run and the after-run each got their own checkout of the commit, never where an agent wrote.
     expect(envWorkdirs.size).toBe(2)
     for (const w of envWorkdirs) expect(agent.workdirs.has(w)).toBe(false)
-    // The host-side commands ran somewhere else again: in a checkout of the default branch.
-    expect(hostDirs.size).toBe(2)
+    // The host-side commands ran somewhere else again: each in its own checkout of the default
+    // branch (up, one check and down before; up, one check, the project tests and down after).
+    expect(hostDirs.size).toBe(7)
+    expect(projects.size).toBe(2)
     for (const d of hostDirs) { expect(agent.workdirs.has(d)).toBe(false); expect(envWorkdirs.has(d)).toBe(false) }
   }, 300_000)
 

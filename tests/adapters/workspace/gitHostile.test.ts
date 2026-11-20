@@ -214,6 +214,92 @@ describe('GitWorkspace against hostile content', () => {
     })
   })
 
+  describe('attributes from the host, selecting drivers for files the agent names', () => {
+    const savedXdg = process.env.XDG_CONFIG_HOME
+    afterEach(() => {
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = savedXdg
+    })
+
+    /** Commits agent-written files, checks the commit out again and resets to it: the clean and the smudge side. */
+    async function commitAndCheckOutAgain(files: string[]): Promise<void> {
+      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      for (const f of files) await write(first.workdir, f, 'agent')
+      const sha = await ws.commit(first.workdir, 'agent change')
+      await ws.cleanup(first.workdir)
+      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      for (const f of files) expect(await readFile(path.join(again.workdir, f), 'utf8')).toBe('agent')
+      await rm(path.join(again.workdir, files[0]))
+      await ws.reset(again.workdir, sha!)
+    }
+
+    it('does not run a global driver that the global attributes file selects, on commit or on checkout', async () => {
+      const globalConfig = path.join(root, 'global.gitconfig')
+      const globalAttributes = path.join(root, 'global.gitattributes')
+      await writeFile(globalAttributes, '*.dat filter=evil\n')
+      await writeFile(globalConfig, `[core]\n\tattributesFile = ${globalAttributes}\n[filter "evil"]\n\tclean = "${leaveMarker()}"\n\tsmudge = "${leaveMarker()}"\n`)
+      process.env.GIT_CONFIG_GLOBAL = globalConfig
+      await commitAndCheckOutAgain(['agent.dat'])
+      expect(existsSync(marker)).toBe(false)
+    })
+
+    it('does not run a repository driver that the default attributes file in the home folder selects', async () => {
+      // No core.attributesFile anywhere: git falls back to $XDG_CONFIG_HOME/git/attributes.
+      process.env.XDG_CONFIG_HOME = path.join(root, 'xdg')
+      await write(process.env.XDG_CONFIG_HOME, 'git/attributes', '*.bin filter=evil\n')
+      process.env.GIT_CONFIG_GLOBAL = path.join(root, 'empty.gitconfig')
+      await writeFile(process.env.GIT_CONFIG_GLOBAL, '')
+      await git(clone, 'config', 'filter.evil.clean', leaveMarker())
+      await git(clone, 'config', 'filter.evil.smudge', leaveMarker())
+      await commitAndCheckOutAgain(['agent.bin'])
+      expect(existsSync(marker)).toBe(false)
+      // Plain git, same setup: the driver runs.
+      await write(clone, 'probe.bin', 'x'); await git(clone, 'add', 'probe.bin')
+      expect(existsSync(marker)).toBe(true)
+    })
+
+    it("does not run a repository driver that the repository's own info/attributes selects", async () => {
+      await git(clone, 'config', 'filter.evil.clean', leaveMarker())
+      await git(clone, 'config', 'filter.evil.smudge', leaveMarker())
+      await git(clone, 'config', 'filter.evil.required', 'true')
+      await write(clone, '.git/info/attributes', '*.lfs filter=evil\n')
+      await commitAndCheckOutAgain(['agent.lfs'])
+      expect(existsSync(marker)).toBe(false)
+      await write(clone, 'probe.lfs', 'x'); await git(clone, 'add', 'probe.lfs')
+      expect(existsSync(marker)).toBe(true)
+    })
+  })
+
+  describe('removing a checkout that something is still writing to', () => {
+    it('never deletes outside the checkout when folders are swapped for links during the removal', async () => {
+      const victim = path.join(root, 'victim')
+      await mkdir(victim)
+      for (let i = 0; i < 100; i++) await writeFile(path.join(victim, `keep${i}`), 'x')
+      // Stands in for code in a container that still has the checkout mounted: it swaps each
+      // folder with a link to the victim folder and back, as fast as it can.
+      const racer = [
+        "const fs = require('node:fs'), path = require('node:path')",
+        'const [target, victim, n] = [process.argv[1], process.argv[2], Number(process.argv[3])]',
+        "const d = (i) => path.join(target, 'd' + i), aside = (i) => path.join(target, 'a' + i)",
+        'for (;;) {',
+        '  for (let i = 0; i < n; i++) try { fs.renameSync(d(i), aside(i)); fs.symlinkSync(victim, d(i)) } catch {}',
+        '  for (let i = 0; i < n; i++) try { fs.unlinkSync(d(i)); fs.renameSync(aside(i), d(i)) } catch {}',
+        '  if (!fs.existsSync(target)) process.exit(0)',
+        '}',
+      ].join('\n')
+      for (let round = 0; round < 3; round++) {
+        const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+        for (let i = 0; i < 150; i++) for (let j = 0; j < 10; j++) await write(workdir, `d${i}/f${j}`, 'x')
+        const child = execa('node', ['-e', racer, workdir, victim, '150'], { stdin: 'ignore', reject: false })
+        await new Promise((r) => setTimeout(r, 150))
+        await ws.cleanup(workdir)
+        child.kill('SIGKILL')
+        await child
+        expect(await readdir(victim)).toHaveLength(100)
+      }
+    }, 60_000)
+  })
+
   describe('symbolic links, judged by where they really lead', () => {
     it('refuses chained links whose texts each look harmless', async () => {
       const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
@@ -323,14 +409,10 @@ describe('GitWorkspace against hostile content', () => {
       await expect(ws.verifyTrusted(candidate)).rejects.toThrow(/not a trusted checkout/)
     })
 
-    it('restores a changed checkout in place, from its commit', async () => {
-      await writeFile(path.join(trusted, 'scripts/up.sh'), '#!/bin/sh\necho AGENT\n')
-      await writeFile(path.join(trusted, '.env'), 'X=1\n')
-      await mkdir(path.join(trusted, 'sub/.git'), { recursive: true })
-      await ws.restoreTrusted(trusted)
-      expect(await readFile(path.join(trusted, 'scripts/up.sh'), 'utf8')).toBe('#!/bin/sh\necho trusted\n')
-      expect(existsSync(path.join(trusted, '.env'))).toBe(false)
-      await expect(ws.verifyTrusted(trusted)).resolves.toBeUndefined()
+    it('forgets a trusted checkout once it is cleaned up', async () => {
+      await ws.cleanup(trusted)
+      expect(existsSync(trusted)).toBe(false)
+      await expect(ws.verifyTrusted(trusted)).rejects.toThrow(/not a trusted checkout/)
     })
   })
 })

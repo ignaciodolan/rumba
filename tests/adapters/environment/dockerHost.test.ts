@@ -164,6 +164,7 @@ describe('docker environment: what the host-side commands read', () => {
 
     expect(resolved).toContain(`context: ${c.workdir}`)
     expect(resolved).toContain(`dockerfile: ${path.join(hostDir, 'Dockerfile')}`)
+    expect(hostDir).toBe(h.host!.upDir)
     expect(hostDir).not.toBe(c.workdir)
   })
 
@@ -179,23 +180,58 @@ describe('docker environment: what the host-side commands read', () => {
     expect(await logged()).toEqual(['FROM trusted'])
   })
 
-  it('stops when something rewrote the trusted checkout during the run, and takes the environment down from a clean one', async () => {
+  describe('when the merged compose file gives a container the folder the commands run in', () => {
     const script = (who: string) => `#!/bin/sh\nprintf '%s:${who}\\n' "$1" >> '${log}'\nshift\n[ "$#" -eq 0 ] || exec "$@"\n`
-    await mergeToMain({ 'scripts/up.sh': script('trusted'), 'scripts/exec.sh': script('trusted'), 'scripts/down.sh': script('trusted') })
-    const env = environment({ up: 'sh scripts/up.sh up', exec: 'sh scripts/exec.sh exec', down: 'sh scripts/down.sh down' })
-    const c = await candidateWith({ 'src/a.txt': 'x\n' }, { fresh: true })
-    const h = await env.up({ branch: BRANCH, sha: c.sha, role: 'before' }, c.workdir)
+    const scripts = (who: string) => ({ 'scripts/up.sh': script(who), 'scripts/exec.sh': script(who), 'scripts/down.sh': script(who) })
+    const commands = { up: 'sh scripts/up.sh up', exec: 'sh scripts/exec.sh exec', down: 'sh scripts/down.sh down' }
 
-    // What code in a container could do if the merged compose file mounted `.` read-write.
-    await writeFile(path.join(h.hostDir!, 'scripts/exec.sh'), script('AGENT'))
-    await writeFile(path.join(h.hostDir!, 'scripts/down.sh'), script('AGENT'))
-    await writeFile(path.join(h.hostDir!, '.env'), 'COMPOSE_FILE=elsewhere.yml\n')
+    it('never runs a later command in that folder, so what the container rewrote there is not read', async () => {
+      await mergeToMain(scripts('trusted'))
+      const env = environment(commands)
+      const c = await candidateWith({ 'src/a.txt': 'x\n' }, { fresh: true })
+      const h = await env.up({ branch: BRANCH, sha: c.sha, role: 'before' }, c.workdir)
 
-    await expect(env.runCheck(h, { criterionId: 'c1', command: 'echo checked', files: [] })).rejects.toThrow(/no longer matches its commit/)
-    await env.down(h)
+      // What code in the container can do from then on, at any moment, also while a command runs.
+      const upDir = h.host!.upDir
+      for (const [file, content] of Object.entries(scripts('AGENT'))) await writeFile(path.join(upDir, file), content)
+      await writeFile(path.join(upDir, '.env'), 'COMPOSE_FILE=elsewhere.yml\n')
 
-    expect(await logged()).toEqual(['up:trusted', 'down:trusted'])
-    expect(existsSync(h.hostDir!)).toBe(false)
+      expect(await env.runCheck(h, { criterionId: 'c1', command: 'echo checked', files: [] })).toMatchObject({ passed: true, output: 'checked' })
+      await env.runCommand(h, 'echo tested')
+      await env.down(h)
+
+      expect(await logged()).toEqual(['up:trusted', 'exec:trusted', 'exec:trusted', 'down:trusted'])
+      expect(existsSync(upDir)).toBe(false)
+    })
+
+    it('runs each command in a folder of its own, under one project name', async () => {
+      await mergeToMain({ 'app.txt': 'base\n' })
+      const where = `printf '%s %s\\n' "$PWD" "$COMPOSE_PROJECT_NAME" >> '${log}'`
+      const env = environment({ up: where, exec: `${where}; sh -c 'exec "$@"' exec`, down: where })
+      const c = await candidateWith({ 'app.txt': 'candidate\n' }, { fresh: true })
+      const h = await env.up({ branch: BRANCH, sha: c.sha, role: 'before' }, c.workdir)
+      await env.runCommand(h, 'true')
+      await env.runCommand(h, 'true')
+      await env.down(h)
+
+      const lines = (await logged()).map((l) => l.split(' '))
+      expect(lines).toHaveLength(4)
+      expect(new Set(lines.map(([dir]) => dir)).size).toBe(4)
+      expect(new Set(lines.map(([dir]) => path.dirname(dir))).size).toBe(4)
+      expect(new Set(lines.map(([, project]) => project))).toEqual(new Set([h.host!.project]))
+      for (const [dir] of lines) { expect(dir).not.toBe(c.workdir); expect(existsSync(dir)).toBe(false) }
+    })
+
+    it('stops when the folder up ran in no longer matches its commit once up returns, and still takes the environment down', async () => {
+      await mergeToMain(scripts('trusted'))
+      // The second half of this command stands in for a container, started by the first half, that writes into the folder.
+      const env = environment({ ...commands, up: `sh scripts/up.sh up; printf '# changed\\n' >> scripts/exec.sh` })
+      const c = await candidateWith({ 'src/a.txt': 'x\n' }, { fresh: true })
+
+      await expect(env.up({ branch: BRANCH, sha: c.sha, role: 'before' }, c.workdir)).rejects.toThrow(/no longer matches its commit.*scripts\/exec\.sh/s)
+
+      expect(await logged()).toEqual(['up:trusted', 'down:trusted'])
+    })
   })
 
   it('hands the commit under test to the commands as RUMBA_WORKDIR and runs them somewhere else', async () => {
