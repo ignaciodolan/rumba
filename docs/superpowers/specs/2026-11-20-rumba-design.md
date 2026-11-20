@@ -2,6 +2,8 @@
 
 Date: 2026-11-20. Status: revision 2, waiting for approval. Revision 1 was approved; revision 2 adds named rumbas (section 6) and the pull request feedback loop (section 9).
 
+Amended after stage 1 was built: sections 3 and 12 now say where the commands of the Docker environment run. The earlier text had them run in a checkout of the code under test, which let a file written by the agent be read or executed on the host.
+
 Lines marked **(call)** are choices biggie made that the owner has not explicitly agreed to. Everything else was decided in conversation.
 
 ## 1. Intent
@@ -61,6 +63,7 @@ Anti-goals, meaning outcomes that make Rumba a failure even if it runs:
   - the container has network access, because the agent must reach its model and install packages. Restricting it is not part of v1. **(call)**
   - a check container gets only what the check needs, such as the target URL and the Vercel bypass token. Rumba removes known secret values from check output before posting it anywhere. **(call)**
   - the agent may not change anything under `.rumba/`. A change there fails verification. Only the Rumba process writes lessons. **(call)**
+  - no file written by the agent is read or executed by a process that Rumba starts on the host. The commands an environment runs on the host (for Docker: up, exec and down) run in a checkout of the default branch, which holds only code a person merged. They receive the code under test as a path in `RUMBA_WORKDIR`, and that code may reach a container only as a mount or a build context. The list of protected paths is a second layer, not the boundary. (Decided by the owner.)
 - Licence: MIT. **(call)**
 - Name: the repository and the command are `rumba`. The npm name `rumba` is taken by an abandoned package, so the package is published as `rumba-cli`. **(call)**
 
@@ -292,8 +295,13 @@ Pull request body:
 ### Docker
 
 - The rumba's config gives the commands to bring the project up, run something inside it, and take it down.
-- Before-run: check out the base commit, up, run checks, down.
-- After-run: check out the fix branch, up, run checks, down.
+- These commands run on the host, so they never run in the code under test. Each runs with its working directory in a fresh checkout of the default branch, at the commit the fix branch started from. Whatever a command reads by relative path is a file a person merged: compose files and what they include, `.env`, a Makefile, a script, a Dockerfile.
+- The code under test is checked out in a second directory. Its path is given to the commands in `RUMBA_WORKDIR` and in no other way. The project's compose file hands that path to the container, as a mount (`${RUMBA_WORKDIR:-.}:/app`, which also works when run by hand) or as a build context.
+- Before-run: check out the checks commit (the base commit plus the check files), up, run checks, down.
+- After-run: check out the fix commit, up, run checks, down.
+- Both runs use the same default-branch commit for the host side, so the environment is defined the same way before and after, and the evidence stays comparable.
+- A change to a compose file or a Dockerfile in a fix cannot be verified this way, because the environment is built from the default branch's copies. Such files are protected by default and a fix that changes them is rejected.
+- The config author must give `RUMBA_WORKDIR` to Docker only, never read or run a file under it on the host, and mount the directory itself, not a folder below it. Rumba cannot check this.
 
 ### Vercel preview
 

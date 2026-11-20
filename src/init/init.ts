@@ -20,6 +20,10 @@ const PULL_REQUEST_NOTE =
   'With the default GitHub Actions token, turn on the repository setting "Allow GitHub Actions to create and approve pull requests" ' +
   '(Settings, Actions, General). Without it, opening the pull request fails after all the work is done.'
 
+const DOCKER_NOTE =
+  'With the docker environment, Rumba runs `up`, `exec` and `down` from a checkout of the default branch and puts the path of the code under test in RUMBA_WORKDIR. ' +
+  'Mount that path in your compose file, for example `${RUMBA_WORKDIR:-.}:/app`, and merge that change to the default branch before the first run.'
+
 async function template(file: string, name: string): Promise<string> {
   return (await readFile(path.join(TEMPLATES, file), 'utf8')).replaceAll('__NAME__', name)
 }
@@ -80,6 +84,6 @@ export async function initRumba(repoRoot: string, name: string): Promise<{ creat
     }
   }
 
-  notes.push(PACKAGE_NOTE, PULL_REQUEST_NOTE, CI_NOTE)
+  notes.push(DOCKER_NOTE, PACKAGE_NOTE, PULL_REQUEST_NOTE, CI_NOTE)
   return { created, notes }
 }

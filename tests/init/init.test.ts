@@ -27,6 +27,7 @@ describe('initRumba', () => {
   })
   it('says what a person must set up before enabling the workflow, and keeps the CI note word for word', async () => {
     const { notes } = await initRumba(root, 'hub')
+    expect(notes.join('\n')).toContain('${RUMBA_WORKDIR:-.}:/app')
     const text = notes.join('\n')
     expect(text).toContain('rumba-cli is not published to npm yet')
     expect(text).toContain('Do not enable the workflow until rumba-cli is published, or replace its "Run rumba" step with an install from a checkout of Rumba you trust.')

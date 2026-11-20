@@ -19,12 +19,20 @@ agent:
 environment:
   kind: docker              # docker | vercel-preview
   # docker: how to bring the project up, run a command inside it, and take it down.
+  # Rumba runs these three commands on the host from a checkout of the default
+  # branch, never from the code under test, and puts the path of the code under
+  # test in RUMBA_WORKDIR. Your compose file must hand that path to the container,
+  # for example with a mount that also works when you run compose by hand:
+  #     volumes:
+  #       - ${RUMBA_WORKDIR:-.}:/app
+  # Give RUMBA_WORKDIR to Docker only. Never read or run a file under it on the host.
   up: docker compose up -d --wait
   exec: docker compose exec -T app
   down: docker compose down -v
-  # Files the agent may not change. The default protects the compose files only;
-  # add anything else that changes how the containers start, such as .env.
-  # protected: ["docker-compose*.y*ml", "compose*.y*ml", ".env"]
+  # More files the agent may not change. .rumba/, .github/ and .env are always
+  # protected. This list replaces the default, which is the files that define the
+  # containers:
+  # protected: ["docker-compose*.y*ml", "compose*.y*ml", "Dockerfile*", "*.dockerfile", ".dockerignore"]
   #
   # vercel-preview instead:
   # kind: vercel-preview

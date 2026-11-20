@@ -1,7 +1,12 @@
 import { z } from 'zod'
 import type { LabelNames } from '../core/types.js'
 
-export const DEFAULT_DOCKER_PROTECTED = ['docker-compose*.y*ml', 'compose*.y*ml']
+/**
+ * Files that define the containers. The environment is brought up from the default branch's
+ * copy of them, so a change to one in a fix could not be verified anyway; the guard rejects
+ * it with a clear reason. This is a second layer: the boundary is where host commands run.
+ */
+export const DEFAULT_DOCKER_PROTECTED = ['docker-compose*.y*ml', 'compose*.y*ml', 'Dockerfile*', '*.dockerfile', '.dockerignore']
 
 const dockerEnvironment = z.object({
   kind: z.literal('docker'),

@@ -112,12 +112,12 @@ environment:
   kind: vercel-preview      # docker | vercel-preview
   # vercel-preview only:
   # project_id: prj_123     # optional; VERCEL_PROJECT_ID is used if omitted
-  # docker only:
+  # docker only: run on the host, from a checkout of the default branch (see below)
   # up: docker compose up -d --wait
   # exec: docker compose exec -T app
   # down: docker compose down -v
-  # both: files the agent may not change
-  # protected: [".env"]
+  # both: more files the agent may not change
+  # protected: ["Makefile"]
 verify:
   test: npm test            # optional: the project's own tests, run against the change
 limits:
@@ -133,12 +133,49 @@ labels:                     # optional: rename the labels
 
 - `paths`: a change outside these globs is allowed, and listed in the pull request as outside scope.
 - `tracker`: a Linear label is shared across a workspace, so a Linear tracker must name a team, and may name a project.
-- `environment.docker`: the commands that bring the project up, run a command inside it, and take it down. Checks run through `exec`.
+- `environment.docker`: the commands that bring the project up, run a command inside it, and take it down. Checks run through `exec`. See "The docker environment" below for where they run and what your compose file must do.
 - `environment.vercel-preview`: Rumba pushes a throwaway branch `rumba/<name>/base-<ticket-id>` at the base commit and the fix branch, waits for each preview deployment, and runs the checks against it. It never runs checks against a production deployment. Checks can only see what is visible over HTTP or in a browser.
-- `environment.protected`: globs of files the agent may not change. The docker default is the compose files (`docker-compose*.y*ml`, `compose*.y*ml`); the vercel-preview default is none. Anything under `.rumba/` or `.github/`, and any file named `.env` at any depth, is always protected.
+- `environment.protected`: globs of files the agent may not change. The docker default is the files that define the containers (`docker-compose*.y*ml`, `compose*.y*ml`, `Dockerfile*`, `*.dockerfile`, `.dockerignore`); the vercel-preview default is none. Setting the list replaces the default. Anything under `.rumba/` or `.github/`, and any file named `.env` at any depth, is always protected.
 - `limits.minutes_per_ticket` is also the time limit of each agent call.
 
 The `max_review_rounds` limit in the design belongs to stage 2 and is not read yet.
+
+### The docker environment
+
+`up`, `exec` and `down` are the only commands Rumba runs on your machine or CI runner for a project, and the code under test contains files an agent wrote. So Rumba never runs them in the code under test:
+
+- Each command runs with its working directory in a fresh checkout of the default branch, at the commit the fix branch started from. Everything the command reads by relative path is therefore a file a person merged: the compose file and anything it includes or extends, `.env` and `env_file` entries, a Makefile, a `package.json` script, a shell script, a Dockerfile in the build context.
+- The code under test is checked out in another directory. Rumba passes its path to the three commands in the `RUMBA_WORKDIR` environment variable, and in no other way.
+- Your compose file must hand that path to the container. If it does not, the checks run against the default branch and the ticket ends in `fix_failed`.
+
+The usual way is to mount it, with a fallback so the same file works when you run it by hand:
+
+```yaml
+services:
+  app:
+    build: .                      # the Dockerfile and build context of the default branch
+    volumes:
+      - ${RUMBA_WORKDIR:-.}:/app  # the code under test
+    command: sleep infinity
+```
+
+A project that builds its code into the image can use the path as the build context, and keep the Dockerfile a person merged:
+
+```yaml
+services:
+  app:
+    build:
+      context: ${RUMBA_WORKDIR:-.}
+      dockerfile: ${PWD}/Dockerfile
+```
+
+Rules for whoever writes `rumba.yml` and the compose file:
+
+- Give `RUMBA_WORKDIR` to Docker only, as a mount source or a build context. Never read or run anything under it on the host: no `sh "$RUMBA_WORKDIR/scripts/up.sh"`, no `env_file: ${RUMBA_WORKDIR}/.env`, no `--project-directory "$RUMBA_WORKDIR"`, no `-f "$RUMBA_WORKDIR/compose.yml"`.
+- Mount `RUMBA_WORKDIR` itself, not a folder below it. A folder below it is a path the agent controls.
+- `exec` must run its argument inside a container, as `docker compose exec -T <service>` does. Checks and `verify.test` are passed to it.
+- `up` may call a script or `make`: it is the default branch's copy that runs.
+- A change to the compose files or a Dockerfile in a fix is rejected, because the environment is built from the default branch's copies and could not show that such a change works. Make those changes by hand.
 
 ## Environment variables
 
@@ -167,9 +204,9 @@ Ticket text, and anything the agent reads, is untrusted input, and the coding ag
 - The agent runs in a throwaway container with only the working copy of the fix branch mounted. That container gets the model key and nothing else. Tracker, GitHub and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself.
 - The container has network access, because the agent must reach its model and install packages. Restricting it is not part of stage 1.
 - A check container gets only what the check needs, such as the preview URL and the Vercel bypass secret. Rumba replaces known secret values with `[redacted]` in check output and error messages before posting or printing them. It keeps at most the last 4,000 characters of each check's output, less when a ticket has several checks, and drops the output altogether if the ticket comment or pull request body would otherwise be too long for the tracker.
-- The agent may not change anything under `.rumba/` or `.github/`, any file named `.env`, or any path in `environment.protected`. A change there fails verification.
-- The environment never runs where the agent wrote. After each agent call Rumba commits the change, checks the commit against the protected paths, and removes the agent's working copy. `up`, `exec` and `down` then run on the host in a clean checkout of the commit under test, so a file the agent left out of the commit, such as a git-ignored `.env`, is not there.
-- With the docker environment, `up`, `exec` and `down` run on the host with the repository's files. Keep them plain commands, such as `docker compose up -d --wait`, and do not call scripts from the repository in them: a script is a file the agent can change. List in `environment.protected` every other file that changes how the project's containers start, such as a Dockerfile, because only the compose files, `.github/` and `.env` are protected by default.
+- The agent may not change anything under `.rumba/` or `.github/`, any file named `.env`, or any path in `environment.protected`. A change there fails verification. Rumba also refuses to commit a symbolic link the agent added that points outside the repository.
+- No file an agent wrote is read or run by a command Rumba starts on the host. After each agent call Rumba commits the change, checks the commit against the protected paths, and removes the agent's working copy. The commit under test is then checked out fresh, so a file the agent left out of the commit, such as a git-ignored `.env`, is not there. With the docker environment, `up`, `exec` and `down` run in a separate checkout of the default branch and only receive the path of the commit under test, in `RUMBA_WORKDIR`; the code under test reaches a container as a mount or a build context and nothing else. The protected paths are a second layer, not the boundary. This holds only while `rumba.yml` and the compose file follow the rules in "The docker environment" above.
+- The one file the Rumba process reads from the agent's working copy is the agent's result, `.rumba-out/result.json`. It is read as data, only if it is a regular file in a regular folder, and checked against a fixed shape.
 - Rumba reads state only from comments written by the account it runs as. Changing the token to one of another account makes open tickets start again from `queued`.
 - When Rumba runs with the Actions token and cannot look up its own login, set the repository variable `RUMBA_GITHUB_LOGIN` to `github-actions[bot]`. Without a known login Rumba stops with an error rather than trust comments from any account.
 - Do not run Rumba as root. The sandbox runs as the calling user, and Claude Code refuses to run without permission prompts as root.
