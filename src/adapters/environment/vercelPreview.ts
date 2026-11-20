@@ -66,7 +66,10 @@ export class HttpVercelClient implements VercelClient {
     const deployments = body.deployments as RawDeployment[]
     if (deployments.length === 0) return null
     const created = (d: RawDeployment) => d.created ?? d.createdAt ?? 0
-    const newest = deployments.reduce((a, b) => (created(b) > created(a) ? b : a))
+    // A production deployment is never used for checks, so one only comes back when there is no other.
+    const others = deployments.filter((d) => mapTarget(d) !== 'production')
+    const candidates = others.length > 0 ? others : deployments
+    const newest = candidates.reduce((a, b) => (created(b) > created(a) ? b : a))
     const raw = newest.readyState ?? newest.state ?? ''
     const state = STATES[raw]
     if (state === undefined) throw new Error(`Vercel deployment has an unknown state: ${raw}`)

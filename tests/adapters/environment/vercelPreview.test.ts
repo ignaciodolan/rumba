@@ -189,6 +189,23 @@ describe('HttpVercelClient', () => {
     expect(await new HttpVercelClient({ token: 't', projectId: 'p', fetch }).findDeployment({ sha: 's' }))
       .toEqual({ state: 'BUILDING', url: 'new.vercel.app', target: null })
   })
+  it('prefers the newest deployment that is not production', async () => {
+    const { fetch } = stubFetch(200, { deployments: [
+      dep({ url: 'old-preview.vercel.app', created: 100, target: 'preview' }),
+      dep({ url: 'prod.example.com', created: 300, target: 'production' }),
+      dep({ url: 'new-preview.vercel.app', created: 200, target: null, readyState: 'BUILDING' }),
+      dep({ url: 'promoted.vercel.app', created: 250, target: null, readySubstate: 'PROMOTED' }),
+    ] })
+    expect(await new HttpVercelClient({ token: 't', projectId: 'p', fetch }).findDeployment({ sha: 's' }))
+      .toEqual({ state: 'BUILDING', url: 'new-preview.vercel.app', target: null })
+  })
+  it('returns a newer production deployment only when there is no other', async () => {
+    const both = stubFetch(200, { deployments: [dep({ url: 'prod.example.com', created: 300, target: 'production' }), dep({ url: 'p.vercel.app', created: 100, target: 'preview' })] })
+    expect((await new HttpVercelClient({ token: 't', projectId: 'p', fetch: both.fetch }).findDeployment({ sha: 's' }))?.url).toBe('p.vercel.app')
+    const only = stubFetch(200, { deployments: [dep({ url: 'prod.example.com', created: 300, target: 'production' })] })
+    expect(await new HttpVercelClient({ token: 't', projectId: 'p', fetch: only.fetch }).findDeployment({ sha: 's' }))
+      .toEqual({ state: 'READY', url: 'prod.example.com', target: 'production' })
+  })
   it('maps every documented state onto the five the environment knows', async () => {
     const expected: Record<string, string> = {
       QUEUED: 'QUEUED', INITIALIZING: 'QUEUED', BUILDING: 'BUILDING', READY: 'READY',
