@@ -1,6 +1,8 @@
+# Rumba runs this file from a checkout of the default branch and puts the path of the
+# commit under test in RUMBA_WORKDIR. Run by hand, the project folder itself is mounted.
 services:
   app:
     build: .
     volumes:
-      - .:/app
+      - ${RUMBA_WORKDIR:-.}:/app
     command: sleep infinity

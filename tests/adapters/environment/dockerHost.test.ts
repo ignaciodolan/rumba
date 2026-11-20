@@ -150,6 +150,23 @@ describe('docker environment: what the host-side commands read', () => {
     expect(resolved).toContain(`source: ${c.workdir}`)
   })
 
+  it.skipIf(!hasCompose)('(c) docker compose can build the commit under test with the Dockerfile of the trusted checkout', async () => {
+    const out = path.join(tmp, 'resolved.yml')
+    const compose = ['services:', '  app:', '    build:', '      context: ${RUMBA_WORKDIR:-.}', '      dockerfile: ${PWD}/Dockerfile', ''].join('\n')
+    await mergeToMain({ 'docker-compose.yml': compose, Dockerfile: 'FROM trusted\n' })
+    const env = environment({ up: `docker compose config > '${out}'; printf '%s' "$PWD" > '${log}'` })
+
+    const c = await candidateWith({ Dockerfile: 'FROM AGENT\n' }, { fresh: true })
+    const h = await env.up({ branch: BRANCH, sha: c.sha, role: 'before' }, c.workdir)
+    const [hostDir] = await logged()
+    const resolved = await readFile(out, 'utf8')
+    await env.down(h)
+
+    expect(resolved).toContain(`context: ${c.workdir}`)
+    expect(resolved).toContain(`dockerfile: ${path.join(hostDir, 'Dockerfile')}`)
+    expect(hostDir).not.toBe(c.workdir)
+  })
+
   it('(c) never reads a Dockerfile that the commit under test changed', async () => {
     // `docker build .` stand-in: the build reads the Dockerfile of the directory it runs in.
     await mergeToMain({ Dockerfile: 'FROM trusted\n' })

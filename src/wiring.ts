@@ -100,9 +100,10 @@ function agentFor(rumba: RumbaConfig, env: Env, sandbox: Sandbox): Agent {
   return new ClaudeCodeAgent({ sandbox, apiKey: required(env, 'ANTHROPIC_API_KEY', why), model, timeoutMs })
 }
 
-function environmentFor(rumba: RumbaConfig, env: Env, codeHost: CodeHost, sandbox: Sandbox): Environment {
+function environmentFor(rumba: RumbaConfig, env: Env, codeHost: CodeHost, sandbox: Sandbox, workspace: GitWorkspace): Environment {
   const e = rumba.environment
-  if (e.kind === 'docker') return new DockerEnvironment({ up: e.up, exec: e.exec, down: e.down })
+  // Host-side commands run in checkouts of the default branch that the workspace hands out.
+  if (e.kind === 'docker') return new DockerEnvironment({ up: e.up, exec: e.exec, down: e.down, trusted: workspace })
   const why = `Rumba "${rumba.name}" uses the vercel-preview environment`
   const token = required(env, 'VERCEL_TOKEN', `${why}.`)
   const projectId = e.projectId ?? required(env, 'VERCEL_PROJECT_ID', `${why} and its rumba.yml sets no environment.project_id.`)
@@ -158,8 +159,8 @@ export function buildDeps(
   const sandbox = new DockerSandbox({ dockerfileDir: SANDBOX_DIR })
   const agent = agentFor(rumba, env, sandbox)
   const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
-  const environment = environmentFor(rumba, env, codeHost, sandbox)
   const workspace = new GitWorkspace({ repoRoot: repo.root, defaultBranch: repo.defaultBranch })
+  const environment = environmentFor(rumba, env, codeHost, sandbox, workspace)
   const secrets = secretValues(env)
   return {
     tracker: redactingTracker(tracker, secrets),

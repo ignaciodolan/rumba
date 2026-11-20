@@ -1,3 +1,5 @@
+import { realpath } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DockerEnvironment, shellRunner } from '../../../src/adapters/environment/docker.js'
 
@@ -147,6 +149,10 @@ describe('shellRunner', () => {
     } finally {
       delete process.env.RUMBA_WORKDIR
     }
+  })
+  it('sets PWD to the directory the command runs in', async () => {
+    const dir = await realpath(tmpdir())
+    expect(await shellRunner('printf "%s" "$PWD"; printf " %s" "$(env | grep -c "^PWD=")"', { cwd: dir, timeoutMs: 5000 })).toEqual({ exitCode: 0, output: `${dir} 1` })
   })
   it('reports exit code 124 on timeout', async () => {
     expect((await shellRunner('sleep 5', { cwd: process.cwd(), timeoutMs: 200 })).exitCode).toBe(124)

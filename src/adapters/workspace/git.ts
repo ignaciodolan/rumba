@@ -16,6 +16,8 @@ const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON
 const BOT_ENV = { GIT_AUTHOR_NAME: BOT_NAME, GIT_AUTHOR_EMAIL: BOT_EMAIL, GIT_COMMITTER_NAME: BOT_NAME, GIT_COMMITTER_EMAIL: BOT_EMAIL }
 
 interface Worktree { branch: string; gitDir: string }
+/** The branch recorded for a worktree that is on none; no real branch name is empty. */
+const DETACHED = ''
 
 /**
  * Worktrees of a trusted checkout, one per fix branch.
@@ -30,6 +32,8 @@ export class GitWorkspace implements Workspace {
   private readonly remote: string
   /** Worktrees this instance created or adopted, by real workdir path. */
   private readonly worktrees = new Map<string, Worktree>()
+  /** The default-branch commit each fix branch was started from by this instance. */
+  private readonly bases = new Map<string, string>()
 
   constructor(o: { repoRoot: string; defaultBranch: string; remote?: string }) {
     this.repoRoot = o.repoRoot
@@ -48,6 +52,7 @@ export class GitWorkspace implements Workspace {
     for (const dir of await this.registered(branch)) await this.removeWorktree(dir)
     if (await this.branchExists(branch)) await this.git(['branch', '-D', branch])
     const workdir = await this.addWorktree(['-b', branch], baseSha, branch)
+    this.bases.set(branch, baseSha)
     return { workdir, baseSha }
   }
 
@@ -64,8 +69,24 @@ export class GitWorkspace implements Workspace {
         workdir = await this.addWorktree([], branch, branch)
       }
     }
-    const baseSha = await this.git(['merge-base', `refs/heads/${branch}`, `refs/remotes/${this.remote}/${this.defaultBranch}`])
-    return { workdir, baseSha }
+    return { workdir, baseSha: await this.forkPoint(branch) }
+  }
+
+  /**
+   * A new checkout, on no branch, of the default-branch commit that `branch` started from:
+   * code a person merged, with nothing in it that an agent wrote. Commands that run on the
+   * host use it as their working directory. The commit is the one this instance fetched when
+   * it created the branch, or else the branch's merge base with the remote default branch;
+   * either way it is found from the trusted repository, never from a workdir.
+   */
+  async trustedCheckout(branch: string): Promise<string> {
+    if (!(await this.branchExists(branch))) throw new Error(`Branch ${branch} does not exist in ${this.repoRoot}`)
+    const base = this.bases.get(branch) ?? (await this.forkPoint(branch))
+    return this.addWorktree(['--detach'], base, DETACHED)
+  }
+
+  private forkPoint(branch: string): Promise<string> {
+    return this.git(['merge-base', `refs/heads/${branch}`, `refs/remotes/${this.remote}/${this.defaultBranch}`])
   }
 
   /** Adds a worktree in a new temp dir and records its git directory before any agent can touch it. */
@@ -86,9 +107,32 @@ export class GitWorkspace implements Workspace {
     await this.inWorktree(wt, workdir, ['add', '-A', '--', '.', `:(top,exclude)${OUTPUT_DIR}`])
     const staged = await this.inWorktree(wt, workdir, ['diff', '--cached', '--quiet', '--no-ext-diff'], [0, 1])
     if (staged.exitCode === 0 && opts.allowEmpty !== true) return null
+    const links = await this.stagedLinksOut(wt, workdir)
+    if (links.length > 0) throw new Error(`Refusing to commit symbolic links that point outside the repository: ${links.join(', ')}`)
     const empty = opts.allowEmpty === true ? ['--allow-empty'] : []
     await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', ...empty, '-m', message], [0], BOT_ENV)
     return (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD'])).stdout
+  }
+
+  /**
+   * Symbolic links this commit would add or change whose target is absolute or climbs out of
+   * the repository. Docker follows such a link on the host when a path below the checkout is
+   * mounted or used as a build context, so Rumba never puts one in a commit it brings up.
+   */
+  private async stagedLinksOut(wt: Worktree, workdir: string): Promise<string[]> {
+    const raw = (await this.inWorktree(wt, workdir, ['diff', '--cached', '--raw', '-z', '--no-abbrev', '--no-renames', '--no-ext-diff'])).stdout
+    const fields = raw.split('\0')
+    const out: string[] = []
+    // Each entry is ":<old mode> <new mode> <old sha> <new sha> <status>" followed by its path.
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const [, mode, , sha] = fields[i].split(' ')
+      if (mode !== '120000') continue
+      const file = fields[i + 1]
+      const target = (await this.inWorktree(wt, workdir, ['cat-file', 'blob', sha])).stdout
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), target))
+      if (path.posix.isAbsolute(target) || resolved === '..' || resolved.startsWith('../')) out.push(file)
+    }
+    return out
   }
 
   async reset(workdir: string, sha: string): Promise<void> {

@@ -1,8 +1,14 @@
 import type { Check, CheckResult } from '../core/types.js'
 
 export interface EnvHandle {
+  /** The checkout of the commit under test. */
   workdir: string
   baseUrl?: string
+  /**
+   * Set by an environment that starts commands on the host: the trusted checkout those
+   * commands run in. It is never `workdir`, which holds files an agent wrote.
+   */
+  hostDir?: string
 }
 
 export interface Environment {
