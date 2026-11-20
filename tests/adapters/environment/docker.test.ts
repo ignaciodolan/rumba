@@ -39,10 +39,20 @@ describe('DockerEnvironment', () => {
   })
 })
 
+const RUMBA_KEYS = [
+  'RUMBA_GITHUB_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN', 'LINEAR_API_KEY',
+  'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'VERCEL_TOKEN', 'VERCEL_AUTOMATION_BYPASS_SECRET',
+]
+
 describe('shellRunner', () => {
   const secret = 'RUMBA_TEST_SECRET_VALUE'
-  const saved = process.env.LINEAR_API_KEY
-  afterEach(() => { if (saved === undefined) delete process.env.LINEAR_API_KEY; else process.env.LINEAR_API_KEY = saved })
+  const saved = Object.fromEntries(RUMBA_KEYS.map((k) => [k, process.env[k]]))
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
 
   it('captures output and exit code', async () => {
     expect(await shellRunner('echo ok', { cwd: process.cwd(), timeoutMs: 5000 })).toEqual({ exitCode: 0, output: 'ok' })
@@ -53,10 +63,18 @@ describe('shellRunner', () => {
     expect(r.output).toContain('out')
     expect(r.output).toContain('err')
   })
-  it('keeps Rumba keys out of the command environment', async () => {
-    process.env.LINEAR_API_KEY = secret
-    const r = await shellRunner('printf "%s" "$LINEAR_API_KEY"', { cwd: process.cwd(), timeoutMs: 5000 })
+  it.each(RUMBA_KEYS)('keeps %s out of the command environment', async (key) => {
+    process.env[key] = secret
+    const r = await shellRunner(`printf "%s" "$${key}"`, { cwd: process.cwd(), timeoutMs: 5000 })
     expect(r).toEqual({ exitCode: 0, output: '' })
+  })
+  it('keeps the other variables', async () => {
+    process.env.RUMBA_TEST_PLAIN = 'kept'
+    try {
+      expect(await shellRunner('printf "%s" "$RUMBA_TEST_PLAIN"', { cwd: process.cwd(), timeoutMs: 5000 })).toEqual({ exitCode: 0, output: 'kept' })
+    } finally {
+      delete process.env.RUMBA_TEST_PLAIN
+    }
   })
   it('reports exit code 124 on timeout', async () => {
     expect((await shellRunner('sleep 5', { cwd: process.cwd(), timeoutMs: 200 })).exitCode).toBe(124)
