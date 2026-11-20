@@ -1,0 +1,20 @@
+# Rumba "demo". A person opts a ticket in by adding the label rumba:demo.
+
+paths:
+  - "src/**"
+  - "test/**"
+
+tracker:
+  kind: github
+
+agent:
+  kind: claude-code
+
+environment:
+  kind: docker
+  up: docker compose up -d --wait --build
+  exec: docker compose exec -T app
+  down: docker compose down -v --rmi local --remove-orphans
+
+verify:
+  test: node --test

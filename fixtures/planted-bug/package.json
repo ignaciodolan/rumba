@@ -1,0 +1,10 @@
+{
+  "name": "planted-bug",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A tiny package with a planted bug, used by Rumba's end-to-end test.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

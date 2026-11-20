@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node -e \"import('node:fs').then((fs) => fs.cpSync('src/init/templates', 'dist/init/templates', { recursive: true }))\"",
     "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
