@@ -35,6 +35,12 @@ This creates:
 
 Then add the keys the rumba needs as repository secrets (see [Environment variables](#environment-variables)) and commit the files.
 
+Before you enable the workflow:
+
+- `rumba-cli` is not published to npm yet, and until the name is taken anyone could publish a package under it. The workflow's `npx rumba-cli run` step is ready for when it is. Until then, do not enable the workflow, or replace that step with an install from a checkout of Rumba you trust.
+- With the default Actions token, turn on the repository setting "Allow GitHub Actions to create and approve pull requests" (Settings, Actions, General). Without it, opening the pull request fails after all the work is done.
+- Keep the checkout step's stored credentials, which is the default: do not set `persist-credentials: false`. Rumba fetches the default branch with them.
+
 A rumba name uses lowercase letters, digits and hyphens. It is the folder name under `.rumba/`, and a repository can have several rumbas, each with its own scope, agent, model and environment.
 
 ## How a ticket moves

@@ -25,6 +25,29 @@ describe('initRumba', () => {
     expect((await loadRumbas(root))[0].name).toBe('hub')
     expect(r.notes.join('\n')).toContain('do not start this repository\'s own CI')
   })
+  it('says what a person must set up before enabling the workflow, and keeps the CI note word for word', async () => {
+    const { notes } = await initRumba(root, 'hub')
+    const text = notes.join('\n')
+    expect(text).toContain('rumba-cli is not published to npm yet')
+    expect(text).toContain('Do not enable the workflow until rumba-cli is published, or replace its "Run rumba" step with an install from a checkout of Rumba you trust.')
+    expect(text).toContain('"Allow GitHub Actions to create and approve pull requests"')
+    expect(notes).toContain(
+      'Pull requests opened with the default GitHub Actions token do not start this repository\'s own CI. ' +
+      'Set RUMBA_GITHUB_TOKEN to a fine-grained token or a GitHub App token to get CI on Rumba\'s pull requests.',
+    )
+  })
+  it('explains the run step and the checkout credentials in the workflow', async () => {
+    await initRumba(root, 'hub')
+    const lines = (await read(root, '.github/workflows/rumba.yml')).split('\n')
+    const runAt = lines.findIndex((l) => l.trim() === '- name: Run rumba')
+    const above = lines.slice(0, runAt).reverse()
+    const comment = above.slice(0, above.findIndex((l) => !l.trim().startsWith('#'))).reverse().join('\n')
+    expect(comment).toContain('not published to npm yet'); expect(comment).toContain('a checkout of Rumba you trust')
+    const checkoutAt = lines.findIndex((l) => l.includes('uses: actions/checkout@'))
+    expect(lines.slice(0, checkoutAt).join('\n')).toMatch(/persist-credentials[\s\S]*Rumba fetches the default branch/)
+    const job = Object.values(parse(lines.join('\n')).jobs)[0] as { steps: { uses?: string; with?: Record<string, unknown> }[] }
+    expect(job.steps.find((s) => s.uses?.startsWith('actions/checkout@'))?.with).not.toHaveProperty('persist-credentials')
+  })
   it('adds a second rumba to the managed workflow matrix', async () => {
     await initRumba(root, 'hub'); await initRumba(root, 'api')
     expect(await read(root, '.github/workflows/rumba.yml')).toMatch(/rumba:\s*\[\s*hub,\s*api\s*\]/)

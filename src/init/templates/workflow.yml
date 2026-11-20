@@ -23,12 +23,19 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      # Keep the checkout's stored credentials (the default; do not set persist-credentials: false).
+      # Rumba fetches the default branch with them.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      # rumba-cli is not published to npm yet, and until the name is taken anyone could publish a
+      # package under it. Do not enable this workflow until rumba-cli is published, or replace this
+      # step with an install from a checkout of Rumba you trust.
+      # With the default Actions token, turn on the repository setting "Allow GitHub Actions to
+      # create and approve pull requests", or opening the pull request fails after all the work.
       - name: Run rumba
         run: npx rumba-cli run --name ${{ matrix.rumba }}
         env:

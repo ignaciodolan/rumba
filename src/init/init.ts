@@ -12,6 +12,14 @@ const CI_NOTE =
   'Pull requests opened with the default GitHub Actions token do not start this repository\'s own CI. ' +
   'Set RUMBA_GITHUB_TOKEN to a fine-grained token or a GitHub App token to get CI on Rumba\'s pull requests.'
 
+const PACKAGE_NOTE =
+  'The workflow runs `npx rumba-cli`, but rumba-cli is not published to npm yet, and until the name is taken anyone could publish a package under it. ' +
+  'Do not enable the workflow until rumba-cli is published, or replace its "Run rumba" step with an install from a checkout of Rumba you trust.'
+
+const PULL_REQUEST_NOTE =
+  'With the default GitHub Actions token, turn on the repository setting "Allow GitHub Actions to create and approve pull requests" ' +
+  '(Settings, Actions, General). Without it, opening the pull request fails after all the work is done.'
+
 async function template(file: string, name: string): Promise<string> {
   return (await readFile(path.join(TEMPLATES, file), 'utf8')).replaceAll('__NAME__', name)
 }
@@ -72,6 +80,6 @@ export async function initRumba(repoRoot: string, name: string): Promise<{ creat
     }
   }
 
-  notes.push(CI_NOTE)
+  notes.push(PACKAGE_NOTE, PULL_REQUEST_NOTE, CI_NOTE)
   return { created, notes }
 }
