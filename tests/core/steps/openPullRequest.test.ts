@@ -21,6 +21,14 @@ describe('openPullRequest', () => {
     await openPullRequest(d, makeRumba({ paths: ['src/**'] }), makeTicket(), verified(d))
     expect(d.codeHost.prs[0]!.body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
   })
+  it('lists an undeclared file from the checks commit that is outside the paths', async () => {
+    const d = makeDeps(); d.workspace.changed = ['apps/hub/x.ts', 'packages/ui/helper.ts', 'tests/rumba/c1.test.ts']
+    const v = verified(d); v.checkHashes = { ...v.checkHashes, 'packages/ui/helper.ts': 'h2' }
+    await openPullRequest(d, makeRumba({ paths: ['apps/hub/**'] }), makeTicket(), v)
+    const body = d.codeHost.prs[0]!.body
+    expect(body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/helper\.ts/)
+    expect(body.split("## Outside this rumba's scope")[1]).not.toContain('tests/rumba/c1.test.ts')
+  })
   it('records the state before commenting, so a failed comment cannot lead to a second pull request', async () => {
     const d = makeDeps(); d.tracker.comment = async () => { throw new Error('comment failed') }
     await expect(openPullRequest(d, makeRumba(), makeTicket(), verified(d))).rejects.toThrow('comment failed')

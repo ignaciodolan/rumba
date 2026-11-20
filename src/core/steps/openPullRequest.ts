@@ -12,7 +12,7 @@ export async function openPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ti
 
   const { workdir } = await deps.workspace.prepare(branch, { fresh: false })
   const changed = await deps.workspace.changedFiles(workdir, baseSha)
-  const outside = outsideScope(changed, rumba.paths, [...Object.keys(state.checkHashes), ...state.checks.flatMap((c) => c.files)])
+  const outside = outsideScope(changed, rumba.paths, state.checks.flatMap((c) => c.files))
   await deps.codeHost.pushBranch(workdir, branch, { force: true })
 
   const url = await deps.codeHost.openPullRequest({
