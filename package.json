@@ -15,7 +15,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node -e \"import('node:fs').then((fs) => fs.cpSync('src/init/templates', 'dist/init/templates', { recursive: true }))\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

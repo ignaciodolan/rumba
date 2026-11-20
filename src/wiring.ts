@@ -1,0 +1,138 @@
+import { randomUUID } from 'node:crypto'
+import { Octokit } from '@octokit/rest'
+import { ClaudeCodeAgent } from './adapters/agent/claudeCode.js'
+import { GeminiCliAgent } from './adapters/agent/geminiCli.js'
+import { GitHubCodeHost } from './adapters/codeHost/github.js'
+import { DockerEnvironment } from './adapters/environment/docker.js'
+import { HttpVercelClient, VercelPreviewEnvironment } from './adapters/environment/vercelPreview.js'
+import { DockerSandbox } from './adapters/sandbox/docker.js'
+import { GitHubTracker } from './adapters/tracker/github.js'
+import { LinearTracker, SdkLinearGateway } from './adapters/tracker/linear.js'
+import { GitWorkspace } from './adapters/workspace/git.js'
+import type { RumbaConfig } from './config/load.js'
+import { STATE_NAMES } from './core/states.js'
+import type { Agent } from './ports/agent.js'
+import type { CodeHost } from './ports/codeHost.js'
+import type { Deps } from './ports/deps.js'
+import type { Environment } from './ports/environment.js'
+import type { Sandbox } from './ports/sandbox.js'
+import type { Tracker } from './ports/tracker.js'
+
+export class MissingKeyError extends Error {}
+
+type Env = Record<string, string | undefined>
+
+/** Variables whose values must never be printed or posted. Ids and the login are not secret. */
+const SECRET_VARIABLES = [
+  'RUMBA_GITHUB_TOKEN', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY',
+  'VERCEL_TOKEN', 'VERCEL_AUTOMATION_BYPASS_SECRET',
+]
+
+/** The value of a variable that is set and not empty. */
+function value(env: Env, name: string): string | undefined {
+  const v = env[name]
+  return v === undefined || v === '' ? undefined : v
+}
+
+function required(env: Env, name: string, why: string): string {
+  const v = value(env, name)
+  if (v === undefined) throw new MissingKeyError(`${name} is not set. ${why}`)
+  return v
+}
+
+/** The values of every secret variable that is set, for redaction. */
+export function secretValues(env: Env): string[] {
+  return SECRET_VARIABLES.map((name) => value(env, name)).filter((v): v is string => v !== undefined)
+}
+
+const GITHUB_PATTERNS = [
+  /^https:\/\/(?:[^@/]+@)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+  /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+  /^ssh:\/\/git@github\.com(?::22)?\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+]
+const GITHUB_SEGMENT = /^[A-Za-z0-9_.-]+$/
+
+/** Owner and repository name from a github.com remote URL, over https or ssh. */
+export function parseRemote(url: string): { owner: string; name: string } {
+  for (const pattern of GITHUB_PATTERNS) {
+    const m = pattern.exec(url.trim())
+    if (m && GITHUB_SEGMENT.test(m[1]) && GITHUB_SEGMENT.test(m[2])) return { owner: m[1], name: m[2] }
+  }
+  throw new Error('Rumba stage 1 supports GitHub remotes only: the origin remote must be a github.com repository, over https or ssh.')
+}
+
+function githubToken(rumba: RumbaConfig, env: Env): string {
+  const token = value(env, 'RUMBA_GITHUB_TOKEN') ?? value(env, 'GITHUB_TOKEN')
+  if (token === undefined) {
+    const uses = rumba.tracker.kind === 'github' ? 'GitHub as its tracker and code host' : 'GitHub as its code host'
+    throw new MissingKeyError(`RUMBA_GITHUB_TOKEN is not set, and neither is GITHUB_TOKEN. Rumba "${rumba.name}" uses ${uses}.`)
+  }
+  return token
+}
+
+function trackerFor(rumba: RumbaConfig, env: Env, repo: { owner: string; name: string }, octokit: () => Octokit): Tracker {
+  const common = { labels: rumba.labels, stateNames: [...STATE_NAMES] }
+  if (rumba.tracker.kind === 'linear') {
+    const apiKey = required(env, 'LINEAR_API_KEY', `Rumba "${rumba.name}" uses the linear tracker.`)
+    // The config loader refuses a linear tracker without a team.
+    const team = rumba.tracker.team ?? ''
+    return new LinearTracker({ gateway: new SdkLinearGateway(apiKey), team, project: rumba.tracker.project, ...common })
+  }
+  const login = value(env, 'RUMBA_GITHUB_LOGIN')
+  return new GitHubTracker({ octokit: octokit(), owner: repo.owner, repo: repo.name, ...common, ...(login === undefined ? {} : { login }) })
+}
+
+/** Only the tracker of a rumba, for commands that read tickets and change nothing else. */
+export function buildTracker(rumba: RumbaConfig, env: Env, repo: { owner: string; name: string }): Tracker {
+  return trackerFor(rumba, env, repo, () => new Octokit({ auth: githubToken(rumba, env) }))
+}
+
+function agentFor(rumba: RumbaConfig, env: Env, sandbox: Sandbox): Agent {
+  const why = `Rumba "${rumba.name}" uses the ${rumba.agent.kind} agent.`
+  const timeoutMs = rumba.limits.minutesPerTicket * 60_000
+  const { model } = rumba.agent
+  if (rumba.agent.kind === 'gemini-cli') return new GeminiCliAgent({ sandbox, apiKey: required(env, 'GEMINI_API_KEY', why), model, timeoutMs })
+  return new ClaudeCodeAgent({ sandbox, apiKey: required(env, 'ANTHROPIC_API_KEY', why), model, timeoutMs })
+}
+
+function environmentFor(rumba: RumbaConfig, env: Env, codeHost: CodeHost, sandbox: Sandbox): Environment {
+  const e = rumba.environment
+  if (e.kind === 'docker') return new DockerEnvironment({ up: e.up, exec: e.exec, down: e.down })
+  const why = `Rumba "${rumba.name}" uses the vercel-preview environment`
+  const token = required(env, 'VERCEL_TOKEN', `${why}.`)
+  const projectId = e.projectId ?? required(env, 'VERCEL_PROJECT_ID', `${why} and its rumba.yml sets no environment.project_id.`)
+  const teamId = value(env, 'VERCEL_TEAM_ID')
+  const bypassSecret = value(env, 'VERCEL_AUTOMATION_BYPASS_SECRET')
+  return new VercelPreviewEnvironment({
+    client: new HttpVercelClient({ token, projectId, ...(teamId === undefined ? {} : { teamId }) }),
+    codeHost,
+    sandbox,
+    ...(bypassSecret === undefined ? {} : { bypassSecret }),
+  })
+}
+
+/** Builds the real adapters for one rumba. Constructs objects only: no I/O and no network call. */
+export function buildDeps(
+  rumba: RumbaConfig,
+  env: Record<string, string | undefined>,
+  repo: { root: string; owner: string; name: string; defaultBranch: string },
+): Deps {
+  const token = githubToken(rumba, env)
+  const octokit = new Octokit({ auth: token })
+  const tracker = trackerFor(rumba, env, repo, () => octokit)
+  const sandbox = new DockerSandbox()
+  const agent = agentFor(rumba, env, sandbox)
+  const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
+  const environment = environmentFor(rumba, env, codeHost, sandbox)
+  const workspace = new GitWorkspace({ repoRoot: repo.root, defaultBranch: repo.defaultBranch })
+  return {
+    tracker,
+    agent,
+    environment,
+    codeHost,
+    workspace,
+    clock: () => new Date(),
+    runId: randomUUID(),
+    secrets: secretValues(env),
+  }
+}
