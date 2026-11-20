@@ -1,5 +1,5 @@
 import type { RumbaConfig } from '../config/load.js'
-import { cleanOutput } from './redact.js'
+import { cleanOutput, MAX_OUTPUT } from './redact.js'
 import type { CheckResult, Criterion, Ticket, TicketState } from './types.js'
 
 export interface EvidenceInput {
@@ -49,7 +49,30 @@ function verdict(results: CheckResult[] | undefined, criterionId: string): strin
   return r === undefined ? '-' : r.passed ? 'pass' : 'fail'
 }
 
+/** Well under GitHub's 65,536-character limit on a pull request body. */
+export const MAX_PULL_REQUEST_BODY = 60000
+/** Below this, check output is left out rather than cut further. */
+const MIN_OUTPUT_CAP = 100
+const OUTPUT_LEFT_OUT = 'The check output was left out: the pull request body was too long.'
+
+/**
+ * The pull request body, at most MAX_PULL_REQUEST_BODY characters where cutting the check
+ * output can get it there: each output's cap is halved until it fits, and below
+ * MIN_OUTPUT_CAP the outputs are left out with a note.
+ */
 export function renderPullRequestBody(i: EvidenceInput): string {
+  let cap = MAX_OUTPUT
+  let body = render(i, cap)
+  while (body.length > MAX_PULL_REQUEST_BODY) {
+    cap = Math.floor(cap / 2)
+    if (cap < MIN_OUTPUT_CAP) return render(i, null)
+    body = render(i, cap)
+  }
+  return body
+}
+
+/** `cap`: the most characters kept of each check output; null leaves the outputs out. */
+function render(i: EvidenceInput, cap: number | null): string {
   const { ticket, rumba, state } = i
   const sections: string[] = []
 
@@ -71,14 +94,18 @@ export function renderPullRequestBody(i: EvidenceInput): string {
     sections.push(`## Outside this rumba's scope\n\nThese files changed outside the paths of this rumba.\n\n${i.outsideScope.map((f) => `- ${codeSpan(f)}`).join('\n')}`)
   }
 
-  const outputs = state.checks.map((check) => {
-    const part = (label: string, results: CheckResult[] | undefined) => {
-      const r = results?.find((x) => x.criterionId === check.criterionId)
-      return `${label}:\n\n${block(cleanOutput(r?.output ?? '', i.secrets))}`
-    }
-    return `<details>\n<summary>${escapeHtml(check.criterionId)}: ${escapeHtml(check.command)}</summary>\n\n${part('Before', state.before)}\n\n${part('After', state.after)}\n\n</details>`
-  })
-  sections.push(['## Check output', ...outputs].join('\n\n'))
+  if (cap === null) {
+    sections.push(`## Check output\n\n${OUTPUT_LEFT_OUT}`)
+  } else {
+    const outputs = state.checks.map((check) => {
+      const part = (label: string, results: CheckResult[] | undefined) => {
+        const r = results?.find((x) => x.criterionId === check.criterionId)
+        return `${label}:\n\n${block(cleanOutput(r?.output ?? '', i.secrets, cap))}`
+      }
+      return `<details>\n<summary>${escapeHtml(check.criterionId)}: ${escapeHtml(check.command)}</summary>\n\n${part('Before', state.before)}\n\n${part('After', state.after)}\n\n</details>`
+    })
+    sections.push(['## Check output', ...outputs].join('\n\n'))
+  }
 
   sections.push(`## How this was produced\n\n- Environment: ${rumba.environment.kind}\n- Agent: ${rumba.agent.kind}\n- Model: ${rumba.agent.model ?? 'default'}`)
 

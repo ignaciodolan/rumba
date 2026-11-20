@@ -56,3 +56,27 @@ describe('stateComment', () => {
     })
   })
 })
+
+describe('encodeStateComment size', () => {
+  const results = (n: number, size: number, passed: boolean) =>
+    Array.from({ length: n }, (_, i) => ({ criterionId: `c${i}`, passed, exitCode: passed ? 0 : 1, output: `${i}`.padEnd(size, 'o') }))
+  const dropped = (rs: { output: string }[]) => rs.map((r) => ({ ...r, output: '[output dropped: state too large]' }))
+
+  it('drops check output when the state would not fit, without changing the state', () => {
+    const s = { ...newState('hub', t0), before: results(20, 4000, false), after: results(20, 4000, true) }
+    const copy = structuredClone(s)
+    const body = encodeStateComment(s)
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(s).toEqual(copy)
+    expect(decodeStateComment(body)).toEqual({ ...s, before: dropped(s.before), after: dropped(s.after) })
+  })
+  it('leaves a state under the limit unchanged', () => {
+    const s = { ...newState('hub', t0), before: results(2, 1000, false), after: results(2, 1000, true) }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it('throws, with the size, when the state does not fit even without output', () => {
+    const criteria = Array.from({ length: 200 }, (_, i) => ({ id: `c${i}`, text: 'x'.repeat(500), checkable: true }))
+    expect(() => encodeStateComment({ ...newState('hub', t0), criteria })).toThrow(/too large to store: \d+ characters/)
+  })
+})
+

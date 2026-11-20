@@ -32,10 +32,30 @@ const ticketState = z.object({
   history: z.array(z.object({ state: stateName, at: z.string(), note: z.string().optional() })),
 })
 
-export function encodeStateComment(s: TicketState): string {
+/** Well under GitHub's 65,536-character limit on a comment. */
+export const MAX_STATE_COMMENT = 60000
+const OUTPUT_DROPPED = '[output dropped: state too large]'
+
+function encode(s: TicketState): string {
   // Escape backticks so no value in the state can close the fence early.
   const json = JSON.stringify({ marker: STATE_MARKER, ...s }, null, 2).replaceAll('`', '\\u0060')
   return `Rumba \`${s.rumba}\` state: ${s.state}\n\n\`\`\`json\n${json}\n\`\`\`\n`
+}
+
+/**
+ * The state comment, at most MAX_STATE_COMMENT characters. When it would be longer, the check
+ * output is left out of it; when it is still too long, this throws. `s` is never changed.
+ */
+export function encodeStateComment(s: TicketState): string {
+  const full = encode(s)
+  if (full.length <= MAX_STATE_COMMENT) return full
+  const drop = (results: TicketState['before']) => results?.map((r) => ({ ...r, output: OUTPUT_DROPPED }))
+  const slim: TicketState = { ...s }
+  if (s.before !== undefined) slim.before = drop(s.before)
+  if (s.after !== undefined) slim.after = drop(s.after)
+  const body = encode(slim)
+  if (body.length <= MAX_STATE_COMMENT) return body
+  throw new Error(`The state is too large to store: ${body.length} characters, over the limit of ${MAX_STATE_COMMENT}.`)
 }
 
 export function decodeStateComment(body: string): TicketState | null {

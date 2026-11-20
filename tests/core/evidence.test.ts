@@ -42,6 +42,36 @@ describe('renderPullRequestBody', () => {
   })
 })
 
+describe('renderPullRequestBody size', () => {
+  const big = (n: number, command: (i: number) => string, outputSize: number) => {
+    const s = verified(d)
+    s.criteria = Array.from({ length: n }, (_, i) => ({ id: `c${i}`, text: `Criterion ${i} `.padEnd(500, 'x'), checkable: true }))
+    s.checks = s.criteria.map((c, i) => ({ criterionId: c.id, command: command(i), files: [] }))
+    s.before = s.criteria.map((c) => ({ criterionId: c.id, passed: false, exitCode: 1, output: 'b'.repeat(outputSize) }))
+    s.after = s.criteria.map((c) => ({ criterionId: c.id, passed: true, exitCode: 0, output: 'a'.repeat(outputSize) }))
+    return s
+  }
+  const render = (s: ReturnType<typeof verified>) => renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+
+  it('cuts check output harder until the body fits', () => {
+    const body = render(big(20, (i) => `npm test -- c${i}`, 4000))
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(body.match(/<details>/g)).toHaveLength(20)
+    expect(body).toContain('[…cut]\n'); expect(body).toContain('a'.repeat(500))
+  })
+  it('drops the check output with a note when cutting is not enough, keeping every evidence row', () => {
+    const body = render(big(20, (i) => `c${i} `.padEnd(2000, 'z'), 4000))
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(body).toContain('## Check output\n\nThe check output was left out: the pull request body was too long.')
+    expect(body).not.toContain('<details>')
+    expect(body.match(/\| fail \| pass \|/g)).toHaveLength(20)
+  })
+  it('leaves a body under the limit as it was', () => {
+    const body = render(big(2, (i) => `npm test -- c${i}`, 3000))
+    expect(body).toContain('a'.repeat(3000)); expect(body).not.toContain('[…cut]')
+  })
+})
+
 describe('hasUnverified', () => {
   it('is true for a criterion that cannot be checked, false when all have checks', () => {
     expect(hasUnverified(verified(d))).toBe(true)
