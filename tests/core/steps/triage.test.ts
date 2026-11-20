@@ -121,5 +121,16 @@ describe('triage', () => {
     expect(d.tracker.comments.at(-1)?.body).toBe(`Rumba skipped this ticket: ${'r'.repeat(1000)}`)
     expect(s.history.at(-1)?.note).toBe('r'.repeat(1000))
   })
+  it('redacts the skip reason before cutting it, so no part of a secret straddling the cut survives', async () => {
+    const secret = 'tok-s3cret-value'
+    const d = makeDeps(); d.secrets = [secret]
+    d.agent.script.triage = { ...bug, workable: false, reason: `${'r'.repeat(995)}${secret} and more` }
+    const s = await triage(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    const comment = d.tracker.comments.at(-1)!.body; const note = s.history.at(-1)!.note!
+    for (const text of [comment, note, JSON.stringify(d.tracker.states.get('123'))]) {
+      for (let n = 3; n <= secret.length; n++) expect(text).not.toContain(secret.slice(0, n))
+    }
+    expect(note).toBe(`${'r'.repeat(995)}[reda`)
+  })
 })
 

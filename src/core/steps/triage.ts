@@ -3,6 +3,7 @@ import type { AgentTask } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
 import { extractAcceptanceCriteria } from '../criteria.js'
 import { fixBranch } from '../labels.js'
+import { redact } from '../redact.js'
 import { transition } from '../states.js'
 import type { Ticket, TicketState } from '../types.js'
 import { cleanupQuietly } from './teardown.js'
@@ -25,7 +26,8 @@ export async function triage(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
     if (result.kind !== 'triage') throw new Error(`Agent returned ${result.kind} for a triage task`)
 
     if (!result.workable) {
-      const reason = result.reason.slice(0, MAX_REASON)
+      // Redact before cutting: a secret cut in two could no longer be matched.
+      const reason = redact(result.reason, deps.secrets).slice(0, MAX_REASON)
       await deps.tracker.comment(ticket, `Rumba skipped this ticket: ${reason}`)
       current = transition(current, 'skipped', deps.clock(), reason)
       await deps.tracker.writeState(ticket, current)
