@@ -4,7 +4,13 @@ import { z } from 'zod'
 import { AgentError, type AgentResult, type AgentTaskKind } from '../../ports/agent.js'
 import { RESULT_PATH } from './prompts.js'
 
-const criterion = z.object({ id: z.string().min(1), text: z.string().min(1), checkable: z.boolean() })
+// Limits keep what Rumba stores and posts within GitHub's 65,536-character bodies.
+const MAX_ITEMS = 20
+const MAX_CRITERION_TEXT = 500
+const MAX_COMMAND = 2000
+
+const criterion = z.object({ id: z.string().min(1), text: z.string().min(1).max(MAX_CRITERION_TEXT), checkable: z.boolean() })
+const criteria = z.array(criterion).max(MAX_ITEMS)
 
 /** Check files are hashed and read by Rumba later, so they must stay inside the workdir. */
 const relativeFile = z.string().min(1).refine(
@@ -12,7 +18,7 @@ const relativeFile = z.string().min(1).refine(
   { message: 'must be a relative path inside the repository, with no ".." and no backslashes' },
 )
 
-const check = z.object({ criterionId: z.string().min(1), command: z.string().min(1), files: z.array(relativeFile) })
+const check = z.object({ criterionId: z.string().min(1), command: z.string().min(1).max(MAX_COMMAND), files: z.array(relativeFile) })
 
 const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
   triage: z.object({
@@ -20,10 +26,10 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
     workable: z.boolean(),
     reason: z.string(),
     ticketKind: z.enum(['bug', 'feature']),
-    criteria: z.array(criterion).nullable(),
+    criteria: criteria.nullable(),
   }),
-  'draft-criteria': z.object({ kind: z.literal('draft-criteria'), criteria: z.array(criterion) }),
-  'write-checks': z.object({ kind: z.literal('write-checks'), checks: z.array(check) }),
+  'draft-criteria': z.object({ kind: z.literal('draft-criteria'), criteria }),
+  'write-checks': z.object({ kind: z.literal('write-checks'), checks: z.array(check).max(MAX_ITEMS) }),
   fix: z.object({ kind: z.literal('fix'), summary: z.string() }),
 }
 

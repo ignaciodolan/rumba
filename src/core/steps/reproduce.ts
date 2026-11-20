@@ -3,7 +3,7 @@ import { AgentError } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
 import { protectedViolations } from '../guards.js'
 import { fixBranch } from '../labels.js'
-import { cleanOutput } from '../redact.js'
+import { checkOutputMax, cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
 import type { Check, CheckResult, Criterion, Ticket, TicketState } from '../types.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
@@ -43,9 +43,10 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
       await deps.tracker.writeState(ticket, current)
 
       const before: CheckResult[] = []
+      const max = checkOutputMax(checks.length)
       for (const check of checks) {
         const r = await deps.environment.runCheck(handle, check)
-        before.push({ ...r, output: cleanOutput(r.output, deps.secrets) })
+        before.push({ ...r, output: cleanOutput(r.output, deps.secrets, max) })
       }
       current = { ...current, before }
 

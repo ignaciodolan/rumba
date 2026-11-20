@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_OUTPUT, cleanOutput } from '../../src/core/redact.js'
+import { MAX_OUTPUT, checkOutputMax, cleanOutput } from '../../src/core/redact.js'
 
 describe('cleanOutput', () => {
   it('redacts secrets and ignores empty ones', () => {
@@ -22,5 +22,20 @@ describe('cleanOutput', () => {
     expect(out).toBe('b [redacted] u [redacted]')
     const url = Buffer.from('a>b?c>d').toString('base64url')
     expect(cleanOutput(`t ${url}`, ['a>b?c>d'])).toBe('t [redacted]')
+  })
+  it('keeps the tail up to a given maximum', () => {
+    const out = cleanOutput('x'.repeat(1000) + 'END', [], 200)
+    expect(out).toBe('[…cut]\n' + ('x'.repeat(1000) + 'END').slice(-200))
+    expect(cleanOutput('short', [], 200)).toBe('short')
+  })
+})
+
+describe('checkOutputMax', () => {
+  it('shares 12,000 characters among the checks, between 200 and MAX_OUTPUT each', () => {
+    expect(checkOutputMax(1)).toBe(MAX_OUTPUT)
+    expect(checkOutputMax(3)).toBe(MAX_OUTPUT)
+    expect(checkOutputMax(4)).toBe(3000)
+    expect(checkOutputMax(20)).toBe(600)
+    expect(checkOutputMax(100)).toBe(200)
   })
 })

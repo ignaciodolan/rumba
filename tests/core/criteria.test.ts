@@ -52,4 +52,11 @@ describe('criteria', () => {
     ])
     expect(extractAcceptanceCriteria('    ## Acceptance criteria\n- one')).toBeNull()
   })
+  it('keeps at most 20 criteria and cuts each to 500 characters', () => {
+    const items = Array.from({ length: 25 }, (_, i) => `- item ${i + 1}`)
+    const found = extractAcceptanceCriteria(`## Acceptance criteria\n${items.join('\n')}`)!
+    expect(found).toHaveLength(20); expect(found.at(-1)).toEqual({ id: 'c20', text: 'item 20', checkable: true })
+    expect(extractAcceptanceCriteria(`## Acceptance criteria\n- ${'a'.repeat(600)}`)![0]!.text).toBe('a'.repeat(500))
+  })
 })
+

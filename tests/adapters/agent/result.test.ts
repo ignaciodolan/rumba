@@ -74,4 +74,25 @@ describe('readAgentResult', () => {
     await writeResult({ kind: 'draft-criteria', criteria: [{ id: 'c1', text: '', checkable: true }] })
     await expect(readAgentResult(dir, 'draft-criteria')).rejects.toThrow(/text/)
   })
+  it('accepts 20 criteria of 500 characters and 20 checks with 2,000-character commands', async () => {
+    const criteria = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, text: 'x'.repeat(500), checkable: true }))
+    await writeResult({ kind: 'draft-criteria', criteria })
+    await expect(readAgentResult(dir, 'draft-criteria')).resolves.toMatchObject({ criteria })
+    const checks = Array.from({ length: 20 }, (_, i) => ({ criterionId: `c${i}`, command: 'y'.repeat(2000), files: [] }))
+    await writeResult({ kind: 'write-checks', checks })
+    await expect(readAgentResult(dir, 'write-checks')).resolves.toMatchObject({ checks })
+  })
+
+  it.each([
+    ['21 drafted criteria', 'draft-criteria', { kind: 'draft-criteria', criteria: Array.from({ length: 21 }, (_, i) => ({ id: `c${i}`, text: 't', checkable: true })) }],
+    ['a drafted criterion of 501 characters', 'draft-criteria', { kind: 'draft-criteria', criteria: [{ id: 'c1', text: 'x'.repeat(501), checkable: true }] }],
+    ['21 triage criteria', 'triage', { kind: 'triage', workable: true, reason: '', ticketKind: 'bug', criteria: Array.from({ length: 21 }, (_, i) => ({ id: `c${i}`, text: 't', checkable: true })) }],
+    ['a triage criterion of 501 characters', 'triage', { kind: 'triage', workable: true, reason: '', ticketKind: 'bug', criteria: [{ id: 'c1', text: 'x'.repeat(501), checkable: true }] }],
+    ['21 checks', 'write-checks', { kind: 'write-checks', checks: Array.from({ length: 21 }, (_, i) => ({ criterionId: `c${i}`, command: 'true', files: [] })) }],
+    ['a check command of 2,001 characters', 'write-checks', { kind: 'write-checks', checks: [{ criterionId: 'c1', command: 'y'.repeat(2001), files: [] }] }],
+  ] as const)('rejects %s', async (_n, kind, value) => {
+    await writeResult(value)
+    await expect(readAgentResult(dir, kind)).rejects.toThrow(AgentError)
+  })
 })
+

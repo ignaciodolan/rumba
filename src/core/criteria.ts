@@ -2,6 +2,10 @@ import type { Criterion, LabelNames } from './types.js'
 
 export const CRITERIA_MARKER = 'rumba-criteria-v1'
 
+/** The same limits the agent's criteria have, so stored state stays within GitHub's comment size. */
+const MAX_CRITERIA = 20
+const MAX_CRITERION_TEXT = 500
+
 export function renderCriteriaComment(c: Criterion[], labels: LabelNames): string {
   const items = c.map(x => `- [ ] ${x.text}`).join('\n')
   return [
@@ -54,5 +58,5 @@ export function extractAcceptanceCriteria(ticketBody: string): Criterion[] | nul
     if (text) texts.push(text)
   }
   if (!found || texts.length === 0) return null
-  return texts.map((text, i) => ({ id: `c${i + 1}`, text, checkable: true }))
+  return texts.slice(0, MAX_CRITERIA).map((text, i) => ({ id: `c${i + 1}`, text: text.slice(0, MAX_CRITERION_TEXT), checkable: true }))
 }

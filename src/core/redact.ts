@@ -16,9 +16,18 @@ function forms(secrets: string[]): string[] {
   return [...all].sort((a, b) => b.length - a.length)
 }
 
-/** Replaces each non-empty secret with '[redacted]', then keeps the last MAX_OUTPUT characters. */
-export function cleanOutput(output: string, secrets: string[]): string {
+/** All check output of one ticket shares this many characters, so the state comment stays well under GitHub's limit. */
+const CHECK_OUTPUT_BUDGET = 12000
+const MIN_CHECK_OUTPUT = 200
+
+/** Replaces each non-empty secret with '[redacted]', then keeps the last `max` characters. */
+export function cleanOutput(output: string, secrets: string[], max = MAX_OUTPUT): string {
   let text = output
   for (const form of forms(secrets)) text = text.split(form).join('[redacted]')
-  return text.length > MAX_OUTPUT ? CUT_MARK + text.slice(-MAX_OUTPUT) : text
+  return text.length > max ? CUT_MARK + text.slice(-max) : text
+}
+
+/** The most output stored for each check of a ticket with `checkCount` checks. */
+export function checkOutputMax(checkCount: number): number {
+  return Math.max(MIN_CHECK_OUTPUT, Math.min(MAX_OUTPUT, Math.floor(CHECK_OUTPUT_BUDGET / checkCount)))
 }

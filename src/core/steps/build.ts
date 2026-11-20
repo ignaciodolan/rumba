@@ -1,7 +1,7 @@
 import type { RumbaConfig } from '../../config/load.js'
 import type { Deps } from '../../ports/deps.js'
 import { changedChecks, protectedViolations } from '../guards.js'
-import { cleanOutput } from '../redact.js'
+import { checkOutputMax, cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
 import type { CheckResult, Ticket, TicketState } from '../types.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
@@ -84,9 +84,10 @@ async function verify(
     const handle = await deps.environment.up({ branch: state.branch!, sha, role: 'after' }, workdir)
     try {
       const results: CheckResult[] = []
+      const max = checkOutputMax(state.checks.length)
       for (const check of state.checks) {
         const r = await deps.environment.runCheck(handle, check)
-        results.push({ ...r, output: cleanOutput(r.output, deps.secrets) })
+        results.push({ ...r, output: cleanOutput(r.output, deps.secrets, max) })
       }
       const failed = fromResults(results, deps.secrets)
       if (failed.length > 0) return { failures: failed }
