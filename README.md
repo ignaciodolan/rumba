@@ -69,7 +69,7 @@ Exit states, each with a comment on the ticket:
 | `needs_human` | A feature's checks already pass before any change, a time budget ran out, or the ticket hit three errors. |
 | `fix_failed` | The checks still fail after the allowed fix attempts. |
 
-An unexpected error leaves the ticket at its last durable state and counts one error on it. A run that dies partway leaves a lease that the next run clears once it is older than `minutes_per_ticket`.
+An unexpected error leaves the ticket at its last durable state and counts one error on it. A run that dies partway leaves a lease that the next run clears once it is older than `minutes_per_ticket`; that also counts one error. A ticket that threw counts toward `max_tickets_per_run` like one that advanced.
 
 Rumba never merges. A person reviews and merges the pull request.
 

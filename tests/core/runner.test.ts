@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runRumba } from '../../src/core/runner.js'
+import { runRumba, TrackerIdentityError } from '../../src/core/runner.js'
 import { newState, transition } from '../../src/core/states.js'
 import { AgentError } from '../../src/ports/agent.js'
 import { failing, happyTriage, makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
@@ -53,9 +53,10 @@ describe('runRumba', () => {
   })
   it('restarts an ended ticket on rumba-retry and removes the label', async () => {
     const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:hub', 'rumba-retry'] }); d.tracker.tickets.push(t)
-    d.tracker.states.set('1', { ...transition(newState('hub', d.clock()), 'needs_human', d.clock()), errorCount: 3 })
+    d.tracker.states.set('1', { ...transition(newState('hub', d.clock()), 'needs_human', d.clock()), errorCount: 3, fixAttempts: 2 })
     const r = await runRumba(d, makeRumba())
     expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' }); expect(t.labels).not.toContain('rumba-retry')
+    expect(d.tracker.states.get('1')).toMatchObject({ fixAttempts: 0, errorCount: 0 })
   })
   it('creates labels before listing', async () => {
     const d = makeDeps(); const order: string[] = []
@@ -133,4 +134,36 @@ describe('runRumba', () => {
     const d = makeDeps(); d.tracker.listCandidates = async () => { throw new Error('nope') }
     await expect(runRumba(d, makeRumba())).rejects.toThrow('nope')
   })
+  it('counts a ticket that threw toward max_tickets_per_run', async () => {
+    const d = makeDeps(); scriptHappyBug(d); d.agent.script.triage = [new AgentError('x'), happyTriage]
+    for (const id of ['1', '2', '3']) d.tracker.tickets.push(makeTicket({ id }))
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    expect(r.advanced.map(a => a.ticket)).toEqual(['2'])
+    expect(r.left).toEqual([{ ticket: '1', why: 'error: x' }, { ticket: '3', why: 'run limit' }])
+  })
+  it('counts a stale lease as an error', async () => {
+    const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
+    d.tracker.states.set('1', { ...failing(d), state: 'building', lastDurable: 'criteria_ready', errorCount: 1 })
+    expect((await runRumba(d, makeRumba())).advanced[0]).toMatchObject({ from: 'criteria_ready', to: 'pr_open' })
+    expect(d.tracker.states.get('1')?.errorCount).toBe(2)
+  })
+  it('moves a ticket interrupted for the third time to needs_human and says so', async () => {
+    const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
+    d.tracker.states.set('1', { ...failing(d), state: 'building', lastDurable: 'criteria_ready', errorCount: 2, lease: { runId: 'old', at: '2025-12-31T00:00:00Z' } })
+    const r = await runRumba(d, makeRumba())
+    expect(r).toEqual({ rumba: 'hub', advanced: [], left: [{ ticket: '1', why: 'needs_human' }] })
+    expect(d.tracker.states.get('1')).toMatchObject({ state: 'needs_human', errorCount: 3 })
+    expect(d.tracker.states.get('1')?.lease).toBeUndefined()
+    expect(d.tracker.comments.map(c => c.body)).toEqual(['Rumba was interrupted repeatedly while working on this ticket.'])
+    expect(d.agent.calls).toHaveLength(0)
+  })
+  it('rejects with TrackerIdentityError when it cannot read back the state it wrote', async () => {
+    const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+    d.tracker.readState = async () => null
+    const err = await runRumba(d, makeRumba()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TrackerIdentityError)
+    expect((err as Error).message).toContain('RUMBA_GITHUB_LOGIN')
+    expect(d.agent.calls).toHaveLength(0)
+  })
 })
+
