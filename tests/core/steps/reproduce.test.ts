@@ -79,6 +79,11 @@ describe('reproduce', () => {
     expect(s.before![0]!.output).not.toContain('s3cret')
     expect(d.tracker.states.get('123')?.before![0]!.output).not.toContain('s3cret')
   })
+  it('rejects checks that touched a protected path before running them', async () => {
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['.rumba/hub/context.md']
+    await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/\.rumba\/hub\/context\.md/)
+    expect(d.environment.ups).toEqual([])
+  })
   it('throws on a state that is not criteria_ready', async () => {
     const d = makeDeps()
     await expect(reproduce(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).rejects.toThrow()

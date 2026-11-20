@@ -1,5 +1,6 @@
 import type { RumbaConfig } from '../config/load.js'
 import { defaultLabels } from '../core/labels.js'
+import { newState, transition } from '../core/states.js'
 import type {
   Check, CheckResult, Criterion, LabelNames, LinkedDocument, Ticket, TicketState,
 } from '../core/types.js'
@@ -227,5 +228,23 @@ export function makeDeps(overrides: Partial<FakeDeps> = {}): FakeDeps {
     runId: 'run-1',
     secrets: [],
     ...overrides,
+  }
+}
+
+/** A 'checks_failing' state, built by real transitions, with one failing check c1. */
+export function failing(d: FakeDeps): TicketState {
+  const now = d.clock()
+  let s = newState('hub', now)
+  for (const to of ['triaged', 'criteria_ready', 'env_ready', 'checks_failing'] as const) s = transition(s, to, now)
+  return {
+    ...s,
+    kind: 'bug',
+    criteria: [{ id: 'c1', text: 'C1', checkable: true }],
+    checks: [{ criterionId: 'c1', command: 'npm test -- c1', files: ['tests/rumba/c1.test.ts'] }],
+    checkHashes: { 'tests/rumba/c1.test.ts': 'h1' },
+    branch: 'rumba/hub/123',
+    baseSha: 'base000',
+    checksSha: 'sha1',
+    before: [{ criterionId: 'c1', passed: false, exitCode: 1, output: 'check failed' }],
   }
 }

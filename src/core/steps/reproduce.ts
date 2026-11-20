@@ -1,5 +1,7 @@
 import type { RumbaConfig } from '../../config/load.js'
+import { AgentError } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
+import { protectedViolations } from '../guards.js'
 import { fixBranch } from '../labels.js'
 import { cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
@@ -35,6 +37,8 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
     if (checks.length === 0) return await stop(deps, ticket, state, 'needs_human', NO_CHECK)
 
     const checksSha = (await deps.workspace.commit(workdir, `test: rumba checks for ${ticket.ref}`)) ?? baseSha
+    const touched = protectedViolations(await deps.workspace.changedFiles(workdir, baseSha), rumba.environment.protected)
+    if (touched.length > 0) throw new AgentError(`The agent changed protected paths: ${touched.join(', ')}`)
     const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before' }, workdir)
     try {
       let current: TicketState = {
