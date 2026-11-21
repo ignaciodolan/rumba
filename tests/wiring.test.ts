@@ -15,7 +15,11 @@ const vercel = (projectId?: string) =>
 describe('buildDeps', () => {
   it('names the missing key and why', () => {
     expect(() => buildDeps(makeRumba({ agent: { kind: 'claude-code' } }), { RUMBA_GITHUB_TOKEN: 't' }, repo))
-      .toThrow(/ANTHROPIC_API_KEY is not set\. Rumba "hub" uses the claude-code agent\./)
+      .toThrow(/ANTHROPIC_API_KEY is not set, and neither is CLAUDE_CODE_OAUTH_TOKEN\. Rumba "hub" uses the claude-code agent\./)
+  })
+  it('accepts a Claude Code token from `claude setup-token` instead of an API key, and treats it as a secret', () => {
+    const d = buildDeps(makeRumba(), { GITHUB_TOKEN: 'g', CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-1' }, repo)
+    expect(d.secrets).toContain('sk-ant-oat-1')
   })
   it('falls back to GITHUB_TOKEN and collects secrets', () => {
     const d = buildDeps(makeRumba(), { GITHUB_TOKEN: 'gh-1', ANTHROPIC_API_KEY: 'an-1' }, repo)

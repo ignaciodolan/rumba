@@ -72,7 +72,7 @@ describe('initRumba', () => {
     const run = job.steps.find((s: { run?: string }) => s.run)
     expect(run.run).toBe('npx rumba-cli run --name ${{ matrix.rumba }}')
     expect(Object.keys(run.env).sort()).toEqual([
-      'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'RUMBA_GITHUB_LOGIN', 'RUMBA_GITHUB_TOKEN',
+      'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GEMINI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'RUMBA_GITHUB_LOGIN', 'RUMBA_GITHUB_TOKEN',
       'VERCEL_AUTOMATION_BYPASS_SECRET', 'VERCEL_PROJECT_ID', 'VERCEL_TEAM_ID', 'VERCEL_TOKEN',
     ])
     // The only expression inside any run script is the validated rumba name.

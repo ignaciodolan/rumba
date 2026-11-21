@@ -50,6 +50,23 @@ describe('CLI agents', () => {
     expect(calls[0].env).toEqual({ ANTHROPIC_API_KEY: 'k-1' }); expect(calls[0].command).toContain('claude-haiku-5-5')
   })
 
+  it('passes a Claude Code token instead of an API key, and never both', async () => {
+    const calls: any[] = []; const sandbox = stubSandbox(calls, { kind: 'fix', summary: 'ok' })
+    await new ClaudeCodeAgent({ sandbox, oauthToken: 'tok-1', timeoutMs: 1000 }).run(fixTask, dir)
+    expect(calls[0].env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'tok-1' })
+    expect(() => new ClaudeCodeAgent({ sandbox, apiKey: 'k', oauthToken: 't', timeoutMs: 1000 })).toThrow(/exactly one/)
+    expect(() => new ClaudeCodeAgent({ sandbox, timeoutMs: 1000 })).toThrow(/exactly one/)
+  })
+
+  it('stops the agent when the ticket runs out of time, whichever comes first', async () => {
+    const calls: any[] = []; const sandbox = stubSandbox(calls, { kind: 'fix', summary: 'ok' })
+    const agent = new ClaudeCodeAgent({ sandbox, apiKey: 'k', timeoutMs: 90 * 60_000 })
+    await agent.run({ ...fixTask, timeoutMs: 12 * 60_000 }, dir)
+    await agent.run(fixTask, dir)
+    await agent.run({ ...fixTask, timeoutMs: 120 * 60_000 }, dir)
+    expect(calls.map((c) => c.timeoutMs)).toEqual([12 * 60_000, 90 * 60_000, 90 * 60_000])
+  })
+
   it('throws AgentError when the CLI exits non-zero', async () => {
     const sandbox = { run: async () => ({ exitCode: 1, output: 'rate limited' }) }
     await expect(new GeminiCliAgent({ sandbox, apiKey: 'g', timeoutMs: 1000 }).run(fixTask, dir)).rejects.toThrow(/rate limited/)

@@ -137,4 +137,13 @@ describe('readAgentResult', () => {
       await expect(readAgentResult(dir, 'fix')).rejects.toThrow(/too large/)
     })
   })
+
+  it('reads which written criteria triage found not checkable, and why', async () => {
+    await writeResult({ kind: 'triage', workable: true, reason: '', ticketKind: 'feature', criteria: null, notCheckable: [{ id: 'c2', reason: 'a constraint' }] })
+    expect(await readAgentResult(dir, 'triage')).toMatchObject({ notCheckable: [{ id: 'c2', reason: 'a constraint' }] })
+  })
+  it('refuses a not-checkable entry without a reason', async () => {
+    await writeResult({ kind: 'triage', workable: true, reason: '', ticketKind: 'feature', criteria: null, notCheckable: [{ id: 'c2', reason: '' }] })
+    await expect(readAgentResult(dir, 'triage')).rejects.toThrow(/notCheckable/)
+  })
 })

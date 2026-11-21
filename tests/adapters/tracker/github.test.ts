@@ -43,8 +43,8 @@ describe('GitHubTracker', () => {
   it('creates missing labels on first run and tolerates existing ones', async () => {
     const { tracker, store } = makeGitHub({ labels: ['rumba-approved'] })
     await tracker.ensureLabels()
-    expect(store.labels).toEqual(expect.arrayContaining(['rumba-state:queued', 'rumba-state:pr_open', 'rumba-approved', 'rumba-retry']))
-    expect(store.labels).toHaveLength(STATE_NAMES.length + 2)
+    expect(store.labels).toEqual(expect.arrayContaining(['rumba:hub', 'rumba-state:queued', 'rumba-state:pr_open', 'rumba-approved', 'rumba-retry']))
+    expect(store.labels).toHaveLength(STATE_NAMES.length + 3)
     await expect(tracker.ensureLabels()).resolves.toBeUndefined()
   })
 
@@ -53,7 +53,7 @@ describe('GitHubTracker', () => {
     // The label list is read without it, then creating it answers 422 already_exists.
     store.unlisted.add('Rumba-Retry')
     await expect(tracker.ensureLabels()).resolves.toBeUndefined()
-    expect(store.labels).toHaveLength(STATE_NAMES.length + 1)
+    expect(store.labels).toHaveLength(STATE_NAMES.length + 2)
   })
 
   it('does not list pull requests as tickets', async () => {
