@@ -13,4 +13,6 @@ export interface Deps {
   clock: () => Date
   runId: string
   secrets: string[]
+  /** Set by the engine while it works a ticket: when the ticket's time budget runs out. */
+  deadline?: Date
 }

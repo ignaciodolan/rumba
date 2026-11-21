@@ -29,6 +29,9 @@ const TASKS: Record<AgentTaskKind, string> = {
     'For a feature, set "criteriaSource" to "written" only when the criteria are written in the ticket, in a repository file',
     'the ticket names, or in a provided document, and copy them as written. If none are written, propose criteria and set',
     '"criteriaSource" to "derived". Never present your own wording as written.',
+    'When acceptance criteria are listed below, they are written on the ticket and Rumba uses them as written. For each one',
+    'that is a constraint on how the work is done rather than a behaviour a command can check (for example "nothing calls the',
+    'network"), give its id and a short reason in "notCheckable". A person then confirms it by reading the change.',
     'Do not change any file except the result file.',
   ].join(' '),
   'draft-criteria': [
@@ -52,7 +55,8 @@ const SHAPES: Record<AgentTaskKind, string> = {
   "criteriaSource": "derived"
 }
 "ticketKind" is "bug" or "feature". "criteria" is null when the ticket is not workable.
-"criteriaSource" is "written" or "derived".`,
+"criteriaSource" is "written" or "derived".
+Optional: "notCheckable": [{ "id": "c2", "reason": "why no command can check it" }], naming written criteria listed below.`,
   'draft-criteria': `{
   "kind": "draft-criteria",
   "criteria": [{ "id": "c1", "text": "one statement of behaviour", "checkable": true }]
@@ -104,7 +108,9 @@ function documentsSection(documents: LinkedDocument[]): string {
 function checkRules(task: AgentTask): string {
   const rules = [
     "Prefer the project's existing test framework.",
-    'Each check is one command, run from the repository root, that exits 0 only when its criterion holds.',
+    task.execPrefix === undefined
+      ? 'Each check is one command, run from the repository root, that exits 0 only when its criterion holds.'
+      : 'Each check is one command that exits 0 only when its criterion holds.',
     "Put all check files together in one new folder, for example tests/rumba/, unless the project's test framework needs them somewhere else.",
     "List every file a check needs, as a path relative to the repository root, in that check's \"files\".",
     'Never commit .rumba-out/.',
@@ -117,6 +123,14 @@ function checkRules(task: AgentTask): string {
     )
   }
   return rules.map((r) => `- ${r}`).join('\n')
+}
+
+function whereChecksRun(execPrefix: string): string {
+  return [
+    `- Rumba runs each check inside the project's container, not in this sandbox, as: ${execPrefix} sh -c '<command>'`,
+    "- The command runs in that container's working directory, which the project's compose file sets, against the code under test.",
+    '- You cannot run the checks there yourself. Tools you install in this sandbox are not in that container; a check may only use what the project\'s container has.',
+  ].join('\n')
 }
 
 function fixRules(task: AgentTask): string {
@@ -172,6 +186,7 @@ export function buildPrompt(task: AgentTask): string {
   }
   if (task.kind === 'write-checks') rest.push(`# How to write the checks\n${checkRules(task)}`)
   if (task.kind === 'fix') rest.push(`# How to fix\n${fixRules(task)}`)
+  if ((task.kind === 'write-checks' || task.kind === 'fix') && task.execPrefix !== undefined) rest.push(`# Where the checks run\n${whereChecksRun(task.execPrefix)}`)
 
   const assemble = (ctx: string | null, docs: string | null): string => {
     const middle = [ticket]

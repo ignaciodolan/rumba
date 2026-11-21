@@ -7,11 +7,11 @@ import type {
 import type { Agent, AgentResult, AgentTask, AgentTaskKind } from '../ports/agent.js'
 import type { CodeHost, PullRequestDraft } from '../ports/codeHost.js'
 import type { Deps } from '../ports/deps.js'
-import type { EnvHandle, Environment } from '../ports/environment.js'
+import type { EnvHandle, EnvRef, Environment } from '../ports/environment.js'
 import type { Tracker } from '../ports/tracker.js'
 import type { Workspace } from '../ports/workspace.js'
 
-type Role = 'before' | 'after'
+type Role = EnvRef['role']
 
 export function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
   return { id: '123', ref: '#123', title: 'A ticket', body: 'Something is broken', url: 'https://example.test/issues/123', labels: ['rumba:hub'], ...overrides }
@@ -24,8 +24,9 @@ export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
     paths: [],
     tracker: { kind: 'github' },
     agent: { kind: 'claude-code' },
-    environment: { kind: 'docker', up: 'docker compose up -d', exec: 'docker compose exec app sh -c', down: 'docker compose down', protected: [] },
+    environment: { kind: 'docker', up: 'docker compose up -d', exec: 'docker compose exec app sh -c', down: 'docker compose down', protected: [], commandTimeoutMinutes: 10 },
     verify: {},
+    sandbox: { nodeVersion: '22' },
     limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 },
     labels: defaultLabels('hub'),
     context: '',
@@ -126,6 +127,13 @@ export class FakeAgent implements Agent {
 
 export class FakeEnvironment implements Environment {
   ups: { branch: string; sha: string; role: Role }[] = []
+  /** The time left given with each up, in order. */
+  upTimeouts: (number | undefined)[] = []
+  /** Every command run through runCommand, in order. */
+  commandsRun: string[] = []
+  commandOutput = ''
+  /** When set, up throws it. */
+  upError: Error | null = null
   /** The workdir of each up, in order. */
   upWorkdirs: string[] = []
   downs = 0
@@ -134,8 +142,10 @@ export class FakeEnvironment implements Environment {
   passes: (check: Check, role: Role) => boolean = (_c, role) => role === 'after'
   private roles = new Map<EnvHandle, Role>()
 
-  async up(ref: { branch: string; sha: string; role: Role }, workdir: string): Promise<EnvHandle> {
-    this.ups.push({ ...ref })
+  async up(ref: EnvRef, workdir: string): Promise<EnvHandle> {
+    if (this.upError) throw this.upError
+    this.ups.push({ branch: ref.branch, sha: ref.sha, role: ref.role })
+    this.upTimeouts.push(ref.timeoutMs)
     this.upWorkdirs.push(workdir)
     const h: EnvHandle = { workdir }
     this.roles.set(h, ref.role)
@@ -148,8 +158,10 @@ export class FakeEnvironment implements Environment {
     return { criterionId: check.criterionId, passed, exitCode: passed ? 0 : 1, output: passed ? 'check passed' : 'check failed' }
   }
 
-  async runCommand(_h: EnvHandle, _command: string): Promise<{ exitCode: number; output: string } | null> {
-    return this.canRunCommands ? { exitCode: this.commandExit, output: '' } : null
+  async runCommand(_h: EnvHandle, command: string): Promise<{ exitCode: number; output: string } | null> {
+    if (!this.canRunCommands) return null
+    this.commandsRun.push(command)
+    return { exitCode: this.commandExit, output: this.commandOutput }
   }
 
   async down(_h: EnvHandle): Promise<void> {

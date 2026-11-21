@@ -4,7 +4,7 @@ Date: 2026-11-20. Status: revision 2, waiting for approval. Revision 1 was appro
 
 Amended after stage 1 was built: sections 3 and 12 now say where the commands of the Docker environment run. The earlier text had them run in a checkout of the code under test, which let a file written by the agent be read or executed on the host.
 
-Lines marked **(call)** are choices biggie made that the owner has not explicitly agreed to. Everything else was decided in conversation.
+Lines marked **(call)** are choices the assistant that wrote this design made, which the owner has not explicitly agreed to. Everything else was decided in conversation.
 
 ## 1. Intent
 
@@ -15,7 +15,7 @@ A repository can run several rumbas. Each has a name, covers one part of the cod
 Why it exists:
 
 - The owner wants to build it to learn.
-- It will be open source so the owner's customers can use it without paying for a product.
+- It is open source so that anyone can read how it handles their code and tickets, run it on their own infrastructure, and change it.
 - Several open-source tools already turn tickets into pull requests (OpenHands, Lisa, Agent Smith, Symphony, Cyrus). None of the descriptions found mention reproducing the problem first or verifying the fix afterwards. That evidence loop is Rumba's reason to exist. This gap was read from listings and reviews, not from each project's README.
 
 ## 2. Goals, non-goals, anti-goals
@@ -59,7 +59,7 @@ Anti-goals, meaning outcomes that make Rumba a failure even if it runs:
   - only people who can label tickets can opt a ticket in or approve criteria;
   - only feedback from people with write access to the repository is used;
   - the agent and the checks always run in a throwaway container with only the repository working copy mounted, on a laptop and in CI alike. Docker is therefore required wherever Rumba runs, including for projects whose environment is Vercel preview. (Decided by the owner.)
-  - the agent container receives the model key and nothing else. Tracker, code host and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself. **(call)**
+  - the agent container receives one model credential and nothing else: an API key, or for Claude Code a long-lived token from `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), which uses a Claude subscription. When both are set, only the API key is passed. The image of that container is always built from Rumba's own Dockerfile; a rumba chooses only its Node major version. Tracker, code host and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself. **(call)**
   - the container has network access, because the agent must reach its model and install packages. Restricting it is not part of v1. **(call)**
   - a check container gets only what the check needs, such as the target URL and the Vercel bypass token. Rumba removes known secret values from check output before posting it anywhere. **(call)**
   - the agent may not change anything under `.rumba/`. A change there fails verification. Only the Rumba process writes lessons. **(call)**
@@ -72,17 +72,17 @@ Anti-goals, meaning outcomes that make Rumba a failure even if it runs:
 
 ### What does the fixing
 
-1. **Drive an existing coding agent (chosen).** Rumba runs Claude Code or Gemini CLI as a subprocess. "Pluggable model" becomes "pluggable agent and model". The owner learns orchestration, state, environments and evidence, and customers get fix quality from mature agents.
+1. **Drive an existing coding agent (chosen).** Rumba runs Claude Code or Gemini CLI as a subprocess. "Pluggable model" becomes "pluggable agent and model". The owner learns orchestration, state, environments and evidence, and users get fix quality from mature agents.
 2. **Own agent loop.** Rumba calls model APIs with its own file and shell tools. Much more work, and fix quality would lag for a long time. The agent interface is narrow enough that this can be added later as one more agent.
 
-This was biggie's pick. The owner did not object when it was stated as the plan.
+This was the assistant's pick. The owner did not object when it was stated as the plan.
 
 ### Shape of the tool
 
 1. **One CLI, state on the ticket (chosen by the owner).** No database. The same command runs locally or in GitHub Actions. Trade-off: history is only as rich as what fits on a ticket, and long runs are bound by CI limits.
 2. **CLI with a local SQLite file.** Richer history, but a laptop run and a CI run do not share state.
-3. **Always-on service** with Postgres, webhooks and a scheduler. Most capable, but every customer hosts a server and the build is two to three times larger.
-4. **Hosted multi-tenant service.** Dropped early: customers do not want to pay and the owner would be running it for them.
+3. **Always-on service** with Postgres, webhooks and a scheduler. Most capable, but every user hosts a server and the build is two to three times larger.
+4. **Hosted multi-tenant service.** Dropped early: it would mean running a service for everyone who uses Rumba, which is not the aim.
 
 The state store sits behind an interface so options 2 and 3 stay possible.
 
@@ -175,12 +175,12 @@ Exits, each of which posts a comment saying why:
 
 - `skipped`: triage judged the ticket not workable.
 - `not_reproducible`: a bug's check passes on the base commit.
-- `needs_human`: a feature's checks already pass before any change, a time budget ran out, repeated errors, or review rounds ran out.
+- `needs_human`: the environment does not come up or the project's own tests already fail on the default branch (checked before any agent call), a feature's checks already pass before any change, a time budget ran out, repeated errors, or review rounds ran out.
 - `fix_failed`: checks still fail after the allowed fix attempts (default 2).
 
 Re-entry: a person adds `rumba-retry` and Rumba resets the ticket to `queued`. Feedback already recorded on the ticket is kept and given to the agent on the new attempt. **(call)**
 
-Criteria that cannot be checked by a command, such as "feels fast on mobile", are listed in the pull request as not verified. They never count as passed. If any exist, the pull request is opened as a draft. **(call)**
+Criteria that cannot be checked by a command, such as "feels fast on mobile", are listed in the pull request as not verified. They never count as passed. If any exist, the pull request is opened as a draft. **(call)** A written criterion can be such a criterion too, when it constrains how the work is done rather than what it does ("nothing calls the network"). Triage may mark it not checkable, with a reason; its wording does not change, and the reason is shown in the pull request.
 
 ### Durable and transient states
 
@@ -280,7 +280,7 @@ Two of each of the first three, so the interfaces are proven by a second impleme
 - Checks are committed on the fix branch, so they arrive in the pull request as regression tests. **(call)**
 - After `checks_failing`, Rumba records a hash of every check file. If a check file changed during `building`, verification fails. This stops the agent passing by editing the test. The one exception is a revision where the feedback asked for it, described in section 9. **(call)**
 - For URL-based environments, checks read the target from `RUMBA_BASE_URL`.
-- If the rumba's config names the project's own test command, Rumba also runs it against the change. A failure there counts as a failed fix attempt, so a fix that breaks other tests does not reach `verified`. This applies where the environment can run commands, which means Docker and not Vercel preview. **(call)**
+- If the rumba's config names the project's own test command, Rumba runs it once on the default branch before any agent call, and against the change. On the default branch a failure stops the ticket with `needs_human`. Against the change, a timeout or a command that cannot run (exit 124, 126, 127) is an error, not evidence; any other failure counts as a failed fix attempt, so a fix that breaks other tests does not reach `verified`. This applies where the environment can run commands, which means Docker and not Vercel preview. **(call)**
 
 Pull request body:
 
@@ -338,8 +338,11 @@ environment:
   # up: docker compose up -d --wait
   # exec: docker compose exec -T app
   # down: docker compose down -v
+  # command_timeout_minutes: 10  # the limit of each of up, exec and down
 verify:
-  test: npm test          # optional: the project's own tests, run against the change
+  test: npm test          # optional: the project's own tests, on the default branch first and against the change
+sandbox:
+  node: 22                # optional: the Node major version of the agent's container
 limits:
   max_tickets_per_run: 3
   minutes_per_ticket: 30
@@ -367,7 +370,8 @@ Scheduling is a GitHub Actions workflow with a cron trigger and a manual trigger
 
 - An unexpected error leaves the ticket at its last durable state and adds one to an error count in the state comment.
 - After three errors on the same ticket it moves to `needs_human`. **(call)**
-- A ticket that runs out of time moves to `needs_human`.
+- A ticket that runs out of time moves to `needs_human`. The budget bounds the whole ticket: each agent call and each environment command gets at most the time left, and a call cut short by it ends in `needs_human`, not in an error. Taking an environment down always gets its full limit.
+- A run's lease on a ticket lasts the budget, plus the time to take the environment down, plus a margin, so a run still working a ticket is never overtaken.
 
 ## 16. Build order
 

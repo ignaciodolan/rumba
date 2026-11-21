@@ -31,6 +31,7 @@ environment:
   up: docker compose up -d --wait
   exec: docker compose exec -T app
   down: docker compose down -v
+  # command_timeout_minutes: 10   # the limit of each command; checks and verify.test run through exec
   # More files the agent may not change. .rumba/, .github/ and .env are always
   # protected. This list replaces the default, which is the files that define the
   # containers:
@@ -42,7 +43,10 @@ environment:
   # protected: ["vercel.json"]
 
 # verify:
-#   test: npm test          # optional: the project's own tests, run against the change
+#   test: npm test          # optional: the project's own tests, run on the default branch first and against the change
+
+# sandbox:
+#   node: 22                # optional: the Node major version of the agent's container (20 or later)
 
 # limits:
 #   max_tickets_per_run: 3

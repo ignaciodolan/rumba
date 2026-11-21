@@ -1,8 +1,21 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { execa } from 'execa'
 import type { Sandbox } from '../../ports/sandbox.js'
 
+/** The image name used when neither an image nor a Dockerfile folder is given. */
 export const SANDBOX_IMAGE = 'rumba-sandbox:local'
+const DEFAULT_NODE_VERSION = '22'
+
+/**
+ * The tag of the sandbox image for a Node major version and the content of Rumba's Dockerfile.
+ * A changed Dockerfile or another version gets another tag, so a stale image is never reused.
+ */
+export function sandboxImageTag(nodeVersion: string, dockerfile: string): string {
+  const hash = createHash('sha256').update(`${nodeVersion}\0${dockerfile}`).digest('hex').slice(0, 12)
+  return `rumba-sandbox:node${nodeVersion}-${hash}`
+}
 
 const TIMEOUT_EXIT_CODE = 124
 const DEFAULT_KILL_GRACE_MS = 10_000
@@ -57,29 +70,41 @@ function wait(ms: number): { done: Promise<void>; cancel: () => void } {
   return { done, cancel: () => clearTimeout(timer) }
 }
 
+/**
+ * The container the agent and URL checks run in. With `dockerfileDir` (Rumba's own `sandbox/`
+ * folder, never a folder of the repository Rumba works on), the image is built from it before
+ * the first run, for the Node major version given; only that version is passed in, as a build
+ * argument. With `image`, that image is used as it is.
+ */
 export class DockerSandbox implements Sandbox {
-  private readonly image: string
+  private image: string | undefined
   private readonly runner: DockerRunner
   private readonly killGraceMs: number
   private readonly dockerfileDir: string | undefined
+  private readonly nodeVersion: string
   /** Set once the image is known to exist; cleared again when ensuring it failed. */
   private imageReady: Promise<void> | undefined
 
-  /** With `dockerfileDir`, the image is built from that folder before the first run if it is missing. */
-  constructor(o: { image?: string; runner?: DockerRunner; killGraceMs?: number; dockerfileDir?: string } = {}) {
-    this.image = o.image ?? SANDBOX_IMAGE
+  constructor(o: { image?: string; runner?: DockerRunner; killGraceMs?: number; dockerfileDir?: string; nodeVersion?: string } = {}) {
+    this.nodeVersion = o.nodeVersion ?? DEFAULT_NODE_VERSION
+    if (!/^[0-9]{2,3}$/.test(this.nodeVersion)) throw new Error(`The sandbox Node version must be a major version number, not "${this.nodeVersion}".`)
+    this.image = o.image ?? (o.dockerfileDir === undefined ? SANDBOX_IMAGE : undefined)
     this.runner = o.runner ?? dockerRunner()
     this.killGraceMs = o.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.dockerfileDir = o.dockerfileDir
   }
 
   async run(o: { workdir: string; command: string[]; env: Record<string, string>; timeoutMs: number }): Promise<{ exitCode: number; output: string }> {
+    // The limit covers the whole run, building the image included.
+    const started = Date.now()
     await this.ensureImage()
+    const left = o.timeoutMs - (Date.now() - started)
+    if (left <= 0) return { exitCode: TIMEOUT_EXIT_CODE, output: 'The sandbox image was still being built when the time limit ran out.' }
     const name = `rumba-${randomUUID()}`
-    const args = dockerArgs({ ...o, image: this.image, user: callerUser(), name, harden: true })
+    const args = dockerArgs({ ...o, image: this.image!, user: callerUser(), name, harden: true })
     const running = this.runner(args, { env: o.env })
 
-    const timeout = wait(o.timeoutMs)
+    const timeout = wait(left)
     const first = await Promise.race([running, timeout.done.then(() => null)])
     timeout.cancel()
     if (first !== null) return first
@@ -104,9 +129,13 @@ export class DockerSandbox implements Sandbox {
 
   /** Builds the image from `dockerfileDir` only when `docker image inspect` cannot find it. */
   private async buildIfMissing(dockerfileDir: string): Promise<void> {
-    const inspect = await this.runner(['image', 'inspect', this.image], { env: {} })
-    if (inspect.exitCode === 0) return
-    const build = await this.runner(['build', '-t', this.image, dockerfileDir], { env: {} })
-    if (build.exitCode !== 0) throw new Error(`docker build -t ${this.image} failed:\n${build.output.slice(-2000)}`)
+    const image = this.image ?? sandboxImageTag(this.nodeVersion, await readFile(path.join(dockerfileDir, 'Dockerfile'), 'utf8'))
+    const inspect = await this.runner(['image', 'inspect', image], { env: {} })
+    if (inspect.exitCode !== 0) {
+      const buildArgs = this.image === undefined ? ['--build-arg', `NODE_VERSION=${this.nodeVersion}`] : []
+      const build = await this.runner(['build', ...buildArgs, '-t', image, dockerfileDir], { env: {} })
+      if (build.exitCode !== 0) throw new Error(`docker build -t ${image} failed:\n${build.output.slice(-2000)}`)
+    }
+    this.image = image
   }
 }

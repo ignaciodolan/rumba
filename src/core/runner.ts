@@ -1,5 +1,6 @@
 import type { RumbaConfig } from '../config/load.js'
 import type { Deps } from '../ports/deps.js'
+import { LEASE_MARGIN_MINUTES } from './budget.js'
 import { advanceTicket } from './engine.js'
 import { cleanOutput } from './redact.js'
 import { ENDS, isDurable, newState, transition } from './states.js'
@@ -30,6 +31,15 @@ function withoutLease(s: TicketState): TicketState {
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+/**
+ * How long a run holds a ticket: its time budget, then the time to take the environment down,
+ * which runs after a ticket stops, and a margin. A run that is still working is never overtaken.
+ */
+function leaseMinutes(rumba: RumbaConfig): number {
+  const teardown = rumba.environment.kind === 'docker' ? rumba.environment.commandTimeoutMinutes : 0
+  return rumba.limits.minutesPerTicket + teardown + LEASE_MARGIN_MINUTES
 }
 
 /** The opt-in label with the rumba name removed from its end, e.g. `rumba:`. */
@@ -77,7 +87,7 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
 
   if (!isDurable(state.state)) {
     const ageMs = state.lease === undefined ? Infinity : deps.clock().getTime() - new Date(state.lease.at).getTime()
-    if (ageMs <= limits.minutesPerTicket * 60_000) return left('in progress elsewhere')
+    if (ageMs <= leaseMinutes(rumba) * 60_000) return left('in progress elsewhere')
     // An earlier run died while working on the ticket. That counts as one error.
     state = { ...withoutLease(state), state: state.lastDurable, errorCount: state.errorCount + 1 }
     if (state.errorCount >= MAX_ERRORS) {

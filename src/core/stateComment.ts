@@ -17,7 +17,7 @@ const ticketState = z.object({
   state: stateName,
   lastDurable: durableState,
   kind: z.enum(['bug', 'feature']).optional(),
-  criteria: z.array(z.object({ id: z.string(), text: z.string(), checkable: z.boolean() })),
+  criteria: z.array(z.object({ id: z.string(), text: z.string(), checkable: z.boolean(), reason: z.string().optional() })),
   checks: z.array(z.object({ criterionId: z.string(), command: z.string(), files: z.array(z.string()) })),
   checkHashes: z.record(z.string(), z.string()),
   fixAttempts: count,

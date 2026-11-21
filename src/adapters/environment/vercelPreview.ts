@@ -1,7 +1,7 @@
 import type { Check, CheckResult } from '../../core/types.js'
 import { baseBranchOf } from '../../core/labels.js'
 import type { CodeHost } from '../../ports/codeHost.js'
-import type { EnvHandle, Environment } from '../../ports/environment.js'
+import type { EnvHandle, EnvRef, Environment } from '../../ports/environment.js'
 import type { Sandbox } from '../../ports/sandbox.js'
 
 type DeploymentState = 'QUEUED' | 'BUILDING' | 'READY' | 'ERROR' | 'CANCELED'
@@ -91,6 +91,8 @@ export class VercelPreviewEnvironment implements Environment {
   private readonly sleep: (ms: number) => Promise<void>
   /** The throwaway base branch each handle's `up` pushed. */
   private readonly baseBranches = new Map<EnvHandle, string>()
+  /** When each handle's ticket runs out of time, as a Date.now() value. */
+  private readonly deadlines = new Map<EnvHandle, number>()
 
   constructor(private readonly o: {
     client: VercelClient
@@ -108,13 +110,15 @@ export class VercelPreviewEnvironment implements Environment {
     this.sleep = o.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   }
 
-  async up(ref: { branch: string; sha: string; role: 'before' | 'after' }, workdir: string): Promise<EnvHandle> {
+  async up(ref: EnvRef, workdir: string): Promise<EnvHandle> {
     // The branch may be left over from an earlier attempt, so both pushes force.
-    const pushed = ref.role === 'before' ? baseBranchOf(ref.branch) : null
+    const pushed = ref.role === 'after' ? null : baseBranchOf(ref.branch)
     await this.o.codeHost.pushBranch(workdir, pushed ?? ref.branch, { force: true })
+    const deadline = ref.timeoutMs === undefined ? Infinity : Date.now() + ref.timeoutMs
     try {
-      const host = await this.waitForReady(ref.sha)
+      const host = await this.waitForReady(ref.sha, Math.min(this.timeoutMs, deadline - Date.now()))
       const h: EnvHandle = { workdir, baseUrl: `https://${host}` }
+      this.deadlines.set(h, deadline)
       if (pushed !== null) this.baseBranches.set(h, pushed)
       return h
     } catch (err) {
@@ -127,7 +131,10 @@ export class VercelPreviewEnvironment implements Environment {
   async runCheck(h: EnvHandle, check: Check): Promise<CheckResult> {
     const env: Record<string, string> = { RUMBA_BASE_URL: h.baseUrl ?? '' }
     if (this.o.bypassSecret !== undefined) env.VERCEL_AUTOMATION_BYPASS_SECRET = this.o.bypassSecret
-    const r = await this.o.sandbox.run({ workdir: h.workdir, command: ['sh', '-c', check.command], env, timeoutMs: this.checkTimeoutMs })
+    // A check never outlasts the ticket's time, and never gets less than a second.
+    const left = (this.deadlines.get(h) ?? Infinity) - Date.now()
+    const timeoutMs = Math.max(1000, Math.min(this.checkTimeoutMs, left))
+    const r = await this.o.sandbox.run({ workdir: h.workdir, command: ['sh', '-c', check.command], env, timeoutMs })
     return { criterionId: check.criterionId, passed: r.exitCode === 0, exitCode: r.exitCode, output: r.output }
   }
 
@@ -137,6 +144,7 @@ export class VercelPreviewEnvironment implements Environment {
 
   async down(h: EnvHandle): Promise<void> {
     const branch = this.baseBranches.get(h)
+    this.deadlines.delete(h)
     if (branch === undefined) return
     this.baseBranches.delete(h)
     await this.deleteQuietly(branch)
@@ -146,7 +154,7 @@ export class VercelPreviewEnvironment implements Environment {
    * Polls until the deployment for `sha` is READY and returns its host name. A production
    * deployment is never used: it counts as not there yet, since a preview may still follow.
    */
-  private async waitForReady(sha: string): Promise<string> {
+  private async waitForReady(sha: string, timeoutMs: number): Promise<string> {
     let elapsed = 0
     let failedLookups = 0
     let sawProduction = false
@@ -170,7 +178,7 @@ export class VercelPreviewEnvironment implements Environment {
           return d.url
         }
       }
-      if (elapsed + this.pollMs > this.timeoutMs) {
+      if (elapsed + this.pollMs > timeoutMs) {
         const onlyProduction = sawProduction && !sawOther
           ? ' Only a production deployment was found. Refusing to run checks against a production deployment.'
           : ''

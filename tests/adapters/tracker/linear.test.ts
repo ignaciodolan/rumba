@@ -73,11 +73,11 @@ describe('LinearTracker', () => {
     g.defineLabel('rumba-approved', null)
     await tracker.ensureLabels()
     const names = g.labelList.map((l) => l.name)
-    expect(names).toEqual(expect.arrayContaining(['rumba-state:queued', 'rumba-state:pr_open', 'rumba-approved', 'rumba-retry']))
-    expect(names).toHaveLength(STATE_NAMES.length + 2)
+    expect(names).toEqual(expect.arrayContaining(['rumba:hub', 'rumba-state:queued', 'rumba-state:pr_open', 'rumba-approved', 'rumba-retry']))
+    expect(names).toHaveLength(STATE_NAMES.length + 3)
     expect(g.labelList.filter((l) => l.name !== 'rumba-approved').every((l) => l.team === 'ENG')).toBe(true)
     await expect(tracker.ensureLabels()).resolves.toBeUndefined()
-    expect(g.labelList).toHaveLength(STATE_NAMES.length + 2)
+    expect(g.labelList).toHaveLength(STATE_NAMES.length + 3)
   })
 
   it('treats a label created by someone else in the meantime as success', async () => {
@@ -85,7 +85,7 @@ describe('LinearTracker', () => {
     g.defineLabel('rumba-retry', 'ENG')
     g.unlisted.add('rumba-retry')
     await expect(tracker.ensureLabels()).resolves.toBeUndefined()
-    expect(g.labelList).toHaveLength(STATE_NAMES.length + 2)
+    expect(g.labelList).toHaveLength(STATE_NAMES.length + 3)
   })
 
   it('keeps a label a person added during the run when writing state', async () => {

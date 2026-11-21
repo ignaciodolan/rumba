@@ -87,7 +87,8 @@ function render(i: EvidenceInput, cap: number | null): string {
 
   const open = unverified(state)
   if (open.length > 0) {
-    sections.push(`## Not verified\n\nNo check covers these criteria. A person needs to confirm them.\n\n${open.map((c) => `- ${cell(c.text)}`).join('\n')}`)
+    const line = (c: Criterion) => `- ${cell(c.text)}${!c.checkable && c.reason ? ` (not checkable: ${cell(c.reason)})` : ''}`
+    sections.push(`## Not verified\n\nNo check covers these criteria. A person needs to confirm them.\n\n${open.map(line).join('\n')}`)
   }
 
   if (i.outsideScope.length > 0) {

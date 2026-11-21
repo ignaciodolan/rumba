@@ -136,7 +136,7 @@ describe('buildPrompt', () => {
       expect(Buffer.byteLength(p)).toBeLessThanOrEqual(LIMIT)
       expect(p.startsWith('# Task\nTriage this ticket.')).toBe(true)
       expect(p).toContain('Never present your own wording as written.')
-      expect(p).toContain(result('triage')); expect(p.endsWith('"criteriaSource" is "written" or "derived".')).toBe(true)
+      expect(p).toContain(result('triage')); expect(p.endsWith('naming written criteria listed below.')).toBe(true)
       expect(p).toContain('中'.repeat(1000)); expect(p).not.toContain('\uFFFD')
     })
 

@@ -43,6 +43,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           RUMBA_GITHUB_LOGIN: ${{ vars.RUMBA_GITHUB_LOGIN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Instead of an API key: a token from `claude setup-token`, which uses a Claude subscription.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}

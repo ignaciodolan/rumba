@@ -15,9 +15,11 @@ export async function runCliAgent(o: {
   workdir: string
 }): Promise<AgentResult> {
   await clearAgentResult(o.workdir)
-  const { exitCode, output } = await o.sandbox.run({ workdir: o.workdir, command: o.command, env: o.env, timeoutMs: o.timeoutMs })
+  // The agent's own limit, or the time the ticket has left, whichever is shorter.
+  const timeoutMs = Math.min(o.timeoutMs, o.task.timeoutMs ?? Infinity)
+  const { exitCode, output } = await o.sandbox.run({ workdir: o.workdir, command: o.command, env: o.env, timeoutMs })
   if (exitCode !== 0) {
-    const reason = exitCode === 124 ? `timed out after ${o.timeoutMs} ms` : `exited with code ${exitCode}`
+    const reason = exitCode === 124 ? `timed out after ${timeoutMs} ms` : `exited with code ${exitCode}`
     throw new AgentError(`${o.name} ${reason}:\n${output === '' ? '(no output)' : output.slice(-OUTPUT_TAIL)}`)
   }
   return readAgentResult(o.workdir, o.task.kind)
