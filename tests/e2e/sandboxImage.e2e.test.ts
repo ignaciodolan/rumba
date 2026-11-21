@@ -57,4 +57,15 @@ describe(dockerAvailable ? 'sandbox image' : 'sandbox image (skipped: Docker is 
     expect(r.output).toContain('node_modules')
     expect(r.output).not.toContain('.pnpm-store')
   }, 10 * 60_000)
+
+  it.skipIf(!dockerAvailable)('keeps the store of a current pnpm out of the working copy too', async () => {
+    const r = await sh([
+      'mkdir -p current && cd current',
+      `printf '%s' '${JSON.stringify({ name: 'probe12', version: '1.0.0', private: true, packageManager: 'pnpm@12.4.1' })}' > package.json`,
+      'pnpm add is-odd@3.0.1 >/dev/null 2>&1; echo "exit=$?"; find /work -maxdepth 4 -name .pnpm-store | wc -l',
+    ].join(' && '))
+    const lines = r.output.trim().split('\n')
+    expect(lines).toContain('exit=0')
+    expect(lines.at(-1)?.trim()).toBe('0')
+  }, 10 * 60_000)
 })
