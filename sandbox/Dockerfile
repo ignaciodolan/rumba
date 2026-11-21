@@ -19,7 +19,8 @@ ENV HOME=/home/rumba \
     DISABLE_AUTOUPDATER=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-    npm_config_store_dir=/home/rumba/.local/share/pnpm/store
+    npm_config_store_dir=/home/rumba/.local/share/pnpm/store \
+    pnpm_config_store_dir=/home/rumba/.local/share/pnpm/store
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git \
@@ -32,8 +33,9 @@ RUN npm install -g \
  && npm cache clean --force
 
 # pnpm and yarn through corepack: each project gets the version its package.json pins.
-# pnpm keeps its store under HOME (npm_config_store_dir above), never in the working
-# copy, where Rumba would commit it.
+# pnpm keeps its store under HOME, never in the working copy, where Rumba would commit
+# it: pnpm 9 reads npm_config_store_dir and pnpm 10 and later pnpm_config_store_dir
+# (above). npm warns that it does not know store-dir; that warning is harmless.
 RUN (command -v corepack >/dev/null || npm install -g "corepack@${COREPACK_VERSION}") \
  && corepack enable \
  && npm cache clean --force
