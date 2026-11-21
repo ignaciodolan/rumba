@@ -176,13 +176,15 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
     expect(s.after).toEqual([expect.objectContaining({ criterionId: 'c1', passed: true })])
     expect(codeHost.prs[0].body).toContain('| fail | pass |'); expect(codeHost.prs[0].draft).toBe(false)
-    // The before-run and the after-run each got their own checkout of the commit, never where an agent wrote.
-    expect(envWorkdirs.size).toBe(2)
+    // The environment check on the default branch, the before-run and the after-run each got
+    // their own checkout of the commit, never where an agent wrote.
+    expect(envWorkdirs.size).toBe(3)
     for (const w of envWorkdirs) expect(agent.workdirs.has(w)).toBe(false)
     // The host-side commands ran somewhere else again: each in its own checkout of the default
-    // branch (up, one check and down before; up, one check, the project tests and down after).
-    expect(hostDirs.size).toBe(7)
-    expect(projects.size).toBe(2)
+    // branch (up, the project tests and down for the check; up, one check and down before;
+    // up, one check, the project tests and down after).
+    expect(hostDirs.size).toBe(10)
+    expect(projects.size).toBe(3)
     for (const d of hostDirs) { expect(agent.workdirs.has(d)).toBe(false); expect(envWorkdirs.has(d)).toBe(false) }
   }, 300_000)
 
