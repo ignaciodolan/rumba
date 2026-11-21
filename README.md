@@ -45,7 +45,7 @@ A rumba name uses lowercase letters, digits and hyphens. It is the folder name u
 
 ## How a ticket moves
 
-Labels are the interface. Rumba creates the labels it manages the first time it runs.
+Labels are the interface. Rumba creates all of them, the opt-in label `rumba:<name>` included, the first time it runs.
 
 | Label | Added by | Meaning |
 |---|---|---|
@@ -58,9 +58,9 @@ Rumba also keeps one state comment on the ticket, which it edits in place, and p
 
 On each run Rumba takes each opted-in ticket as far as it can:
 
-1. `queued`: the ticket has the opt-in label and no state yet.
+1. `queued`: the ticket has the opt-in label and no state yet. Before any agent call, Rumba brings the environment up once on the default branch and runs the project's own tests (`verify.test`) there, if set. If the environment does not come up, or the tests already fail, the ticket goes to `needs_human` with the output, and no agent call is spent. This is also how a missing environment file on the default branch shows up.
 2. `triaged`: the agent read the ticket and the repository and decided whether it is a bug or a feature, and whether Rumba can work it.
-3. `criteria_ready`: the acceptance criteria are fixed. A bug gets one criterion derived from the report. A feature uses the criteria written on the ticket, in files it names, or in documents native to the tracker.
+3. `criteria_ready`: the acceptance criteria are fixed. A bug gets one criterion derived from the report. A feature uses the criteria written on the ticket, in files it names, or in documents native to the tracker. Triage may mark a written criterion that is a constraint rather than a behaviour, such as "nothing calls the network", as not checkable, with a reason. Such a criterion keeps its wording, is listed in the pull request as not verified with that reason, and never counts as passed.
 4. `awaiting_criteria`: a feature whose criteria are not written anywhere. Rumba never treats criteria it wrote itself as approved: it posts them as a draft and waits. Add `rumba-approved` to accept the draft as posted, or write the final criteria in the ticket description under an "Acceptance criteria" heading and then add the label.
 5. `env_ready` → `checks_failing`: the environment is up at the base commit, the agent writes one check per criterion, and every check fails there, as it should.
 6. `building` → `verified`: the agent changes the code on the branch `rumba/<name>/<ticket-id>` until every check passes.
@@ -72,10 +72,12 @@ Exit states, each with a comment on the ticket:
 |---|---|
 | `skipped` | Triage judged the ticket not workable by Rumba. |
 | `not_reproducible` | A bug's check already passes on the base commit. |
-| `needs_human` | A feature's checks already pass before any change, a time budget ran out, or the ticket hit three errors. |
-| `fix_failed` | The checks still fail after the allowed fix attempts. |
+| `needs_human` | The environment did not come up or the project's tests already failed on the default branch, a feature's checks already pass before any change, the time budget ran out, or the ticket hit three errors. |
+| `fix_failed` | The checks, or the project's own tests, still fail after the allowed fix attempts. |
 
-An unexpected error leaves the ticket at its last durable state and counts one error on it. A run that dies partway leaves a lease that the next run clears once it is older than `minutes_per_ticket`; that also counts one error. A ticket that threw counts toward `max_tickets_per_run` like one that advanced.
+An unexpected error leaves the ticket at its last durable state and counts one error on it. A check or `verify.test` that timed out (exit 124), could not execute (126) or was not found (127) is such an error: it says nothing about the change, so it costs no fix attempt. A run that dies partway leaves a lease, which the next run clears once it is older than `minutes_per_ticket` plus the environment's `command_timeout_minutes` plus 5 minutes; that also counts one error. A ticket that threw counts toward `max_tickets_per_run` like one that advanced.
+
+`minutes_per_ticket` bounds the whole ticket. Each agent call and each environment command gets at most the time the ticket has left, and a call cut short by that ends the ticket in `needs_human` with the reason, not in an error. Taking the environment down is the exception: it always gets its full `command_timeout_minutes`, so a ticket that ran out of time leaves no containers running.
 
 Rumba never merges. A person reviews and merges the pull request.
 
@@ -116,10 +118,13 @@ environment:
   # up: docker compose up -d --wait
   # exec: docker compose exec -T app
   # down: docker compose down -v
+  # command_timeout_minutes: 10   # the limit of each of up, exec and down
   # both: more files the agent may not change
   # protected: ["Makefile"]
 verify:
-  test: npm test            # optional: the project's own tests, run against the change
+  test: npm test            # optional: the project's own tests, run on the default branch first and against the change
+sandbox:
+  node: 22                  # optional: the Node major version of the container the agent runs in
 limits:
   max_tickets_per_run: 3
   minutes_per_ticket: 30
@@ -136,7 +141,10 @@ labels:                     # optional: rename the labels
 - `environment.docker`: the commands that bring the project up, run a command inside it, and take it down. Checks run through `exec`. See "The docker environment" below for where they run and what your compose file must do.
 - `environment.vercel-preview`: Rumba pushes a throwaway branch `rumba/<name>/base-<ticket-id>` at the base commit and the fix branch, waits for each preview deployment, and runs the checks against it. It never runs checks against a production deployment. Checks can only see what is visible over HTTP or in a browser.
 - `environment.protected`: globs of files the agent may not change. The docker default is the files that define the containers (`docker-compose*.y*ml`, `compose*.y*ml`, `Dockerfile*`, `*.dockerfile`, `.dockerignore`); the vercel-preview default is none. Setting the list replaces the default. Anything under `.rumba/` or `.github/`, and any file named `.env` at any depth, is always protected.
-- `limits.minutes_per_ticket` is also the time limit of each agent call.
+- `environment.command_timeout_minutes` (docker): the limit of each of `up`, `exec` and `down`, 10 minutes by default. A check or `verify.test` runs through `exec`, so a slow test suite needs a higher value. No command outlasts the ticket's time either, except `down`.
+- `verify.test`: the project's own tests. Rumba runs them once on the default branch before any agent call, and against every fix.
+- `sandbox.node`: the Node major version (20 or later) of Rumba's sandbox image, the container the agent and the URL checks run in. Rumba always builds that image from its own Dockerfile, never from your repository; this setting only picks the Node version. The image has pnpm and yarn through corepack, at the version your `package.json` pins.
+- `limits.minutes_per_ticket` bounds the whole ticket, as described above.
 
 The `max_review_rounds` limit in the design belongs to stage 2 and is not read yet.
 
@@ -174,7 +182,7 @@ Rules for whoever writes `rumba.yml` and the compose file:
 
 - Give `RUMBA_WORKDIR` to Docker only, as a mount source or a build context. Never read or run anything under it on the host: no `sh "$RUMBA_WORKDIR/scripts/up.sh"`, no `env_file: ${RUMBA_WORKDIR}/.env`, no `--project-directory "$RUMBA_WORKDIR"`, no `-f "$RUMBA_WORKDIR/compose.yml"`.
 - Mount `RUMBA_WORKDIR` itself, not a folder below it. A folder below it is a path the agent controls.
-- `exec` must run its argument inside a container, as `docker compose exec -T <service>` does. Checks and `verify.test` are passed to it.
+- `exec` must run its argument inside a container, as `docker compose exec -T <service>` does. Rumba runs every check and `verify.test` as `<exec> sh -c '<command>'`, so the container needs `sh`, and the command runs in the container's working directory. The agent is told this, and that it cannot run the checks in its own sandbox.
 - `up` may call a script or `make`: it is the default branch's copy that runs.
 - Do not give a container the folder the commands run in (`.` or a folder of it) to write to. Mount what you need from it read-only (`./nginx.conf:/etc/nginx/nginx.conf:ro`). `up` is the one command that runs while its own containers start, so if a container can write to that folder, it can change a file `up` has yet to read. When `up` returns, Rumba compares the folder with its commit, file by file; if anything was changed, added or removed, the run stops, the environment is taken down and the ticket counts an error. That also means `up` itself must not write into the folder it runs in.
 
@@ -185,7 +193,8 @@ Rules for whoever writes `rumba.yml` and the compose file:
 | `RUMBA_GITHUB_TOKEN` | Always. Falls back to `GITHUB_TOKEN`. A fine-grained personal token or a GitHub App token with contents, issues and pull requests write access. |
 | `GITHUB_TOKEN` | Used when `RUMBA_GITHUB_TOKEN` is not set. In Actions this is the workflow's own token. |
 | `RUMBA_GITHUB_LOGIN` | Optional. The login of the account Rumba runs as. Set it when the token cannot look itself up (see below). In the workflow it is a repository variable, not a secret. |
-| `ANTHROPIC_API_KEY` | The agent is `claude-code`. |
+| `ANTHROPIC_API_KEY` | The agent is `claude-code`, unless `CLAUDE_CODE_OAUTH_TOKEN` is set. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Instead of `ANTHROPIC_API_KEY`: a long-lived token from `claude setup-token`, which needs a Claude subscription. When both are set, Rumba passes only the API key, as Claude Code itself would prefer it. Either one is the only credential the agent container gets. |
 | `GEMINI_API_KEY` | The agent is `gemini-cli`. |
 | `LINEAR_API_KEY` | The tracker is `linear`. |
 | `VERCEL_TOKEN` | The environment is `vercel-preview`. |
@@ -202,7 +211,7 @@ Pull requests opened with the default GitHub Actions token do not start the repo
 Ticket text, and anything the agent reads, is untrusted input, and the coding agent has a shell. Rumba is built around that:
 
 - Only people who can label tickets can opt a ticket in or approve criteria.
-- The agent runs in a throwaway container with only the working copy of the fix branch mounted. That container gets the model key and nothing else. Tracker, GitHub and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself.
+- The agent runs in a throwaway container with only the working copy of the fix branch mounted. That container gets one model credential, the API key or the Claude Code token, and nothing else. Tracker, GitHub and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself.
 - The container has network access, because the agent must reach its model and install packages. Restricting it is not part of stage 1.
 - A check container gets only what the check needs, such as the preview URL and the Vercel bypass secret. Rumba replaces known secret values with `[redacted]` in check output and error messages before posting or printing them. It keeps at most the last 4,000 characters of each check's output, less when a ticket has several checks, and drops the output altogether if the ticket comment or pull request body would otherwise be too long for the tracker.
 - The agent may not change anything under `.rumba/` or `.github/`, any file named `.env`, or any path in `environment.protected`. A change there fails verification.
