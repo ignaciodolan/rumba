@@ -61,3 +61,32 @@ describe('the sandbox image for a Node version', () => {
     expect(calls).toEqual([])
   })
 })
+
+describe('the time limit of a sandbox run', () => {
+  it('counts the time spent building the image, so a run never outlasts the limit it was given', async () => {
+    const calls: string[][] = []
+    const runner: DockerRunner = async (args) => {
+      calls.push(args)
+      if (args[0] === 'image') return { exitCode: 1, output: '' }
+      if (args[0] === 'build') { await new Promise((r) => setTimeout(r, 300)); return { exitCode: 0, output: '' } }
+      if (args[0] === 'run') return new Promise(() => {})
+      return { exitCode: 0, output: '' }
+    }
+    const started = Date.now()
+    const r = await new DockerSandbox({ dockerfileDir: dir, runner, killGraceMs: 10 }).run({ ...run, timeoutMs: 500 })
+    expect(r.exitCode).toBe(124)
+    expect(Date.now() - started).toBeLessThan(700)
+  })
+  it('does not start the container when the build used up the whole limit', async () => {
+    const calls: string[][] = []
+    const runner: DockerRunner = async (args) => {
+      calls.push(args)
+      if (args[0] === 'image') return { exitCode: 1, output: '' }
+      if (args[0] === 'build') { await new Promise((r) => setTimeout(r, 300)); return { exitCode: 0, output: '' } }
+      return { exitCode: 0, output: '' }
+    }
+    const r = await new DockerSandbox({ dockerfileDir: dir, runner }).run({ ...run, timeoutMs: 100 })
+    expect(r).toEqual({ exitCode: 124, output: 'The sandbox image was still being built when the time limit ran out.' })
+    expect(calls.some((c) => c[0] === 'run')).toBe(false)
+  })
+})

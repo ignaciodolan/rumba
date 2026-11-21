@@ -50,4 +50,11 @@ describe(dockerAvailable ? 'sandbox image' : 'sandbox image (skipped: Docker is 
     expect(r.exitCode).toBe(0)
     expect(r.output.trim().split('\n').at(-1)).toBe('9.15.9')
   }, 10 * 60_000)
+
+  it.skipIf(!dockerAvailable)('keeps the pnpm store out of the working copy, so it is never committed', async () => {
+    const r = await sh('pnpm add is-odd@3.0.1 >/dev/null 2>&1; echo "exit=$?"; ls -A')
+    expect(r.output).toContain('exit=0')
+    expect(r.output).toContain('node_modules')
+    expect(r.output).not.toContain('.pnpm-store')
+  }, 10 * 60_000)
 })
