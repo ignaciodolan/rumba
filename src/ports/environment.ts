@@ -9,8 +9,15 @@ export interface EnvHandle {
    * the name its containers share, and the trusted checkout `up` ran in. No host command
    * ever runs in `workdir`, which holds files an agent wrote.
    */
-  host?: { branch: string; project: string; upDir: string }
+  host?: { branch: string; project: string; upDir: string; deadline?: number }
 }
+
+/**
+ * What to bring up. `base`: the default branch's commit, before any agent call; `before`: the
+ * checks commit; `after`: the fix. `timeoutMs`: the time the ticket has left, which no command
+ * of this environment may outlast, except the one that takes it down.
+ */
+export interface EnvRef { branch: string; sha: string; role: 'base' | 'before' | 'after'; timeoutMs?: number }
 
 export interface Environment {
   /**
@@ -18,7 +25,7 @@ export interface Environment {
    * environment may hand it to a container, as a mount or a build context. It must never
    * start a host-side command in it, or one that reads from it.
    */
-  up(ref: { branch: string; sha: string; role: 'before' | 'after' }, workdir: string): Promise<EnvHandle>
+  up(ref: EnvRef, workdir: string): Promise<EnvHandle>
   runCheck(h: EnvHandle, check: Check): Promise<CheckResult>
   /** Null when the environment cannot run commands. */
   runCommand(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string } | null>

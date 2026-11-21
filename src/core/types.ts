@@ -4,7 +4,8 @@ export type StateName =
   | 'checks_failing' | 'building' | 'verified' | 'pr_open'
   | 'skipped' | 'not_reproducible' | 'needs_human' | 'fix_failed'
 export interface Ticket { id: string; ref: string; title: string; body: string; url: string; labels: string[] }
-export interface Criterion { id: string; text: string; checkable: boolean }
+/** `reason`: why a criterion is not checkable, when triage said so. */
+export interface Criterion { id: string; text: string; checkable: boolean; reason?: string }
 export interface Check { criterionId: string; command: string; files: string[] }
 export interface CheckResult { criterionId: string; passed: boolean; exitCode: number; output: string }
 export interface LinkedDocument { title: string; body: string }

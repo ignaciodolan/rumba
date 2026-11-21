@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { execa } from 'execa'
-import type { Environment, EnvHandle } from '../../ports/environment.js'
+import type { Environment, EnvHandle, EnvRef } from '../../ports/environment.js'
 import type { Check, CheckResult } from '../../core/types.js'
 
 /** Runs one host-side command. `env` is added to the command's environment. */
@@ -34,6 +34,8 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
 /** Rumba's own keys. A project's commands must not inherit them (a compose file could pass them into a container). */
 const KEYS_KEPT_FROM_COMMANDS = [
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
   'RUMBA_GITHUB_TOKEN',
   'GITHUB_TOKEN',
   'GH_TOKEN',
@@ -105,9 +107,10 @@ export class DockerEnvironment implements Environment {
     this.timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS
   }
 
-  async up(ref: { branch: string; sha: string; role: 'before' | 'after' }, workdir: string): Promise<EnvHandle> {
+  async up(ref: EnvRef, workdir: string): Promise<EnvHandle> {
     const upDir = await this.o.trusted.trustedCheckout(ref.branch)
-    const host = { branch: ref.branch, project: `rumba-${randomUUID().replaceAll('-', '').slice(0, 16)}`, upDir }
+    const deadline = ref.timeoutMs === undefined ? undefined : Date.now() + ref.timeoutMs
+    const host = { branch: ref.branch, project: `rumba-${randomUUID().replaceAll('-', '').slice(0, 16)}`, upDir, deadline }
     const handle: EnvHandle = { workdir, host }
     let result: { exitCode: number; output: string }
     try {
@@ -142,7 +145,8 @@ export class DockerEnvironment implements Environment {
   async down(h: EnvHandle): Promise<void> {
     if (h.host === undefined) return
     try {
-      await this.inNewCheckout(h, this.o.down)
+      // Taking the environment down gets its full limit, also when the ticket's time ran out.
+      await this.inNewCheckout(h, this.o.down, this.timeoutMs)
     } catch {
       // A failed teardown must not hide the result of the run.
     }
@@ -158,18 +162,27 @@ export class DockerEnvironment implements Environment {
   }
 
   /** Runs one command in a trusted checkout made for it and removed after it. */
-  private async inNewCheckout(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
+  private async inNewCheckout(h: EnvHandle, command: string, timeoutMs?: number): Promise<{ exitCode: number; output: string }> {
     if (h.host === undefined) throw new Error('This environment was not brought up here, so it has no trusted checkout to run host commands in.')
     const dir = await this.o.trusted.trustedCheckout(h.host.branch)
     try {
-      return await this.start(h, dir, command)
+      return await this.start(h, dir, command, timeoutMs)
     } finally {
       await this.o.trusted.cleanup(dir).catch(() => undefined)
     }
   }
 
+  /**
+   * The limit of one command: the rumba's command limit, and never past the time the ticket
+   * has left. Never below a second, because 0 means no limit to the runner.
+   */
+  private limit(h: EnvHandle): number {
+    const left = h.host?.deadline === undefined ? Infinity : h.host.deadline - Date.now()
+    return Math.min(this.timeoutMs, Math.max(1000, left))
+  }
+
   /** The only place a host-side command is started: in a trusted checkout, never in `h.workdir`. */
-  private start(h: EnvHandle, dir: string, command: string): Promise<{ exitCode: number; output: string }> {
-    return this.run(command, { cwd: dir, timeoutMs: this.timeoutMs, env: { [WORKDIR_VARIABLE]: h.workdir, [PROJECT_VARIABLE]: h.host?.project ?? '' } })
+  private start(h: EnvHandle, dir: string, command: string, timeoutMs = this.limit(h)): Promise<{ exitCode: number; output: string }> {
+    return this.run(command, { cwd: dir, timeoutMs, env: { [WORKDIR_VARIABLE]: h.workdir, [PROJECT_VARIABLE]: h.host?.project ?? '' } })
   }
 }

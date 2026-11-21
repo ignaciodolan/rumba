@@ -1,5 +1,6 @@
 import type { RumbaConfig } from '../../config/load.js'
 import type { Deps } from '../../ports/deps.js'
+import { timeLeft } from '../budget.js'
 import { changedChecks, protectedViolations } from '../guards.js'
 import { checkOutputMax, cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
@@ -7,6 +8,14 @@ import type { CheckResult, Ticket, TicketState } from '../types.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
 
 type Failure = { criterionId: string; output: string }
+
+/** Exit codes of a command that timed out (124), could not execute (126) or was not found (127). */
+export const COULD_NOT_RUN = [124, 126, 127]
+
+/** For a docker environment, the prefix that runs a check in the project's container, so the agent can be told. */
+export function execPrefixOf(rumba: RumbaConfig): { execPrefix?: string } {
+  return rumba.environment.kind === 'docker' ? { execPrefix: rumba.environment.exec } : {}
+}
 
 function fromResults(results: CheckResult[], secrets: string[]): Failure[] {
   return results.filter((r) => !r.passed).map((r) => ({ criterionId: r.criterionId, output: cleanOutput(r.output, secrets) }))
@@ -56,7 +65,7 @@ async function fixOnce(
   const { workdir } = await deps.workspace.prepare(state.branch!, { fresh: false })
   try {
     const result = await deps.agent.run({
-      kind: 'fix', ticket, context: rumba.context, environmentKind: rumba.environment.kind,
+      kind: 'fix', ticket, context: rumba.context, environmentKind: rumba.environment.kind, timeoutMs: timeLeft(deps), ...execPrefixOf(rumba),
       criteria: state.criteria, checks: state.checks, failures, lockedFiles: checkFiles,
     }, workdir)
     if (result.kind !== 'fix') throw new Error(`Agent returned ${result.kind} for a fix task`)
@@ -91,7 +100,7 @@ async function verify(
       return { failures: [{ criterionId: 'guard', output: `The fix changed or deleted check files, which must stay as written: ${edited.join(', ')}` }] }
     }
 
-    const handle = await deps.environment.up({ branch: state.branch!, sha, role: 'after' }, workdir)
+    const handle = await deps.environment.up({ branch: state.branch!, sha, role: 'after', timeoutMs: timeLeft(deps) }, workdir)
     try {
       const results: CheckResult[] = []
       const max = checkOutputMax(state.checks.length)
@@ -104,6 +113,11 @@ async function verify(
 
       if (rumba.verify.test) {
         const ran = await deps.environment.runCommand(handle, rumba.verify.test)
+        // A timeout, or tests that cannot run or are not found, says nothing about the fix.
+        // Throwing here takes the environment down first, in the finally below.
+        if (ran !== null && COULD_NOT_RUN.includes(ran.exitCode)) {
+          throw new Error(`The project tests could not run (exit ${ran.exitCode}): ${cleanOutput(ran.output, deps.secrets)}`)
+        }
         if (ran !== null && ran.exitCode !== 0) {
           return { failures: [{ criterionId: 'project-tests', output: cleanOutput(ran.output, deps.secrets) }] }
         }

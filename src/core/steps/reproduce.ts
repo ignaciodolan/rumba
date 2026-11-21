@@ -1,7 +1,9 @@
 import type { RumbaConfig } from '../../config/load.js'
 import { AgentError } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
+import { timeLeft } from '../budget.js'
 import { protectedViolations } from '../guards.js'
+import { COULD_NOT_RUN, execPrefixOf } from './build.js'
 import { fixBranch } from '../labels.js'
 import { checkOutputMax, cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
@@ -9,8 +11,6 @@ import type { Check, CheckResult, Criterion, Ticket, TicketState } from '../type
 import { cleanupQuietly, downQuietly } from './teardown.js'
 
 const NO_CHECK = 'Rumba could not write a check for any criterion.'
-/** Exit codes of a check that timed out (124), could not execute (126) or was not found (127). */
-const COULD_NOT_RUN = [124, 126, 127]
 
 async function stop(
   deps: Deps, ticket: Ticket, state: TicketState, to: 'needs_human' | 'not_reproducible', comment: string,
@@ -42,7 +42,7 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
     if (missing.length === 1) throw new AgentError(`The check file ${missing[0]} was not committed; is it ignored by git?`)
     if (missing.length > 1) throw new AgentError(`The check files ${missing.join(', ')} were not committed; are they ignored by git?`)
 
-    const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before' }, workdir)
+    const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before', timeoutMs: timeLeft(deps) }, workdir)
     try {
       let current: TicketState = {
         ...transition(state, 'env_ready', deps.clock()), branch, baseSha, checksSha, checks,
@@ -95,6 +95,7 @@ async function writeChecks(
   try {
     const result = await deps.agent.run({
       kind: 'write-checks', ticket, context: rumba.context, environmentKind: rumba.environment.kind, criteria: checkable,
+      timeoutMs: timeLeft(deps), ...execPrefixOf(rumba),
     }, workdir)
     if (result.kind !== 'write-checks') throw new Error(`Agent returned ${result.kind} for a write-checks task`)
 
