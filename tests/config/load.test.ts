@@ -37,7 +37,7 @@ describe('loadRumbas', () => {
     expect(r.dir).toBe(path.join(root, '.rumba', 'hub'))
     expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 })
     expect(r.labels.optIn).toBe('rumba:hub')
-    expect(r.environment).toMatchObject({ kind: 'docker', protected: ['docker-compose*.y*ml', 'compose*.y*ml'] })
+    expect(r.environment).toMatchObject({ kind: 'docker', protected: ['docker-compose*.y*ml', 'compose*.y*ml', 'Dockerfile*', '*.dockerfile', '.dockerignore'] })
     expect(r.context).toContain('Hub is the admin app.')
     expect(r.context).toContain('- Use pnpm.')
   })

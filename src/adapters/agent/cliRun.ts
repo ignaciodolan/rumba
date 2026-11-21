@@ -1,9 +1,6 @@
-import { rm } from 'node:fs/promises'
-import path from 'node:path'
 import { AgentError, type AgentResult, type AgentTask } from '../../ports/agent.js'
 import type { Sandbox } from '../../ports/sandbox.js'
-import { RESULT_PATH } from './prompts.js'
-import { readAgentResult } from './result.js'
+import { clearAgentResult, readAgentResult } from './result.js'
 
 const OUTPUT_TAIL = 2000
 
@@ -17,7 +14,7 @@ export async function runCliAgent(o: {
   task: AgentTask
   workdir: string
 }): Promise<AgentResult> {
-  await rm(path.join(o.workdir, RESULT_PATH), { force: true })
+  await clearAgentResult(o.workdir)
   const { exitCode, output } = await o.sandbox.run({ workdir: o.workdir, command: o.command, env: o.env, timeoutMs: o.timeoutMs })
   if (exitCode !== 0) {
     const reason = exitCode === 124 ? `timed out after ${o.timeoutMs} ms` : `exited with code ${exitCode}`
