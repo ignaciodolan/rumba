@@ -6,6 +6,7 @@ import { fixBranch } from '../labels.js'
 import { cleanOutput } from '../redact.js'
 import { transition } from '../states.js'
 import type { Ticket, TicketState } from '../types.js'
+import { COULD_NOT_RUN } from './build.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
 
 function messageOf(e: unknown): string {
@@ -49,6 +50,11 @@ export async function checkEnvironment(deps: Deps, rumba: RumbaConfig, ticket: T
       if (test === undefined) return state
       const ran = await deps.environment.runCommand(handle, test)
       if (ran === null || ran.exitCode === 0) return state
+      if (COULD_NOT_RUN.includes(ran.exitCode)) {
+        return await stop('project tests could not run on the default branch',
+          `The project's tests (${test}) could not run on the default branch (exit ${ran.exitCode}): they timed out, cannot execute or were not found, ` +
+          `so Rumba did not start work on this ticket. If they need longer, raise \`environment.command_timeout_minutes\`.\n\n${fence(cleanOutput(ran.output, deps.secrets))}`)
+      }
       return await stop('project tests fail on the default branch',
         `The project's tests (${test}) already fail on the default branch (exit ${ran.exitCode}), so Rumba could not tell ` +
         `whether a change of its own breaks them. Rumba did not start work on this ticket.\n\n${fence(cleanOutput(ran.output, deps.secrets))}`)

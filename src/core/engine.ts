@@ -1,5 +1,6 @@
 import type { RumbaConfig } from '../config/load.js'
 import type { Deps } from '../ports/deps.js'
+import { cleanOutput } from './redact.js'
 import { ENDS, transition } from './states.js'
 import { build } from './steps/build.js'
 import { checkEnvironment } from './steps/checkEnvironment.js'
@@ -49,8 +50,9 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
           default: throw new Error(`No step for state ${current.state}`)
         }
       } catch (e) {
-        // A call stopped because the ticket's time ran out is the budget, not an error.
-        if (spent()) return await outOfTime(deps, rumba, ticket, current)
+        // A call stopped because the ticket's time ran out is the budget, not an error. What
+        // stopped the step is still said, in case it was something else.
+        if (spent()) return await outOfTime(deps, rumba, ticket, current, cleanOutput(e instanceof Error ? e.message : String(e), deps.secrets, 1000))
         throw e
       }
     }
@@ -60,8 +62,9 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
   }
 }
 
-async function outOfTime(deps: Deps, rumba: RumbaConfig, ticket: Ticket, current: TicketState): Promise<TicketState> {
-  await deps.tracker.comment(ticket, `Rumba stopped work on this ticket: the time budget of ${rumba.limits.minutesPerTicket} minutes ran out.`)
+async function outOfTime(deps: Deps, rumba: RumbaConfig, ticket: Ticket, current: TicketState, lastError?: string): Promise<TicketState> {
+  const because = lastError === undefined ? '' : ` The last step stopped with: ${lastError}`
+  await deps.tracker.comment(ticket, `Rumba stopped work on this ticket: the time budget of ${rumba.limits.minutesPerTicket} minutes ran out.${because}`)
   const next = transition(current, 'needs_human', deps.clock(), 'time budget exceeded')
   await deps.tracker.writeState(ticket, next)
   return next

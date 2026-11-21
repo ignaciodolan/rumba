@@ -108,6 +108,10 @@ async function verify(
         const r = await deps.environment.runCheck(handle, check)
         results.push({ ...r, output: cleanOutput(r.output, deps.secrets, max) })
       }
+      // A check that timed out, cannot execute or was not found says nothing about the fix.
+      // Throwing here takes the environment down first, in the finally below.
+      const broken = results.find((r) => COULD_NOT_RUN.includes(r.exitCode))
+      if (broken) throw new Error(`Check for ${broken.criterionId} could not run (exit ${broken.exitCode}): ${broken.output}`)
       const failed = fromResults(results, deps.secrets)
       if (failed.length > 0) return { failures: failed }
 

@@ -18,7 +18,8 @@ ENV HOME=/home/rumba \
     NODE_PATH=/usr/local/lib/node_modules \
     DISABLE_AUTOUPDATER=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
-    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    npm_config_store_dir=/home/rumba/.local/share/pnpm/store
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git \
@@ -31,6 +32,8 @@ RUN npm install -g \
  && npm cache clean --force
 
 # pnpm and yarn through corepack: each project gets the version its package.json pins.
+# pnpm keeps its store under HOME (npm_config_store_dir above), never in the working
+# copy, where Rumba would commit it.
 RUN (command -v corepack >/dev/null || npm install -g "corepack@${COREPACK_VERSION}") \
  && corepack enable \
  && npm cache clean --force

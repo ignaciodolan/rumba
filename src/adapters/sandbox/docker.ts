@@ -95,12 +95,16 @@ export class DockerSandbox implements Sandbox {
   }
 
   async run(o: { workdir: string; command: string[]; env: Record<string, string>; timeoutMs: number }): Promise<{ exitCode: number; output: string }> {
+    // The limit covers the whole run, building the image included.
+    const started = Date.now()
     await this.ensureImage()
+    const left = o.timeoutMs - (Date.now() - started)
+    if (left <= 0) return { exitCode: TIMEOUT_EXIT_CODE, output: 'The sandbox image was still being built when the time limit ran out.' }
     const name = `rumba-${randomUUID()}`
     const args = dockerArgs({ ...o, image: this.image!, user: callerUser(), name, harden: true })
     const running = this.runner(args, { env: o.env })
 
-    const timeout = wait(o.timeoutMs)
+    const timeout = wait(left)
     const first = await Promise.race([running, timeout.done.then(() => null)])
     timeout.cancel()
     if (first !== null) return first

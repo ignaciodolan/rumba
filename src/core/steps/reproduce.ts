@@ -25,6 +25,11 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
   if (state.state !== 'criteria_ready') throw new Error(`Cannot reproduce from state ${state.state}`)
 
   const checkable = state.criteria.filter((c) => c.checkable)
+  if (checkable.length === 0 && state.criteria.length > 0 && state.criteria.every((c) => c.reason)) {
+    // Triage marked every criterion not checkable: there is nothing to verify a change against.
+    const list = state.criteria.map((c) => `- ${c.text} (not checkable: ${c.reason})`).join('\n')
+    return stop(deps, ticket, state, 'needs_human', `No criterion of this ticket can be checked by a command, so Rumba has nothing to verify a change against.\n\n${list}`)
+  }
   if (checkable.length === 0) return stop(deps, ticket, state, 'needs_human', NO_CHECK)
 
   const branch = fixBranch(rumba.name, ticket.id)

@@ -33,7 +33,7 @@ describe('the time budget of a ticket', () => {
     d.agent.run = async (task, w) => { if (task.kind === 'write-checks') minutes = 31; return agentRun(task, w) }
     const s = await advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
     expect(s.state).toBe('needs_human'); expect(s.history.at(-1)?.note).toBe('time budget exceeded')
-    expect(d.tracker.comments.at(-1)?.body).toBe('Rumba stopped work on this ticket: the time budget of 30 minutes ran out.')
+    expect(d.tracker.comments.at(-1)?.body).toBe('Rumba stopped work on this ticket: the time budget of 30 minutes ran out. The last step stopped with: Claude Code timed out after 1800000 ms')
   })
   it('still reports an error that happens with time left as an error', async () => {
     const d = makeDeps(); scriptHappyBug(d); d.agent.script.triage = new AgentError('bad json')

@@ -108,7 +108,9 @@ function documentsSection(documents: LinkedDocument[]): string {
 function checkRules(task: AgentTask): string {
   const rules = [
     "Prefer the project's existing test framework.",
-    'Each check is one command, run from the repository root, that exits 0 only when its criterion holds.',
+    task.execPrefix === undefined
+      ? 'Each check is one command, run from the repository root, that exits 0 only when its criterion holds.'
+      : 'Each check is one command that exits 0 only when its criterion holds.',
     "Put all check files together in one new folder, for example tests/rumba/, unless the project's test framework needs them somewhere else.",
     "List every file a check needs, as a path relative to the repository root, in that check's \"files\".",
     'Never commit .rumba-out/.',
