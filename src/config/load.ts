@@ -14,9 +14,11 @@ export interface RumbaConfig {
   tracker: { kind: 'github' | 'linear'; team?: string; project?: string }
   agent: { kind: 'claude-code' | 'gemini-cli'; model?: string }
   environment:
-    | { kind: 'docker'; up: string; exec: string; down: string; protected: string[] }
+    | { kind: 'docker'; up: string; exec: string; down: string; protected: string[]; commandTimeoutMinutes: number }
     | { kind: 'vercel-preview'; projectId?: string; protected: string[] }
   verify: { test?: string }
+  /** The container the agent and the URL checks run in: the Node major version of Rumba's sandbox image. */
+  sandbox: { nodeVersion: string }
   limits: { maxTicketsPerRun: number; minutesPerTicket: number; maxFixAttempts: number }
   labels: LabelNames
   context: string
@@ -81,9 +83,10 @@ async function loadOne(repoRoot: string, name: string): Promise<RumbaConfig> {
     agent: c.agent,
     environment:
       env.kind === 'docker'
-        ? { kind: 'docker', up: env.up, exec: env.exec, down: env.down, protected: env.protected }
+        ? { kind: 'docker', up: env.up, exec: env.exec, down: env.down, protected: env.protected, commandTimeoutMinutes: env.command_timeout_minutes }
         : { kind: 'vercel-preview', ...(env.project_id ? { projectId: env.project_id } : {}), protected: env.protected },
     verify: c.verify,
+    sandbox: { nodeVersion: c.sandbox.node },
     limits: {
       maxTicketsPerRun: c.limits.max_tickets_per_run,
       minutesPerTicket: c.limits.minutes_per_ticket,

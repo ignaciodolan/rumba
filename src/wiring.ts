@@ -29,7 +29,7 @@ type Env = Record<string, string | undefined>
 
 /** Variables whose values must never be printed or posted. Ids and the login are not secret. */
 const SECRET_VARIABLES = [
-  'RUMBA_GITHUB_TOKEN', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY',
+  'RUMBA_GITHUB_TOKEN', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GEMINI_API_KEY',
   'VERCEL_TOKEN', 'VERCEL_AUTOMATION_BYPASS_SECRET',
 ]
 
@@ -97,13 +97,21 @@ function agentFor(rumba: RumbaConfig, env: Env, sandbox: Sandbox): Agent {
   const timeoutMs = rumba.limits.minutesPerTicket * 60_000
   const { model } = rumba.agent
   if (rumba.agent.kind === 'gemini-cli') return new GeminiCliAgent({ sandbox, apiKey: required(env, 'GEMINI_API_KEY', why), model, timeoutMs })
-  return new ClaudeCodeAgent({ sandbox, apiKey: required(env, 'ANTHROPIC_API_KEY', why), model, timeoutMs })
+  // An API key, or a token from `claude setup-token` for a Claude subscription. Claude Code
+  // prefers the key when both are set, so only that one is passed.
+  const apiKey = value(env, 'ANTHROPIC_API_KEY')
+  const oauthToken = value(env, 'CLAUDE_CODE_OAUTH_TOKEN')
+  if (apiKey !== undefined) return new ClaudeCodeAgent({ sandbox, apiKey, model, timeoutMs })
+  if (oauthToken !== undefined) return new ClaudeCodeAgent({ sandbox, oauthToken, model, timeoutMs })
+  throw new MissingKeyError(`ANTHROPIC_API_KEY is not set, and neither is CLAUDE_CODE_OAUTH_TOKEN. ${why}`)
 }
 
 function environmentFor(rumba: RumbaConfig, env: Env, codeHost: CodeHost, sandbox: Sandbox, workspace: GitWorkspace): Environment {
   const e = rumba.environment
   // Host-side commands run in checkouts of the default branch that the workspace hands out.
-  if (e.kind === 'docker') return new DockerEnvironment({ up: e.up, exec: e.exec, down: e.down, trusted: workspace })
+  if (e.kind === 'docker') {
+    return new DockerEnvironment({ up: e.up, exec: e.exec, down: e.down, trusted: workspace, timeoutMs: e.commandTimeoutMinutes * 60_000 })
+  }
   const why = `Rumba "${rumba.name}" uses the vercel-preview environment`
   const token = required(env, 'VERCEL_TOKEN', `${why}.`)
   const projectId = e.projectId ?? required(env, 'VERCEL_PROJECT_ID', `${why} and its rumba.yml sets no environment.project_id.`)
@@ -156,7 +164,8 @@ export function buildDeps(
   const token = githubToken(rumba, env)
   const octokit = new Octokit({ auth: token })
   const tracker = trackerFor(rumba, env, repo, () => octokit)
-  const sandbox = new DockerSandbox({ dockerfileDir: SANDBOX_DIR })
+  // Always Rumba's own Dockerfile; the rumba chooses only the Node major version.
+  const sandbox = new DockerSandbox({ dockerfileDir: SANDBOX_DIR, nodeVersion: rumba.sandbox.nodeVersion })
   const agent = agentFor(rumba, env, sandbox)
   const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
   const workspace = new GitWorkspace({ repoRoot: repo.root, defaultBranch: repo.defaultBranch })

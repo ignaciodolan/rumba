@@ -14,7 +14,14 @@ const dockerEnvironment = z.object({
   exec: z.string().min(1),
   down: z.string().min(1),
   protected: z.array(z.string()).default(DEFAULT_DOCKER_PROTECTED),
+  command_timeout_minutes: z.number().int().positive().default(10),
 })
+
+/** A Node major version for the sandbox image, from 20 on. It becomes a Docker build argument, so nothing else is allowed. */
+const nodeMajor = z
+  .union([z.number().int(), z.string()])
+  .transform((v) => String(v))
+  .refine((v) => /^[0-9]{2,3}$/.test(v) && Number(v) >= 20, { message: 'must be a Node major version from 20 on, such as 24' })
 
 const vercelEnvironment = z.object({
   kind: z.literal('vercel-preview'),
@@ -36,6 +43,7 @@ export const rumbaFileSchema = z
     }),
     environment: z.discriminatedUnion('kind', [dockerEnvironment, vercelEnvironment]),
     verify: z.object({ test: z.string().min(1).optional() }).default({}),
+    sandbox: z.object({ node: nodeMajor.default('22') }).default({ node: '22' }),
     limits: z
       .object({
         max_tickets_per_run: z.number().int().positive().default(3),
