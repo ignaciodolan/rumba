@@ -18,7 +18,7 @@ describe('checkEnvironment', () => {
     expect(d.environment.ups).toEqual([{ branch: 'rumba/hub/7', sha: 'base000', role: 'base' }])
     expect(d.environment.commandsRun).toEqual(['pnpm test'])
     expect(d.environment.downs).toBe(1)
-    expect(d.workspace.log).toEqual(expect.arrayContaining(['prepare rumba/hub/7 fresh', 'cleanup /fake/rumba/hub/7']))
+    expect(d.workspace.log).toEqual(['prepare rumba/hub/7 fresh /fake/1/rumba/hub/7', 'cleanup /fake/1/rumba/hub/7'])
     expect(d.agent.calls).toHaveLength(0)
   })
   it('only brings the environment up when there are no project tests', async () => {
