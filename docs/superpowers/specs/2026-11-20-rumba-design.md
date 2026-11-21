@@ -72,7 +72,7 @@ Anti-goals, meaning outcomes that make Rumba a failure even if it runs:
 
 ### What does the fixing
 
-1. **Drive an existing coding agent (chosen).** Rumba runs Claude Code or Gemini CLI as a subprocess. "Pluggable model" becomes "pluggable agent and model". The owner learns orchestration, state, environments and evidence, and customers get fix quality from mature agents.
+1. **Drive an existing coding agent (chosen).** Rumba runs Claude Code or Gemini CLI as a subprocess. "Pluggable model" becomes "pluggable agent and model". The owner learns orchestration, state, environments and evidence, and users get fix quality from mature agents.
 2. **Own agent loop.** Rumba calls model APIs with its own file and shell tools. Much more work, and fix quality would lag for a long time. The agent interface is narrow enough that this can be added later as one more agent.
 
 This was the assistant's pick. The owner did not object when it was stated as the plan.
@@ -81,8 +81,8 @@ This was the assistant's pick. The owner did not object when it was stated as th
 
 1. **One CLI, state on the ticket (chosen by the owner).** No database. The same command runs locally or in GitHub Actions. Trade-off: history is only as rich as what fits on a ticket, and long runs are bound by CI limits.
 2. **CLI with a local SQLite file.** Richer history, but a laptop run and a CI run do not share state.
-3. **Always-on service** with Postgres, webhooks and a scheduler. Most capable, but every customer hosts a server and the build is two to three times larger.
-4. **Hosted multi-tenant service.** Dropped early: customers do not want to pay and the owner would be running it for them.
+3. **Always-on service** with Postgres, webhooks and a scheduler. Most capable, but every user hosts a server and the build is two to three times larger.
+4. **Hosted multi-tenant service.** Dropped early: it would mean running a service for everyone who uses Rumba, which is not the aim.
 
 The state store sits behind an interface so options 2 and 3 stay possible.
 

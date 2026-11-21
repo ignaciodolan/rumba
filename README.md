@@ -7,7 +7,7 @@ Rumba is an open-source tool that picks up labelled tickets from an issue tracke
 This is stage 1: Rumba takes a ticket from its label to an open pull request. What is not done yet:
 
 - The package is not published to npm. `npx rumba-cli` and the generated workflow will work once it is; until then, build it from this repository (`npm install && npm run build`, then `node dist/cli.js` or `npm link`).
-- The sandbox image (`rumba-sandbox:local`) is not pushed to any registry. Rumba builds it locally from `sandbox/Dockerfile` the first time `rumba run` needs it, which takes a few minutes.
+- The sandbox image is not pushed to any registry. Rumba builds it locally from `sandbox/Dockerfile` the first time `rumba run` needs it, which takes a few minutes and counts toward that ticket's time. Its tag is `rumba-sandbox:node<version>-<hash of the Dockerfile>`, so another Node version or a newer Dockerfile builds a new image; old ones are not removed (`docker image prune` or `docker rmi`).
 - No live run against a real tracker or model has been made. The adapters are tested against fakes, stubs, local git and local Docker.
 - Stage 2 (acting on pull request review feedback, noticing merged and closed pull requests, writing lessons) is not built yet.
 
@@ -58,7 +58,7 @@ Rumba also keeps one state comment on the ticket, which it edits in place, and p
 
 On each run Rumba takes each opted-in ticket as far as it can:
 
-1. `queued`: the ticket has the opt-in label and no state yet. Before any agent call, Rumba brings the environment up once on the default branch and runs the project's own tests (`verify.test`) there, if set. If the environment does not come up, or the tests already fail, the ticket goes to `needs_human` with the output, and no agent call is spent. This is also how a missing environment file on the default branch shows up.
+1. `queued`: the ticket has the opt-in label and no state yet. With the docker environment, before any agent call, Rumba brings the environment up once on the default branch and runs the project's own tests (`verify.test`) there, if set. If the environment does not come up, or the tests fail or cannot run there, the ticket goes to `needs_human` with the output, and no agent call is spent. This is also how a missing environment file on the default branch shows up. A failure here is final for the ticket, even a passing one such as a Docker daemon that was down: add `rumba-retry` to try again. The check counts toward `minutes_per_ticket`.
 2. `triaged`: the agent read the ticket and the repository and decided whether it is a bug or a feature, and whether Rumba can work it.
 3. `criteria_ready`: the acceptance criteria are fixed. A bug gets one criterion derived from the report. A feature uses the criteria written on the ticket, in files it names, or in documents native to the tracker. Triage may mark a written criterion that is a constraint rather than a behaviour, such as "nothing calls the network", as not checkable, with a reason. Such a criterion keeps its wording, is listed in the pull request as not verified with that reason, and never counts as passed.
 4. `awaiting_criteria`: a feature whose criteria are not written anywhere. Rumba never treats criteria it wrote itself as approved: it posts them as a draft and waits. Add `rumba-approved` to accept the draft as posted, or write the final criteria in the ticket description under an "Acceptance criteria" heading and then add the label.
