@@ -63,7 +63,7 @@ export class LinearTracker implements Tracker {
 
   async ensureLabels(): Promise<void> {
     const existing = await this.gateway.labels(this.team)
-    const wanted = [...this.stateNames.map((s) => stateLabel(this.labels, s)), this.labels.approved, this.labels.retry]
+    const wanted = [this.labels.optIn, ...this.stateNames.map((s) => stateLabel(this.labels, s)), this.labels.approved, this.labels.retry]
     for (const name of wanted) if (idsNamed(existing, name).length === 0) await this.createLabel(name)
   }
 

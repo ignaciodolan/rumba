@@ -10,7 +10,7 @@ const MAX_ITEMS = 20
 const MAX_CRITERION_TEXT = 500
 const MAX_COMMAND = 2000
 
-const criterion = z.object({ id: z.string().min(1), text: z.string().min(1).max(MAX_CRITERION_TEXT), checkable: z.boolean() })
+const criterion = z.object({ id: z.string().min(1), text: z.string().min(1).max(MAX_CRITERION_TEXT), checkable: z.boolean(), reason: z.string().max(MAX_CRITERION_TEXT).optional() })
 const criteria = z.array(criterion).max(MAX_ITEMS)
 
 /** Check files are hashed and read by Rumba later, so they must stay inside the workdir. */
@@ -29,6 +29,7 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
     ticketKind: z.enum(['bug', 'feature']),
     criteria: criteria.nullable(),
     criteriaSource: z.enum(['written', 'derived']).optional(),
+    notCheckable: z.array(z.object({ id: z.string().min(1), reason: z.string().trim().min(1).max(MAX_CRITERION_TEXT) })).max(MAX_ITEMS).optional(),
   }),
   'draft-criteria': z.object({ kind: z.literal('draft-criteria'), criteria }),
   'write-checks': z.object({ kind: z.literal('write-checks'), checks: z.array(check).max(MAX_ITEMS) }),
