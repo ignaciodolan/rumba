@@ -42,6 +42,8 @@ async function containersOf(project: string): Promise<string[]> {
 /** Edits files in the workdir it is given, and only there. No model is called. */
 class ScriptedAgent implements Agent {
   workdirs = new Set<string>()
+  /** When set, the relocation also weakens the check's assertion. */
+  weaken = false
 
   async run(task: AgentTask, workdir: string): Promise<AgentResult> {
     this.workdirs.add(workdir)
@@ -72,6 +74,19 @@ class ScriptedAgent implements Agent {
         if (after === before) throw new Error('scripted fix found nothing to change in src/slug.js')
         await writeFile(file, after)
         return { kind: 'fix', summary: 'Lower-case the slug.' }
+      }
+      case 'relocate-checks': {
+        // Merges the check into the project's own slug tests, under a descriptive title. Its
+        // imports are already there, so they go.
+        const assertion = this.weaken ? "  assert.ok(slugify('Hello World'))" : "  assert.equal(slugify('Hello World'), 'hello-world')"
+        const file = path.join(workdir, 'test', 'slug.test.js')
+        await writeFile(file, `${await readFile(file, 'utf8')}\ntest('lower-cases the slug', () => {\n${assertion}\n})\n`)
+        await rm(path.join(workdir, 'test', 'rumba-c1.test.js'))
+        return {
+          kind: 'relocate-checks',
+          moves: [{ from: 'test/rumba-c1.test.js', to: 'test/slug.test.js' }],
+          checks: [{ criterionId: 'c1', command: 'node --test test/slug.test.js', files: ['test/slug.test.js'] }],
+        }
       }
       default:
         throw new Error(`scripted agent has no answer for ${task.kind}`)
@@ -179,16 +194,25 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     const s = tracker.states.get('1')!
     expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
     expect(s.after).toEqual([expect.objectContaining({ criterionId: 'c1', passed: true })])
-    expect(codeHost.prs[0].body).toContain('| fail | pass |'); expect(codeHost.prs[0].draft).toBe(false)
-    // The environment check on the default branch, the before-run and the after-run each got
-    // their own checkout of the commit, never where an agent wrote.
-    expect(envWorkdirs.size).toBe(3)
+    expect(codeHost.prs[0].draft).toBe(false)
+    // The check now lives in the project's own tests: the table shows its final file and
+    // command, and keeps the result of the check Rumba wrote on the base commit.
+    expect(s.relocation).toMatchObject({ status: 'relocated', moves: [{ from: 'test/rumba-c1.test.js', to: 'test/slug.test.js' }] })
+    expect(s.relocation?.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
+    expect(codeHost.prs[0].body).toContain('| `node --test test/slug.test.js` | `test/slug.test.js` (relocated from `test/rumba-c1.test.js`) | fail | pass |')
+    expect(await git(repoRoot, 'show', 'rumba/demo/1:test/slug.test.js')).toContain("test('lower-cases the slug'")
+    expect(await git(repoRoot, 'ls-tree', '--name-only', 'rumba/demo/1', 'test/')).toBe('test/slug.test.js')
+    // The environment check on the default branch, the before-run, the after-run, and the
+    // relocated checks on the change and on the base commit each got their own checkout of
+    // the commit, never where an agent wrote.
+    expect(envWorkdirs.size).toBe(5)
     for (const w of envWorkdirs) expect(agent.workdirs.has(w)).toBe(false)
     // The host-side commands ran somewhere else again: each in its own checkout of the default
     // branch (up, the project tests and down for the check; up, one check and down before;
-    // up, one check, the project tests and down after).
-    expect(hostDirs.size).toBe(10)
-    expect(projects.size).toBe(3)
+    // up, one check, the project tests and down after; the same for the relocated check on
+    // the change, and up, one check and down on the base commit).
+    expect(hostDirs.size).toBe(17)
+    expect(projects.size).toBe(5)
     for (const d of hostDirs) { expect(agent.workdirs.has(d)).toBe(false); expect(envWorkdirs.has(d)).toBe(false) }
   }, 300_000)
 
@@ -238,6 +262,25 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
     expect(s.after).toEqual([expect.objectContaining({ criterionId: 'c1', passed: true })])
     for (const d of hostDirs) { expect(agent.workdirs.has(d)).toBe(false); expect(envWorkdirs.has(d)).toBe(false) }
+  }, 300_000)
+
+  it.skipIf(!dockerAvailable)('undoes a relocation that weakens the check, and opens the pull request with the check Rumba wrote', async () => {
+    agent.weaken = true
+    const fixture = await readFile(path.join(repoRoot, 'test', 'slug.test.js'), 'utf8')
+    const r = await runRumba(deps, rumba)
+    expect(r.advanced).toEqual([{ ticket: '1', from: 'queued', to: 'pr_open' }])
+    const s = tracker.states.get('1')!
+    expect(s.relocation).toMatchObject({ status: 'rejected' })
+    expect(s.relocation?.reason).toContain("assert.ok(slugify('Hello World'))")
+    // The branch is back on the fix: the check Rumba wrote, the project's tests untouched.
+    expect(await git(repoRoot, 'show', 'rumba/demo/1:test/slug.test.js')).toBe(fixture.trimEnd())
+    expect(await git(repoRoot, 'show', 'rumba/demo/1:test/rumba-c1.test.js')).toContain("assert.equal(slugify('Hello World'), 'hello-world')")
+    expect(await git(repoRoot, 'log', '--format=%s', '-1', 'rumba/demo/1')).toMatch(/^fix: /)
+    const body = codeHost.prs[0].body
+    expect(body).toContain('| `node --test test/rumba-c1.test.js` | `test/rumba-c1.test.js` | fail | pass |')
+    expect(body).toMatch(/rejected the move and undid it/)
+    // Nothing of the weakened move ran.
+    expect(envWorkdirs.size).toBe(3)
   }, 300_000)
 
   it.skipIf(!dockerAvailable)('reports not_reproducible when the bug is already fixed', async () => {

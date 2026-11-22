@@ -7,7 +7,7 @@ const d = makeDeps()
 describe('renderPullRequestBody', () => {
   it('renders the evidence table and the unverified list', () => {
     const body = renderPullRequestBody({ ticket: makeTicket({ url: 'https://t/1' }), rumba: makeRumba(), state: verified(d), outsideScope: ['packages/ui/y.ts'], secrets: [] })
-    expect(body).toContain('| C1 | `npm test -- c1` | fail | pass |')
+    expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` | fail | pass |')
     expect(body).toMatch(/## Not verified[\s\S]*C2/)
     expect(body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
     expect(body).toContain('https://t/1'); expect(body).toContain('Rumba: hub')
@@ -24,7 +24,7 @@ describe('renderPullRequestBody', () => {
   it('keeps ticket text from breaking the table', () => {
     const s = verified(d); s.criteria[0] = { id: 'c1', text: 'a | b\nc', checkable: true }
     const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
-    expect(body).toContain('| a \\| b c | `npm test -- c1` | fail | pass |')
+    expect(body).toContain('| a \\| b c | `npm test -- c1` | `tests/rumba/c1.test.ts` | fail | pass |')
   })
   it('fences output longer than any backtick run in it', () => {
     const s = verified(d); s.after![0]!.output = 'x\n`````\ny'
