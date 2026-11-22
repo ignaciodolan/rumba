@@ -216,3 +216,21 @@ describe('timeout wording', () => {
     expect(classifyInfrastructure({ exitCode: 124, output: '', dockerOom: false })).toMatch(/command limit or the ticket's time/)
   })
 })
+
+describe('a stale lock replaced at the same inode', () => {
+  it('is not removed when its content changed after it was judged', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'rumba-lock4-'))
+    try {
+      const file = path.join(dir, 'environment.lock')
+      await writeFile(file, JSON.stringify({ pid: 999999, host: 'h', at: 'x' }))
+      const live = JSON.stringify({ pid: process.pid, host: 'h', at: 'y', token: 'someone-else' })
+      // As if the freed inode number went straight to another waiter's new lock.
+      const slow = new HostLock({ file, pollMs: 10, isAlive: (pid) => pid !== 999999, beforeRemoveStale: async () => { await writeFile(file, live) } })
+      await expect(slow.acquire(100)).rejects.toThrow(/did not finish in time/)
+      const { readFile } = await import('node:fs/promises')
+      expect(await readFile(file, 'utf8')).toBe(live)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
