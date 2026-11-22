@@ -24,7 +24,7 @@ const SAFE = [
   '-c', 'core.attributesFile=/dev/null', '-c', 'submodule.recurse=false',
 ]
 /** Inherited variables that would point git at another repository, index or object store. */
-const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_ATTR_SOURCE']
+export const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_ATTR_SOURCE']
 /** The identity commits are made as when the workspace is given none. */
 export const RUMBA_IDENTITY = { name: BOT_NAME, email: BOT_EMAIL }
 

@@ -3,7 +3,7 @@ import { AgentError } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
 import { timeLeft } from '../budget.js'
 import { checkOutputMax, cleanOutput } from '../redact.js'
-import { judgeRelocation } from '../relocation.js'
+import { judgeRelocation, moduleVariants } from '../relocation.js'
 import type { Check, CheckResult, Move, Relocation, Ticket, TicketState } from '../types.js'
 import { COULD_NOT_RUN, execPrefixOf, inertTitle } from './build.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
@@ -106,7 +106,7 @@ async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: Ticke
   // Read from the commits, never from the folder the agent wrote in.
   const changed = await deps.workspace.changedFiles(workdir, from)
   const paths = [...new Set([
-    ...state.checks.flatMap((c) => c.files), ...result.moves.flatMap((m) => [m.from, m.to]), ...result.checks.flatMap((c) => c.files), ...changed,
+    ...state.checks.flatMap((c) => c.files), ...result.moves.flatMap((m) => [m.from, m.to, ...moduleVariants(m.to)]), ...result.checks.flatMap((c) => c.files), ...changed,
   ])]
   const before: Record<string, string | null> = {}
   const after: Record<string, string | null> = {}

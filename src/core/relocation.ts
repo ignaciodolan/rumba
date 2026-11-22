@@ -68,6 +68,18 @@ export function judgeRelocation(i: RelocationInput): string | null {
   const intoCheck = tos.filter((t) => originals.includes(t))
   if (intoCheck.length > 0) return `The relocation moved a check into one of Rumba's own check files: ${list(intoCheck)}.`
 
+  // Unambiguously: no two moved files may answer to one module name, before or after, and no
+  // moved file may take a module name another file already answers to (a project helper the
+  // check imports, say, whose import would then reach the moved file instead).
+  for (const side of ['from', 'to'] as const) {
+    const names = i.moves.flatMap((m) => moduleNames(m[side]).slice(0, 1))
+    const twice = names.find((n, k) => names.indexOf(n) !== k)
+    if (twice !== undefined) return `Two moved files answer to the same module name, ${code(twice.slice(3))}.`
+  }
+  for (const m of i.moves) {
+    const taken = moduleVariants(m.to).filter((v) => v !== m.to && typeof i.before[v] === 'string')
+    if (taken.length > 0) return `${code(m.to)} would answer to the same module name as ${list(taken)}, which is already there.`
+  }
   const touched = protectedViolations(i.changed, i.protectedGlobs)
   if (touched.length > 0) return `The relocation changed protected paths: ${list(touched)}.`
   const outside = i.changed.filter((f) => !originals.includes(f) && !tos.includes(f))
@@ -96,13 +108,15 @@ export function judgeRelocation(i: RelocationInput): string | null {
     }
   }
 
+  // A check that imports another moved file (a shared fixture, say) now imports it from its new place.
+  const renames = new Map(i.moves.flatMap((m) => moduleNames(m.from).map((name, n) => [name, moduleNames(m.to)[n]!] as [string, string])))
   for (const move of i.moves) {
     const original = i.original.find((c) => c.files.includes(move.from))!
     const text = i.before[move.from] ?? ''
     // A command that picks tests by title would run fewer of them once a title changed.
     const bare = original.files.reduce((c, f) => c.split(f).join(' '), original.command)
     const keepTitles = NAME_FILTER.test(bare) || titlesIn(text).some((t) => t.length > 0 && bare.includes(t))
-    const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles)
+    const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles, renames)
     if (reason !== null) return reason
   }
   return null
@@ -128,12 +142,22 @@ const TEST_TOP = /^(?:(?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(|
 /** Lines that set up or mock what every test in a file sees. */
 const HOOKS = /\b(?:before(?:Each|All)|after(?:Each|All)|setUp|tearDown|setup_method|setup_function|setup_module|setup_class|teardown_\w+|autouse|usefixtures|vi\.(?:mock|doMock|spyOn|stubGlobal|stubEnv|useFakeTimers)|jest\.(?:mock|doMock|spyOn|useFakeTimers)|mock\.patch|monkeypatch|TestMain)\b/
 
+/** Words in the name of a file that sets up or configures tests, or helps them, rather than holding them. */
+const NOT_A_TEST = new Set(['config', 'setup', 'teardown', 'helper', 'conftest', 'support'])
+/** Folders whose files are loaded by the test runner on its own: mocks, fixtures, and Cypress-style support files. */
+const NOT_A_TEST_FOLDER = new Set(['__mocks__', '__fixtures__', 'support'])
+
 /** A path a test runner would pick up, or a file in a test folder, and never a file that configures the tests. */
 export function isTestPath(file: string): boolean {
   const name = path.posix.basename(file)
   if (name.startsWith('.') || /^(?:conftest\.py|__init__\.py|setup\.(?:py|cfg)|pytest\.ini|tox\.ini|package\.json|Makefile)$/i.test(name)) return false
-  if (/config|setup|teardown|helper|conftest|support/i.test(name) || file.split('/').some((part) => part === '__mocks__' || part === '__fixtures__')) return false
+  if (file.split('/').slice(0, -1).some((part) => NOT_A_TEST_FOLDER.has(part.toLowerCase()))) return false
+  // A file named like a test is collected as one, whatever words its name holds
+  // (`notion-proposals-unsupported-blocks.test.ts`, `api-config.test.ts`).
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name) || /^test_\w+\.py$/.test(name) || /_test\.(?:py|go)$/.test(name) || /Tests?\.(?:java|kt|cs)$/.test(name)) return true
+  // Any other file is only a fixture or data in a test folder, and never one whose name holds,
+  // anywhere, a word for setting up, configuring or helping tests (`vitestsetup.ts`, `HTTPSetup.ts`).
+  if ([...NOT_A_TEST].some((w) => name.toLowerCase().includes(w))) return false
   return path.posix.dirname(file).split('/').some((part) => /^(?:tests?|__tests__|specs?|e2e)$/.test(part))
 }
 
@@ -152,10 +176,15 @@ interface Parsed {
 }
 
 /** Whether `after` is `before` plus the moved checks, as described above. */
-function sameFile(to: string, before: string | null, after: string, sources: { file: string; text: string }[], keepTitles: boolean): string | null {
+function sameFile(
+  to: string, before: string | null, after: string, sources: { file: string; text: string }[], keepTitles: boolean, renames: Map<string, string>,
+): string | null {
   const now = parse(to, after, keepTitles)
   const was = parse(to, before ?? '', keepTitles)
-  const moved = sources.map((s) => ({ file: s.file, ...parse(s.file, s.text, keepTitles) }))
+  const moved = sources.map((s) => {
+    const p = parse(s.file, s.text, keepTitles)
+    return { file: s.file, ...p, bindings: new Map([...p.bindings].map(([name, t]) => [name, renamed(t, renames)])), effects: new Set([...p.effects].map((t) => renamed(t, renames))) }
+  })
   // A file's hooks and mocks apply to every test in it, the moved check too.
   const hook = (before ?? '').split(/\r?\n/).find((l) => HOOKS.test(l))
   if (hook !== undefined) return `${code(to)} has hooks or mocks that would apply to the check, so it cannot take one: ${code(hook.trim())}.`
@@ -411,7 +440,45 @@ function readImport(file: string, line: string, bind: (name: string, target: str
 
 /** A relative module, as the repository path it names; any other module as written. */
 function jsModule(file: string, spec: string): string {
-  return spec.startsWith('./') || spec.startsWith('../') ? `js:${path.posix.normalize(path.posix.join(path.posix.dirname(file), spec))}` : `js:${spec}`
+  return spec.startsWith('./') || spec.startsWith('../') ? `js:${withoutExtension(path.posix.normalize(path.posix.join(path.posix.dirname(file), spec)))}` : `js:${spec}`
+}
+
+/**
+ * A relative module without the extension TypeScript maps between source and import: `./x.js`
+ * names `x.ts` or `x.tsx` too, `.mjs` names `.mts`, `.cjs` names `.cts`. Families stay apart.
+ */
+function withoutExtension(p: string): string {
+  return p.replace(/\.(?:jsx?|tsx?)$/, '').replace(/\.m[jt]s$/, '.mjs').replace(/\.c[jt]s$/, '.cjs')
+}
+
+/** The module names a repository file is imported by: as a JavaScript module, and as a Python one by path and, when no folder has a dot, dotted. */
+function moduleNames(file: string): string[] {
+  const bare = file.replace(/\.py$/, '')
+  const dotted = bare.includes('.') ? `py:\0${bare}` : `py:${bare.replace(/\//g, '.')}`
+  return [`js:${withoutExtension(file)}`, `py:${bare}`, dotted]
+}
+
+/** Every path that answers to the same module name as `file`, `file` included. Exported for the step, which reads them all. */
+export function moduleVariants(file: string): string[] {
+  const dir = path.posix.dirname(file)
+  const stem = path.posix.basename(file).replace(/\.d\.ts$|\.[^.]+$/, '')
+  const at = (p: string) => (dir === '.' ? p : `${dir}/${p}`)
+  // What Node, TypeScript, Vite and Python try for a module name: the file with each
+  // extension, and the folder of that name with an index, a package.json or an __init__.py.
+  const exts = ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs', '.json', '.node', '.py']
+  const inFolder = [...['ts', 'tsx', 'd.ts', 'js', 'jsx', 'mts', 'mjs', 'cts', 'cjs', 'json'].map((e) => `index.${e}`), 'package.json', '__init__.py']
+  const out = [...exts.map((e) => at(`${stem}${e}`)), ...inFolder.map((f) => at(`${stem}/${f}`))]
+  // `x/index.ts` and `x.ts` both answer to `x`.
+  if (stem === 'index' || stem === '__init__') out.push(...exts.map((e) => `${dir}${e}`))
+  return [...new Set(out)]
+}
+
+/** A binding's target with its module replaced by the module's new place, when it moved. */
+function renamed(target: string, renames: Map<string, string>): string {
+  const hash = target.indexOf('#')
+  const mod = hash < 0 ? target : target.slice(0, hash)
+  const to = renames.get(mod)
+  return to === undefined ? target : `${to}${hash < 0 ? '' : target.slice(hash)}`
 }
 
 function pyModule(file: string, spec: string): string {
