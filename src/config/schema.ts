@@ -15,6 +15,7 @@ const dockerEnvironment = z.object({
   down: z.string().min(1),
   protected: z.array(z.string()).default(DEFAULT_DOCKER_PROTECTED),
   command_timeout_minutes: z.number().int().positive().default(10),
+  min_free_disk_gb: z.number().nonnegative().default(5),
 })
 
 /** A Node major version for the sandbox image, from 20 on. It becomes a Docker build argument, so nothing else is allowed. */
@@ -44,6 +45,7 @@ export const rumbaFileSchema = z
     environment: z.discriminatedUnion('kind', [dockerEnvironment, vercelEnvironment]),
     verify: z.object({ test: z.string().min(1).optional() }).default({}),
     sandbox: z.object({ node: nodeMajor.default('22') }).default({ node: '22' }),
+    commit_author: z.object({ name: z.string().trim().min(1), email: z.string().trim().regex(/^[^\s<>@]+@[^\s<>@]+$/, 'must be an email address') }).optional(),
     limits: z
       .object({
         max_tickets_per_run: z.number().int().positive().default(3),

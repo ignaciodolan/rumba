@@ -14,11 +14,13 @@ export interface RumbaConfig {
   tracker: { kind: 'github' | 'linear'; team?: string; project?: string }
   agent: { kind: 'claude-code' | 'gemini-cli'; model?: string }
   environment:
-    | { kind: 'docker'; up: string; exec: string; down: string; protected: string[]; commandTimeoutMinutes: number }
+    | { kind: 'docker'; up: string; exec: string; down: string; protected: string[]; commandTimeoutMinutes: number; minFreeDiskGb: number }
     | { kind: 'vercel-preview'; projectId?: string; protected: string[] }
   verify: { test?: string }
   /** The container the agent and the URL checks run in: the Node major version of Rumba's sandbox image. */
   sandbox: { nodeVersion: string }
+  /** Who Rumba's commits are made as, when rumba.yml says; see resolveCommitAuthor. */
+  commitAuthor?: { name: string; email: string }
   limits: { maxTicketsPerRun: number; minutesPerTicket: number; maxFixAttempts: number }
   labels: LabelNames
   context: string
@@ -83,10 +85,11 @@ async function loadOne(repoRoot: string, name: string): Promise<RumbaConfig> {
     agent: c.agent,
     environment:
       env.kind === 'docker'
-        ? { kind: 'docker', up: env.up, exec: env.exec, down: env.down, protected: env.protected, commandTimeoutMinutes: env.command_timeout_minutes }
+        ? { kind: 'docker', up: env.up, exec: env.exec, down: env.down, protected: env.protected, commandTimeoutMinutes: env.command_timeout_minutes, minFreeDiskGb: env.min_free_disk_gb }
         : { kind: 'vercel-preview', ...(env.project_id ? { projectId: env.project_id } : {}), protected: env.protected },
     verify: c.verify,
     sandbox: { nodeVersion: c.sandbox.node },
+    ...(c.commit_author ? { commitAuthor: c.commit_author } : {}),
     limits: {
       maxTicketsPerRun: c.limits.max_tickets_per_run,
       minutesPerTicket: c.limits.minutes_per_ticket,

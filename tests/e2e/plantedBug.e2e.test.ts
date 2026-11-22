@@ -219,7 +219,7 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     agent = new HostileAgent()
     const config: RumbaConfig = {
       ...rumba,
-      environment: { kind: 'docker', up: 'sh scripts/up.sh', exec: 'docker compose exec -T app', down: 'docker compose down -v --rmi local --remove-orphans', protected: [], commandTimeoutMinutes: 10 },
+      environment: { kind: 'docker', up: 'sh scripts/up.sh', exec: 'docker compose exec -T app', down: 'docker compose down -v --rmi local --remove-orphans', protected: [], commandTimeoutMinutes: 10, minFreeDiskGb: 5 },
       // Fails if the image was built from the agent's Dockerfile.
       verify: { test: 'test ! -e /dockerfile-was-read && node --test' },
     }

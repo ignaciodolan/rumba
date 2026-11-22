@@ -23,7 +23,12 @@ const SAFE = [
 ]
 /** Inherited variables that would point git at another repository, index or object store. */
 const LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_ATTR_SOURCE']
-const BOT_ENV = { GIT_AUTHOR_NAME: BOT_NAME, GIT_AUTHOR_EMAIL: BOT_EMAIL, GIT_COMMITTER_NAME: BOT_NAME, GIT_COMMITTER_EMAIL: BOT_EMAIL }
+/** The identity commits are made as when the workspace is given none. */
+export const RUMBA_IDENTITY = { name: BOT_NAME, email: BOT_EMAIL }
+
+function identityEnv(a: { name: string; email: string }): Record<string, string> {
+  return { GIT_AUTHOR_NAME: a.name, GIT_AUTHOR_EMAIL: a.email, GIT_COMMITTER_NAME: a.name, GIT_COMMITTER_EMAIL: a.email }
+}
 /**
  * For git commands that read or check out files an agent wrote: the user's and the system's
  * git config are not read, so no driver defined there applies to those files. These commands
@@ -69,10 +74,15 @@ export class GitWorkspace implements Workspace {
   private readonly trusted = new Map<string, Trusted>()
   private setup: Promise<Setup> | undefined
 
-  constructor(o: { repoRoot: string; defaultBranch: string; remote?: string }) {
+  /** Who commits are made as; asked once, on the first commit. */
+  private readonly author: () => Promise<{ name: string; email: string }>
+  private authorOnce: Promise<{ name: string; email: string }> | undefined
+
+  constructor(o: { repoRoot: string; defaultBranch: string; remote?: string; author?: () => Promise<{ name: string; email: string }> }) {
     this.repoRoot = o.repoRoot
     this.defaultBranch = o.defaultBranch
     this.remote = o.remote ?? 'origin'
+    this.author = o.author ?? (async () => RUMBA_IDENTITY)
   }
 
   async prepare(branch: string, opts: { fresh: boolean }): Promise<{ workdir: string; baseSha: string }> {
@@ -173,7 +183,9 @@ export class GitWorkspace implements Workspace {
     if (staged.exitCode === 0 && opts.allowEmpty !== true) return null
     await this.refuseLinksOut(wt, workdir)
     const empty = opts.allowEmpty === true ? ['--allow-empty'] : []
-    await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', ...empty, '-m', message], [0], BOT_ENV)
+    this.authorOnce ??= this.author().catch(() => RUMBA_IDENTITY)
+    const author = await this.authorOnce
+    await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', ...empty, '-m', message], [0], identityEnv(author))
     return (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD'])).stdout
   }
 
@@ -418,9 +430,15 @@ export class GitWorkspace implements Workspace {
   }
 
   /** Starts git with an argument array; no shell is involved. */
+  /**
+   * Git runs with a umask of 022, whatever the caller's is, so the files it checks out can be
+   * read by a project image that runs as another user. The worktree's parent folder stays
+   * private (mode 700). `sh` only sets the umask and then replaces itself with git; the
+   * arguments are passed as "$@", never as shell text.
+   */
   private async spawnGit(args: string[], cwd: string, ok: number[], env: Record<string, string>) {
     const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !LOCATION_VARS.includes(k)))
-    const result = await execa('git', args, {
+    const result = await execa('/bin/sh', ['-c', 'umask 022 && exec git "$@"', 'git', ...args], {
       cwd, stdin: 'ignore', all: true, reject: false, extendEnv: false, env: { ...base, ...env, GIT_TERMINAL_PROMPT: '0' },
     })
     if (!ok.includes(result.exitCode ?? -1)) throw new Error(`git ${args.join(' ')} failed:\n${result.all ?? ''}`)
