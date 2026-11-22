@@ -1,5 +1,5 @@
 import { readFileSync, unlinkSync } from 'node:fs'
-import { mkdir, open, readFile, unlink } from 'node:fs/promises'
+import { link, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import path from 'node:path'
@@ -58,13 +58,16 @@ export class HostLock {
     for (;;) {
       const owner = await this.tryTake()
       if (owner === null) return
-      if (!this.isAlive(owner.pid) && owner.host === hostname()) {
-        // The process that held it is gone. Remove its lock, unless another waiter just did.
+      if (owner === 'unreadable' ? await this.oldUnreadable() : !this.isAlive(owner.pid)) {
+        // The process that held it is gone, or its lock was never written whole. Remove it,
+        // unless another waiter just did.
         await unlink(this.file).catch(() => undefined)
         continue
       }
       if (Date.now() >= giveUp) {
-        throw new Error(`Another Rumba process (pid ${owner.pid}) is running a docker environment on this machine since ${owner.at}, and it did not finish in time. Only one runs at a time; see ${this.file}.`)
+        const who = owner === 'unreadable' ? 'Another Rumba process' : `Another Rumba process (pid ${owner.pid})`
+        const since = owner === 'unreadable' ? '' : ` since ${owner.at}`
+        throw new Error(`${who} is running a docker environment on this machine${since}, and it did not finish in time. Only one runs at a time; see ${this.file}.`)
       }
       await new Promise((r) => setTimeout(r, Math.min(this.pollMs, Math.max(1, giveUp - Date.now()))))
     }
@@ -77,15 +80,15 @@ export class HostLock {
     if (owner?.token === this.token) await unlink(this.file).catch(() => undefined)
   }
 
-  /** Null when this process now holds the lock; otherwise who holds it. */
-  private async tryTake(): Promise<Holder | null> {
+  /**
+   * Null when this holder now has the lock; otherwise who holds it. The lock is written whole
+   * to a file of its own first and then linked into place, so it is never seen half written.
+   */
+  private async tryTake(): Promise<Holder | 'unreadable' | null> {
+    const draft = `${this.file}.${this.token}`
+    await writeFile(draft, JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString(), token: this.token } satisfies Holder), { mode: 0o600 })
     try {
-      const handle = await open(this.file, 'wx', 0o600)
-      try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString(), token: this.token } satisfies Holder))
-      } finally {
-        await handle.close()
-      }
+      await link(draft, this.file)
       held.set(this.file, this.token)
       if (!exitHook) {
         exitHook = true
@@ -94,15 +97,22 @@ export class HostLock {
       return null
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-      // A lock being written right now reads as empty; treat it as held by an unknown live process.
-      return (await this.read()) ?? { pid: -1, host: hostname(), at: 'just now' }
+      return (await this.read()) ?? 'unreadable'
+    } finally {
+      await unlink(draft).catch(() => undefined)
     }
+  }
+
+  /** A lock file nobody can read (left empty by a crash, or written by something else) counts as stale once it is a few seconds old. */
+  private async oldUnreadable(): Promise<boolean> {
+    const s = await stat(this.file).catch(() => null)
+    return s === null || Date.now() - s.mtimeMs > 10_000
   }
 
   private async read(): Promise<Holder | null> {
     try {
       const h = JSON.parse(await readFile(this.file, 'utf8')) as Partial<Holder>
-      return typeof h.pid === 'number' ? { pid: h.pid, host: h.host ?? hostname(), at: h.at ?? 'unknown', ...(h.token ? { token: h.token } : {}) } : null
+      return typeof h.pid === 'number' && Number.isInteger(h.pid) && h.pid > 0 ? { pid: h.pid, host: h.host ?? hostname(), at: h.at ?? 'unknown', ...(h.token ? { token: h.token } : {}) } : null
     } catch {
       return null
     }

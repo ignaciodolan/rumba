@@ -89,10 +89,16 @@ describe('the environment lock', () => {
     await env.runCommand(h, 'x')
     for (const t of seen) expect(t).toBeLessThanOrEqual(1000)
   })
-  it('is an infrastructure error when the wait runs out', async () => {
+  it('is an infrastructure error when the wait for the lock runs out', async () => {
     const file = path.join(dir, 'environment.lock')
     const a = new HostLock({ file, pollMs: 10 }); await a.acquire(1000)
-    await expect(new HostLock({ file, pollMs: 10 }).acquire(50)).rejects.toBeInstanceOf(InfrastructureError)
+    const env = new DockerEnvironment({
+      up: 'up', exec: 'exec', down: 'down', lock: new HostLock({ file, pollMs: 10 }),
+      trusted: { trustedCheckout: async () => '/t', verifyTrusted: async () => {}, cleanup: async () => {} },
+      run: async () => ({ exitCode: 0, output: '' }),
+    })
+    const err = await env.up({ branch: 'b', sha: 's', role: 'after', timeoutMs: 50 }, '/w').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(InfrastructureError); expect((err as Error).message).toMatch(/Another Rumba process/)
     await a.release()
   })
   it('takes over a lock file left empty by a crash once it is a few seconds old', async () => {

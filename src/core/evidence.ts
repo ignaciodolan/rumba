@@ -80,7 +80,7 @@ function render(i: EvidenceInput, cap: number | null): string {
     // The agent wrote it. It is quoted, and made inert: @-mentions are broken so nobody is
     // notified, issue references and issue links so the merge closes no other issue, and
     // images so the body loads nothing.
-    const inert = state.fixSummary.trim()
+    const inert = escapeHtml(state.fixSummary.trim())
       .replace(/@(?=\w)/g, '@\u200b')
       .replace(/#(?=\d)/g, '#\u200b')
       .replace(/\/(issues|pull)\//gi, '/$1\u200b/')

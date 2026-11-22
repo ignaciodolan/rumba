@@ -79,7 +79,7 @@ Exit states, each with a comment on the ticket:
 
 An unexpected error leaves the ticket at its last durable state and counts one error on it. A check or `verify.test` that could not execute (exit 126) or was not found (127) is such an error: it says nothing about the change, so it costs no fix attempt.
 
-A verification that fails is run once more before the failure counts, in a fresh checkout and a fresh environment, so the code under test cannot pass the second time by leaving something behind the first time. If it died of the machine both times, that is an infrastructure error, not a fix attempt, and Rumba says so in a comment on the ticket. It counts as an error, so three in a row send the ticket to `needs_human`. These count as the machine:
+A verification that fails is run once more before the failure counts, in a fresh checkout and a fresh environment, so the code under test cannot pass the second time by leaving something behind the first time. If it died of the machine both times, that is an infrastructure error, not a fix attempt, and Rumba says so in a comment on the ticket. It counts as an error, so three errors on a ticket send it to `needs_human`. Because a failed verification runs twice, a slow test suite needs a `minutes_per_ticket` that leaves room for that. These count as the machine:
 - Docker reports an out-of-memory kill in the project's containers.
 - The command exits with 137 (SIGKILL) or timed out.
 - The output shows a full disk (`ENOSPC`) or killed test workers.
@@ -157,7 +157,7 @@ labels:                     # optional: rename the labels
 - `environment.command_timeout_minutes` (docker): the limit of each of `up`, `exec` and `down`, 10 minutes by default. A check or `verify.test` runs through `exec`, so a slow test suite needs a higher value. No command outlasts the ticket's time either, except `down`.
 - `verify.test`: the project's own tests. Rumba runs them once on the default branch before any agent call, and against every fix.
 - `sandbox.node`: the Node major version (20 or later) of Rumba's sandbox image, the container the agent and the URL checks run in. Rumba always builds that image from its own Dockerfile, never from your repository; this setting only picks the Node version. The image has pnpm and yarn through corepack, at the version your `package.json` pins.
-- `environment.min_free_disk_gb` (docker): before `up`, Rumba measures the disk Docker has left, from inside a tiny `busybox` container, and stops with "Not enough disk space for Docker" below this, 5 GB by default. This counts as an infrastructure error. 0 skips the check.
+- `environment.min_free_disk_gb` (docker): before `up`, Rumba measures the disk Docker has left, from inside a tiny `busybox` container, and stops with "Not enough disk space for Docker" below this, 5 GB by default. This counts as an infrastructure error. 0 skips the check. When the measurement cannot run (no network to pull `busybox` the first time, say), the check is skipped.
 - `commit_author`: who Rumba's commits are made as. `RUMBA_COMMIT_AUTHOR_NAME` and `RUMBA_COMMIT_AUTHOR_EMAIL`, set together, win over it. Without either, Rumba commits as the GitHub account it runs as, with that account's `<id>+<login>@users.noreply.github.com` address, so integrations that check the commit author (a Vercel project that only builds commits by its members, say) recognise it. When the account cannot be looked up, it commits as `Rumba <rumba@users.noreply.github.com>`.
 - `limits.minutes_per_ticket` bounds the whole ticket, as described above.
 
@@ -223,11 +223,11 @@ A missing key fails that rumba with a message naming the variable and why the ru
 
 ## After a run
 
-Every agent call leaves a record: the task, the agent's result with its summary, and the last 20,000 characters of what it printed, or the error it ended with. The records are kept under `<RUMBA_HOME>/runs/<run id>/<ticket>/`, one file per call, such as `03-fix-attempt-2.md`, readable only by your user, with every key Rumba knows replaced by `[redacted]`. `rumba run` prints the folder at the end of each rumba's run.
+Every agent call leaves a record: which task and attempt it was, the agent's result with its summary, and the last 20,000 characters of what it printed, or the error it ended with. The records are kept under `<RUMBA_HOME>/runs/<run id>/<ticket>/`, one file per call, such as `03-fix-attempt-2.md`, readable only by your user, with every key Rumba knows replaced by `[redacted]`. `rumba run` prints the folder at the end of each rumba's run.
 
 ## One environment at a time
 
-Docker environments on one machine compete for its memory and disk. A test suite run by two environments at once can make Docker's out-of-memory killer fail a correct fix. So a Rumba process holds a lock file, `<RUMBA_HOME>/environment.lock`, from before `up` until after `down`, and another Rumba process on the same machine waits for it. The wait counts toward the ticket's time. The lock holds the process id of its owner and is removed when that process releases it or exits. A lock left by a process that is gone, after a crash or a `kill -9`, is taken over. Processes on other machines, or in other containers, are not covered.
+Docker environments on one machine compete for its memory and disk. A test suite run by two environments at once can make Docker's out-of-memory killer fail a correct fix. So a Rumba process holds a lock file, `<RUMBA_HOME>/environment.lock`, from before `up` until after `down`, and another Rumba process on the same machine waits for it. The wait counts toward the ticket's time. The lock holds the process id of its owner and is removed when that process releases it or exits. A lock left by a process that is gone, after a crash or a `kill -9`, is taken over, and so is a lock file nobody can read once it is a few seconds old. Waiting longer than the ticket's time counts as an infrastructure error. Processes on other machines, or in other containers, are not covered.
 
 Pull requests opened with the default GitHub Actions token do not start the repository's own CI. Set `RUMBA_GITHUB_TOKEN` to a fine-grained token or a GitHub App token to get CI on Rumba's pull requests.
 

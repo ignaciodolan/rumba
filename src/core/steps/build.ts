@@ -44,23 +44,46 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
   let current = transition(state, 'building', deps.clock())
   await deps.tracker.writeState(ticket, current)
 
-  let failures: Failure[] = fromResults(state.before ?? [], deps.secrets)
-  let situation: Pick<AgentTask, 'checkStatus' | 'projectTests'> = {
-    checkStatus: (state.before ?? []).map((r) => ({ criterionId: r.criterionId, passed: r.passed })), projectTests: 'not-run',
+  // Where things stand on the base run: every check fails there.
+  const atBase = {
+    failures: fromResults(state.before ?? [], deps.secrets),
+    situation: { checkStatus: (state.before ?? []).map((r) => ({ criterionId: r.criterionId, passed: r.passed })), projectTests: 'not-run' } as Pick<AgentTask, 'checkStatus' | 'projectTests'>,
+  }
+  let failures: Failure[] = atBase.failures
+  let situation = atBase.situation
+  // On a later run (after an infrastructure error, say), start from the last attempt on the ticket.
+  const lastRecorded = state.attempts?.at(-1)
+  if (lastRecorded && lastRecorded.checks.length > 0) {
+    situation = { checkStatus: lastRecorded.checks.map(({ criterionId, passed }) => ({ criterionId, passed })), projectTests: lastRecorded.projectTests }
+    if (lastRecorded.tail !== '') failures = [{ criterionId: lastRecorded.outcome === 'project-tests-failed' || lastRecorded.projectTests !== 'not-run' ? 'project-tests' : lastRecorded.outcome, output: lastRecorded.tail }]
   }
   const checkFiles = [...new Set([...Object.keys(state.checkHashes), ...state.checks.flatMap((c) => c.files)])]
   // The commit at the head of the fix branch, which a re-verification runs against.
   let head = checksSha
 
+  const nextNumber = () => (current.attempts?.at(-1)?.n ?? 0) + 1
   const record = async (r: Omit<AttemptRecord, 'n'>, extra: Partial<TicketState> = {}): Promise<void> => {
-    const attempts = [...(current.attempts ?? []), { n: (current.attempts?.length ?? 0) + 1, ...r }].slice(-MAX_ATTEMPTS_KEPT)
+    const attempts = [...(current.attempts ?? []), { n: nextNumber(), ...r }].slice(-MAX_ATTEMPTS_KEPT)
     current = { ...current, ...extra, attempts }
     await deps.tracker.writeState(ticket, current)
   }
 
   while (current.fixAttempts < rumba.limits.maxFixAttempts) {
-    const n = (current.attempts?.length ?? 0) + 1
-    const fixed = await fixOnce(deps, rumba, ticket, current, failures, checkFiles, situation, n)
+    const fixed = await fixOnce(deps, rumba, ticket, current, failures, checkFiles, situation, nextNumber())
+
+    if ('noChange' in fixed && head === checksSha) {
+      // Nothing was ever committed on top of the checks: passing now would open a pull request
+      // with no fix in it, so this always goes to a person.
+      const note = `The agent said no change was needed: ${fixed.noChange}`
+      await record({ outcome: 'no-change', checks: [], projectTests: 'not-run', note, tail: '' })
+      await deps.tracker.comment(ticket, [
+        `The agent says no change is needed: ${cleanOutput(fixed.noChange, deps.secrets, MAX_SUMMARY)}`,
+        'There is no fix commit on the branch, only the checks, so Rumba will not open a pull request. A person needs to decide.',
+      ].join('\n'))
+      current = transition(current, 'needs_human', deps.clock(), 'agent says no change is needed')
+      await deps.tracker.writeState(ticket, current)
+      return current
+    }
 
     if ('noChange' in fixed) {
       // The agent found nothing to change. Verify once more as the code stands; a pass now
@@ -105,7 +128,9 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
       return current
     }
     if (v.kind === 'guard') {
-      await record({ outcome: 'guard', checks: [], projectTests: 'not-run', note: v.failures[0]?.output, tail: '' })
+      await record({ outcome: 'guard', checks: [], projectTests: 'not-run', note: cleanOutput(v.failures[0]?.output ?? '', deps.secrets, ATTEMPT_TAIL), tail: '' })
+      // A rejected fix that was reset leaves the branch as it was after the checks commit.
+      if (head === checksSha) situation = atBase.situation
     } else {
       await record({ outcome: v.kind, checks: brief(v.results), projectTests: v.projectTests, tail: v.tail })
       situation = { checkStatus: brief(v.results).map(({ criterionId, passed }) => ({ criterionId, passed })), projectTests: v.projectTests }
@@ -119,8 +144,11 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
   const last = current.attempts?.at(-1)
   const what = last?.outcome === 'project-tests-failed' ? "the project's own tests" : 'the checks'
   const details = failures.map((f) => `${f.criterionId}:\n${f.output}`).join('\n\n')
+  const headline = last?.outcome === 'guard'
+    ? `Rumba could not fix this after ${attempts} attempts: the last fix was rejected.`
+    : `Rumba could not fix this: ${what} still fail after ${attempts} attempts.`
   const comment = [
-    `Rumba could not fix this: ${what} still fail after ${attempts} attempts.`, '',
+    headline, '',
     ...(current.attempts ?? []).map((a) => `- Attempt ${a.n}: ${describe(a)}`), '',
     'Last failures:', '', details,
   ].join('\n')
@@ -134,6 +162,14 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
     await record({ outcome: 'infrastructure', checks: brief(v.results), projectTests: v.projectTests, ...(note ? { note } : {}), tail: v.tail })
     throw new InfrastructureError(v.reason)
   }
+}
+
+/**
+ * A ticket title made safe to put in a commit message or a pull request title: an issue
+ * reference such as "fixes #42" in it can no longer close that issue when the change merges.
+ */
+export function inertTitle(title: string): string {
+  return title.replace(/#(?=\d)/g, '#\u200b').replace(/\/(issues|pull)\//gi, '/$1\u200b/')
 }
 
 function brief(results: CheckResult[]): AttemptRecord['checks'] {
@@ -181,7 +217,7 @@ async function fixOnce(
     }, workdir)
     if (result.kind !== 'fix') throw new Error(`Agent returned ${result.kind} for a fix task`)
 
-    const sha = await deps.workspace.commit(workdir, `fix: ${ticket.title} (${ticket.ref})`)
+    const sha = await deps.workspace.commit(workdir, `fix: ${inertTitle(ticket.title)} (${ticket.ref})`)
     if (sha === null) {
       if (result.noChangeNeeded !== undefined) return { noChange: result.noChangeNeeded, summary: result.summary }
       return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }], summary: result.summary, reset: false }
@@ -245,7 +281,7 @@ async function runAll(deps: Deps, rumba: RumbaConfig, state: TicketState, handle
   }
   const infra = results.find((r) => !r.passed && r.infrastructure)
   if (infra) {
-    return { kind: 'infrastructure', results, projectTests: 'not-run', reason: `The check for ${infra.criterionId} failed because ${infra.infrastructure}, also when run again in a fresh environment.`, tail: tailOf(infra.output, deps) }
+    return { kind: 'infrastructure', results, projectTests: 'not-run', reason: `The check for ${infra.criterionId} failed because ${infra.infrastructure}.`, tail: tailOf(infra.output, deps) }
   }
   // A check that timed out, cannot execute or was not found says nothing about the fix.
   const broken = results.find((r) => COULD_NOT_RUN.includes(r.exitCode))
@@ -260,7 +296,7 @@ async function runAll(deps: Deps, rumba: RumbaConfig, state: TicketState, handle
   if (ran === null) return { kind: 'passed', results, projectTests: 'not-run' }
   if (ran.exitCode === 0) return { kind: 'passed', results, projectTests: 'passed' }
   if (ran.infrastructure) {
-    return { kind: 'infrastructure', results, projectTests: 'infrastructure', reason: `The project tests (${rumba.verify.test}) failed because ${ran.infrastructure}, also when run again in a fresh environment.`, tail: tailOf(ran.output, deps) }
+    return { kind: 'infrastructure', results, projectTests: 'infrastructure', reason: `The project tests (${rumba.verify.test}) failed because ${ran.infrastructure}.`, tail: tailOf(ran.output, deps) }
   }
   // Tests that cannot run or are not found say nothing about the fix.
   if (COULD_NOT_RUN.includes(ran.exitCode)) {

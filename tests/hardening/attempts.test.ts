@@ -114,7 +114,7 @@ describe('the fix agent is told the true situation', () => {
     const d = makeDeps(); d.workspace.hashes = H; d.environment.passes = () => true
     d.agent.script.fix = [fix, { kind: 'fix', summary: 'The code is right; the test run crashed.', noChangeNeeded: 'The checks pass; the project tests were killed.' }]
     d.environment.commandResults = [{ exitCode: 1, output: 'FAIL' }, { exitCode: 1, output: 'FAIL' }, { exitCode: 0, output: '' }]
-    d.workspace.commitResults = ['sha1', null]
+    d.workspace.commitResults = ['fix1', null]  // not the checks commit (sha1), so there is a fix to verify
     const s = await build(d, withTests, makeTicket(), failing(d))
     expect(s.state).toBe('verified')
     expect(s.attempts?.at(-1)).toMatchObject({ n: 2, outcome: 'verified', note: 'The agent said no change was needed: The checks pass; the project tests were killed.' })
@@ -123,7 +123,7 @@ describe('the fix agent is told the true situation', () => {
     const d = makeDeps(); d.workspace.hashes = H; d.environment.passes = () => true
     d.agent.script.fix = [fix, { kind: 'fix', summary: 'nothing', noChangeNeeded: 'The failing test is unrelated to this ticket.' }]
     d.environment.commandExit = 1; d.environment.commandOutput = 'FAIL other.test.ts'
-    d.workspace.commitResults = ['sha1', null]
+    d.workspace.commitResults = ['fix1', null]  // not the checks commit (sha1), so there is a fix to verify
     const s = await build(d, withTests, makeTicket(), failing(d))
     expect(s.state).toBe('needs_human')
     expect(s.history.at(-1)?.note).toBe('agent says no change is needed')

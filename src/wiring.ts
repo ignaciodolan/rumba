@@ -172,6 +172,10 @@ export function buildDeps(
   repo: { root: string; owner: string; name: string; defaultBranch: string },
 ): Deps {
   const token = githubToken(rumba, env)
+  // A commit author set half way is a mistake to report now, not to fall back from later.
+  if ((value(env, 'RUMBA_COMMIT_AUTHOR_NAME') === undefined) !== (value(env, 'RUMBA_COMMIT_AUTHOR_EMAIL') === undefined)) {
+    throw new MissingKeyError('RUMBA_COMMIT_AUTHOR_NAME and RUMBA_COMMIT_AUTHOR_EMAIL must be set together.')
+  }
   const octokit = new Octokit({ auth: token })
   const tracker = trackerFor(rumba, env, repo, () => octokit)
   // Always Rumba's own Dockerfile; the rumba chooses only the Node major version.

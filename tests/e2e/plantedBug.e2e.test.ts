@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DockerEnvironment, shellRunner } from '../../src/adapters/environment/docker.js'
+import { dockerDisk, dockerProbe } from '../../src/adapters/environment/dockerProbe.js'
+import { HostLock } from '../../src/adapters/environment/hostLock.js'
 import { GitWorkspace } from '../../src/adapters/workspace/git.js'
 import { loadRumba, type RumbaConfig } from '../../src/config/load.js'
 import { runRumba } from '../../src/core/runner.js'
@@ -109,8 +111,10 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     if (config.environment.kind !== 'docker') throw new Error('the fixture rumba must use the docker environment')
     const { up, exec, down } = config.environment
     const workspace = new GitWorkspace({ repoRoot, defaultBranch: 'main' })
+    // The real lock, Docker probe and disk check, as the wiring gives them, with the lock in the test's own folder.
     const environment = new DockerEnvironment({
       up, exec, down, trusted: workspace,
+      lock: new HostLock({ file: path.join(tmp, 'environment.lock') }), docker: dockerProbe, disk: dockerDisk, minFreeBytes: 2 ** 30,
       run: (command, o) => { hostDirs.add(o.cwd); projects.add(o.env?.COMPOSE_PROJECT_NAME ?? ''); return shellRunner(command, o) },
     })
     const realUp = environment.up.bind(environment)

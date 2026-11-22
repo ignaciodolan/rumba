@@ -13,30 +13,33 @@ export interface DiskProbe {
 
 const PROBE_IMAGE = 'busybox:1.36.1'
 
-async function docker(args: string[]): Promise<{ ok: boolean; stdout: string }> {
+type DockerCli = (args: string[]) => Promise<{ ok: boolean; stdout: string }>
+
+const docker: DockerCli = async (args) => {
   const r = await execa('docker', args, { reject: false, stdin: 'ignore', timeout: 60_000 })
   return { ok: r.exitCode === 0, stdout: typeof r.stdout === 'string' ? r.stdout : '' }
 }
 
 /**
- * Asks Docker itself. An `oom` event is what the daemon emits when a process in a container's
- * memory group is killed for memory, including test workers started by `exec`; `OOMKilled` is
- * set when a container's main process was. These are host-side `docker` calls with fixed
- * arguments; they read nothing from a checkout.
+ * Asks Docker itself, through its event log: an `oom` event is what the daemon emits when a
+ * process in a container's memory group is killed for memory, including test workers started
+ * by `exec`. Only events in the command's own time window count; the `OOMKilled` flag is not
+ * used, because it stays set on a running container once any kill happened. These are
+ * host-side `docker` calls with fixed arguments; they read nothing from a checkout.
  */
-export const dockerProbe: DockerProbe = {
-  async outOfMemorySince(project, sinceMs) {
-    const label = `label=com.docker.compose.project=${project}`
-    const since = String(Math.floor(sinceMs / 1000) - 1)
-    const until = String(Math.ceil(Date.now() / 1000) + 1)
-    const events = await docker(['events', '--since', since, '--until', until, '--filter', 'type=container', '--filter', 'event=oom', '--filter', label, '--format', '{{.Action}}'])
-    if (events.ok && events.stdout.split('\n').some((l) => l.trim() === 'oom')) return true
-    const ids = await docker(['ps', '-aq', '--filter', label])
-    if (!ids.ok || ids.stdout.trim() === '') return false
-    const inspect = await docker(['inspect', '--format', '{{.State.OOMKilled}}', ...ids.stdout.trim().split('\n')])
-    return inspect.ok && inspect.stdout.split('\n').some((l) => l.trim() === 'true')
-  },
+export function makeDockerProbe(cli: DockerCli = docker): DockerProbe {
+  return {
+    async outOfMemorySince(project, sinceMs) {
+      const label = `label=com.docker.compose.project=${project}`
+      const since = String(Math.floor(sinceMs / 1000) - 1)
+      const until = String(Math.ceil(Date.now() / 1000) + 1)
+      const events = await cli(['events', '--since', since, '--until', until, '--filter', 'type=container', '--filter', 'event=oom', '--filter', label, '--format', '{{.Action}}'])
+      return events.ok && events.stdout.split('\n').some((l) => l.trim() === 'oom')
+    },
+  }
 }
+
+export const dockerProbe: DockerProbe = makeDockerProbe()
 
 /**
  * Free space on the disk where Docker keeps images and containers, measured from inside a

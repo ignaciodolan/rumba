@@ -119,8 +119,15 @@ export class DockerEnvironment implements Environment {
   }
 
   async up(ref: EnvRef, workdir: string): Promise<EnvHandle> {
-    // Waiting for another Rumba process's environment counts toward this ticket's time.
-    await this.o.lock?.acquire(ref.timeoutMs ?? this.timeoutMs)
+    // The ticket's deadline is fixed now, so waiting for another Rumba process's environment
+    // counts toward this ticket's time and leaves less for the commands.
+    const deadline = ref.timeoutMs === undefined ? undefined : Date.now() + ref.timeoutMs
+    try {
+      await this.o.lock?.acquire(ref.timeoutMs ?? this.timeoutMs)
+    } catch (e) {
+      // Another Rumba process held the machine's environment for too long: the machine, not the change.
+      throw new InfrastructureError(e instanceof Error ? e.message : String(e))
+    }
     try {
       await this.checkDisk()
     } catch (e) {
@@ -134,7 +141,6 @@ export class DockerEnvironment implements Environment {
       await this.o.lock?.release()
       throw e
     }
-    const deadline = ref.timeoutMs === undefined ? undefined : Date.now() + ref.timeoutMs
     const host = { branch: ref.branch, project: `rumba-${randomUUID().replaceAll('-', '').slice(0, 16)}`, upDir, deadline }
     const handle: EnvHandle = { workdir, host }
     let result: { exitCode: number; output: string; infrastructure?: string }
