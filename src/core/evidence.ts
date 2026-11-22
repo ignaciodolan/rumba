@@ -77,8 +77,15 @@ function render(i: EvidenceInput, cap: number | null): string {
   const sections: string[] = []
 
   if (state.fixSummary) {
-    // The agent wrote it; it is quoted, and @-mentions are broken so nobody is notified.
-    const quoted = state.fixSummary.trim().replace(/@(?=\w)/g, '@\u200b').split('\n').map((l) => `> ${l}`).join('\n')
+    // The agent wrote it. It is quoted, and made inert: @-mentions are broken so nobody is
+    // notified, issue references and issue links so the merge closes no other issue, and
+    // images so the body loads nothing.
+    const inert = state.fixSummary.trim()
+      .replace(/@(?=\w)/g, '@\u200b')
+      .replace(/#(?=\d)/g, '#\u200b')
+      .replace(/\/(issues|pull)\//gi, '/$1\u200b/')
+      .replace(/!\[/g, '!\u200b[')
+    const quoted = inert.split('\n').map((l) => `> ${l}`).join('\n')
     sections.push(`## Summary\n\n${quoted}`)
   }
   // A GitHub issue of this repository is closed by the merge; a Linear issue is linked.

@@ -79,7 +79,7 @@ Exit states, each with a comment on the ticket:
 
 An unexpected error leaves the ticket at its last durable state and counts one error on it. A check or `verify.test` that could not execute (exit 126) or was not found (127) is such an error: it says nothing about the change, so it costs no fix attempt.
 
-A check or `verify.test` that fails is run once more before the failure counts. If it died of the machine both times, that is an infrastructure error, not a fix attempt, and Rumba says so in a comment on the ticket. It counts as an error, so three in a row send the ticket to `needs_human`. These count as the machine:
+A verification that fails is run once more before the failure counts, in a fresh checkout and a fresh environment, so the code under test cannot pass the second time by leaving something behind the first time. If it died of the machine both times, that is an infrastructure error, not a fix attempt, and Rumba says so in a comment on the ticket. It counts as an error, so three in a row send the ticket to `needs_human`. These count as the machine:
 - Docker reports an out-of-memory kill in the project's containers.
 - The command exits with 137 (SIGKILL) or timed out.
 - The output shows a full disk (`ENOSPC`) or killed test workers.

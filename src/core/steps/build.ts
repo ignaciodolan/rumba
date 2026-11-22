@@ -66,7 +66,8 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
       // The agent found nothing to change. Verify once more as the code stands; a pass now
       // counts, and a failure goes to a person with the agent's reason.
       const note = `The agent said no change was needed: ${fixed.noChange}`
-      const v = await verify(deps, rumba, current, head, checkFiles)
+      // One strict run: a re-verification is never given a second try.
+      const v = await verifyOnce(deps, rumba, current, head, checkFiles)
       if (v.kind === 'infrastructure') return await stopForInfrastructure(v, note)
       if (v.kind === 'passed') {
         await record({ outcome: 'verified', checks: brief(v.results), projectTests: v.projectTests, note, tail: '' }, { fixSummary: summaryOf(fixed.summary, deps) })
@@ -197,12 +198,23 @@ async function fixOnce(
 }
 
 /**
- * In a new checkout of the committed fix: compares the check files with their recorded hashes,
- * then runs the checks and the project tests. A changed check file is reset off the branch.
- * A check or the project tests that fail are run once more before the failure counts, and a
- * run that died of the machine (out of memory, full disk, a timeout) twice is reported as such.
+ * Verifies a fix, and when it does not pass, verifies it once more before the failure counts:
+ * a test may be flaky, or the machine may have run out of memory. The second run is a fresh
+ * checkout and a fresh environment, never the same containers again, so the code under test
+ * cannot pass the second time by leaving something behind the first time, or by faking a
+ * crash. The second verdict is the one that counts.
  */
 async function verify(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checkFiles: string[]): Promise<Verdict> {
+  const first = await verifyOnce(deps, rumba, state, sha, checkFiles)
+  if (first.kind === 'passed' || first.kind === 'guard') return first
+  return verifyOnce(deps, rumba, state, sha, checkFiles)
+}
+
+/**
+ * In a new checkout of the committed fix: compares the check files with their recorded hashes,
+ * then runs the checks and the project tests. A changed check file is reset off the branch.
+ */
+async function verifyOnce(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checkFiles: string[]): Promise<Verdict> {
   // The environment never runs where the agent wrote, and nothing it leaves behind is committed.
   const { workdir } = await deps.workspace.prepare(state.branch!, { fresh: false })
   try {
@@ -228,14 +240,12 @@ async function runAll(deps: Deps, rumba: RumbaConfig, state: TicketState, handle
   const results: CheckResult[] = []
   const max = checkOutputMax(state.checks.length)
   for (const check of state.checks) {
-    let r = await deps.environment.runCheck(handle, check)
-    // A failing check runs once more before it counts: it may have died of the machine.
-    if (!r.passed) r = await deps.environment.runCheck(handle, check)
+    const r = await deps.environment.runCheck(handle, check)
     results.push({ ...r, output: cleanOutput(r.output, deps.secrets, max) })
   }
   const infra = results.find((r) => !r.passed && r.infrastructure)
   if (infra) {
-    return { kind: 'infrastructure', results, projectTests: 'not-run', reason: `The check for ${infra.criterionId} failed twice because ${infra.infrastructure}.`, tail: tailOf(infra.output, deps) }
+    return { kind: 'infrastructure', results, projectTests: 'not-run', reason: `The check for ${infra.criterionId} failed because ${infra.infrastructure}, also when run again in a fresh environment.`, tail: tailOf(infra.output, deps) }
   }
   // A check that timed out, cannot execute or was not found says nothing about the fix.
   const broken = results.find((r) => COULD_NOT_RUN.includes(r.exitCode))
@@ -246,13 +256,11 @@ async function runAll(deps: Deps, rumba: RumbaConfig, state: TicketState, handle
   }
 
   if (!rumba.verify.test) return { kind: 'passed', results, projectTests: 'not-run' }
-  let ran = await deps.environment.runCommand(handle, rumba.verify.test)
+  const ran = await deps.environment.runCommand(handle, rumba.verify.test)
   if (ran === null) return { kind: 'passed', results, projectTests: 'not-run' }
-  // The project tests run once more before a failure counts against the fix.
-  if (ran.exitCode !== 0) ran = (await deps.environment.runCommand(handle, rumba.verify.test)) ?? ran
   if (ran.exitCode === 0) return { kind: 'passed', results, projectTests: 'passed' }
   if (ran.infrastructure) {
-    return { kind: 'infrastructure', results, projectTests: 'infrastructure', reason: `The project tests (${rumba.verify.test}) failed twice because ${ran.infrastructure}.`, tail: tailOf(ran.output, deps) }
+    return { kind: 'infrastructure', results, projectTests: 'infrastructure', reason: `The project tests (${rumba.verify.test}) failed because ${ran.infrastructure}, also when run again in a fresh environment.`, tail: tailOf(ran.output, deps) }
   }
   // Tests that cannot run or are not found say nothing about the fix.
   if (COULD_NOT_RUN.includes(ran.exitCode)) {
