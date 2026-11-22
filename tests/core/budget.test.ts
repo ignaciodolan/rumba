@@ -18,7 +18,7 @@ describe('the time budget of a ticket', () => {
     d.clock = () => new Date(Date.UTC(2026, 0, 1, 0, minutes))
     const agentRun = d.agent.run.bind(d.agent)
     d.agent.run = async (task, w) => { const r = await agentRun(task, w); minutes += 5; return r }
-    await advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    await advanceTicket(d, makeRumba(), makeTicket(), newState('shop', d.clock()))
     const limits = d.agent.calls.map((c) => c.timeoutMs)
     // triage at minute 0, write-checks at 5, fix at 10, relocate-checks at 15; the environment on the base at 0, before at 10, after at 15.
     // (The agent has no relocate-checks script here, so the move is rejected before any environment runs.)
@@ -32,13 +32,13 @@ describe('the time budget of a ticket', () => {
     d.agent.script['write-checks'] = new AgentError('Claude Code timed out after 1800000 ms')
     const agentRun = d.agent.run.bind(d.agent)
     d.agent.run = async (task, w) => { if (task.kind === 'write-checks') minutes = 31; return agentRun(task, w) }
-    const s = await advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    const s = await advanceTicket(d, makeRumba(), makeTicket(), newState('shop', d.clock()))
     expect(s.state).toBe('needs_human'); expect(s.history.at(-1)?.note).toBe('time budget exceeded')
     expect(d.tracker.comments.at(-1)?.body).toBe('Rumba stopped work on this ticket: the time budget of 30 minutes ran out. The last step stopped with: Claude Code timed out after 1800000 ms')
   })
   it('still reports an error that happens with time left as an error', async () => {
     const d = makeDeps(); scriptHappyBug(d); d.agent.script.triage = new AgentError('bad json')
-    await expect(advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).rejects.toThrow('bad json')
+    await expect(advanceTicket(d, makeRumba(), makeTicket(), newState('shop', d.clock()))).rejects.toThrow('bad json')
   })
 })
 

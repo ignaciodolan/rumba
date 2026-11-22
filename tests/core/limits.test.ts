@@ -19,7 +19,7 @@ describe('stored output', () => {
       const passed = d.environment.upWorkdirs.length > 1
       return { criterionId: c.criterionId, passed, exitCode: passed ? 0 : 1, output: `${h.workdir} `.padEnd(10_000, passed ? 'p' : 'f') }
     }
-    const ready = { ...transition(transition(newState('hub', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind: 'feature' as const, criteria }
+    const ready = { ...transition(transition(newState('shop', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind: 'feature' as const, criteria }
     const ticket = makeTicket()
     const failing = await reproduce(d, makeRumba(), ticket, ready)
     expect(failing.state).toBe('checks_failing')

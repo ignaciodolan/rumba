@@ -242,7 +242,7 @@ describe('judgeRelocation, against a hostile move', () => {
   })
 
   it('lists a source file among the check files, which would hide it from the scope warning', () => {
-    expect(judgeRelocation(input({ relocated: [{ criterionId: 'c1', command: `npx vitest run ${TO}`, files: [TO, 'src/billing/charge.ts'] }] }))).toMatch(/exactly its new files/)
+    expect(judgeRelocation(input({ relocated: [{ criterionId: 'c1', command: `npx vitest run ${TO}`, files: [TO, 'src/widgets/price.ts'] }] }))).toMatch(/exactly its new files/)
   })
 
   it('moves a check into a file that configures the tests', () => {

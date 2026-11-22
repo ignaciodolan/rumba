@@ -15,10 +15,10 @@ describe('fakes', () => {
 
   it('FakeTracker keeps exactly one state label', async () => {
     const d = makeDeps()
-    const t = makeTicket({ labels: ['rumba:hub'] })
+    const t = makeTicket({ labels: ['rumba:shop'] })
     d.tracker.tickets.push(t)
-    await d.tracker.writeState(t, newState('hub', d.clock()))
-    await d.tracker.writeState(t, transition(newState('hub', d.clock()), 'triaged', d.clock()))
+    await d.tracker.writeState(t, newState('shop', d.clock()))
+    await d.tracker.writeState(t, transition(newState('shop', d.clock()), 'triaged', d.clock()))
     expect(t.labels.filter((l) => l.startsWith('rumba-state:'))).toEqual(['rumba-state:triaged'])
   })
 
@@ -49,7 +49,7 @@ describe('fakes', () => {
     expect((await d.tracker.listCandidates()).map((t) => t.id)).toEqual(['1'])
     await expect(d.tracker.getTicket('nope')).rejects.toThrow()
     expect(await d.tracker.readState(a)).toBeNull()
-    const s = newState('hub', d.clock())
+    const s = newState('shop', d.clock())
     await d.tracker.writeState(a, s)
     const read = await d.tracker.readState(a)
     expect(read).toEqual(s)

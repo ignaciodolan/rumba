@@ -24,20 +24,20 @@ describe('the commit author', () => {
     await git(root, 'clone', '-q', remote, 'clone'); const clone = path.join(root, 'clone')
     await writeFile(path.join(clone, 'a'), 'x'); await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'i'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main'); await git(clone, 'fetch', '-q')
     const ws = new GitWorkspace({ repoRoot: clone, defaultBranch: 'main', author: async () => ({ name: 'octo-bot', email: '123+octo-bot@users.noreply.github.com' }) })
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await writeFile(path.join(workdir, 'b'), 'y')
     await ws.commit(workdir, 'fix: b')
-    expect(await git(clone, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', 'rumba/hub/1')).toBe('octo-bot <123+octo-bot@users.noreply.github.com> / octo-bot <123+octo-bot@users.noreply.github.com>')
+    expect(await git(clone, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', 'rumba/shop/1')).toBe('octo-bot <123+octo-bot@users.noreply.github.com> / octo-bot <123+octo-bot@users.noreply.github.com>')
     await ws.cleanupAll()
   })
 
   it('reads commit_author from rumba.yml', async () => {
-    await mkdir(path.join(root, '.rumba/hub'), { recursive: true })
-    await writeFile(path.join(root, '.rumba/hub/rumba.yml'), [
+    await mkdir(path.join(root, '.rumba/shop'), { recursive: true })
+    await writeFile(path.join(root, '.rumba/shop/rumba.yml'), [
       'paths: ["**"]', 'tracker: { kind: github }', 'agent: { kind: claude-code }',
       'environment: { kind: docker, up: u, exec: e, down: d }', 'commit_author: { name: Deploy Bot, email: deploy@example.test }',
     ].join('\n'))
-    expect((await loadRumba(root, 'hub')).commitAuthor).toEqual({ name: 'Deploy Bot', email: 'deploy@example.test' })
+    expect((await loadRumba(root, 'shop')).commitAuthor).toEqual({ name: 'Deploy Bot', email: 'deploy@example.test' })
   })
 })
 
@@ -63,18 +63,18 @@ describe('resolveCommitAuthor', () => {
 describe('the pull request body', () => {
   it('has a summary of the change written by the agent, and closes the GitHub issue', () => {
     const d = makeDeps(); const s = { ...verified(d), fixSummary: 'Lower-cases the slug in `slugify`, as @someone asked.' }
-    const body = renderPullRequestBody({ ticket: makeTicket({ ref: '#18', url: 'https://github.com/o/r/issues/18' }), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    const body = renderPullRequestBody({ ticket: makeTicket({ ref: '#42', url: 'https://github.com/o/r/issues/42' }), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
     expect(body).toMatch(/^## Summary\n\n> Lower-cases the slug in `slugify`, as @​someone asked\./)
-    expect(body).toContain('Closes #18')
+    expect(body).toContain('Closes #42')
   })
   it('keeps the summary from closing other issues or adding images', () => {
     const d = makeDeps()
     const s = { ...verified(d), fixSummary: 'Fixes #42 and closes https://github.com/o/r/issues/7. ![x](https://evil.test/pixel.png)' }
-    const body = renderPullRequestBody({ ticket: makeTicket({ ref: '#18' }), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    const body = renderPullRequestBody({ ticket: makeTicket({ ref: '#42' }), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
     const summary = body.slice(0, body.indexOf('## Ticket'))
     expect(summary).not.toMatch(/#42\b/); expect(summary).not.toContain('issues/7')
     expect(summary).not.toContain('![')
-    expect(body.match(/Closes #\d+/g)).toEqual(['Closes #18'])
+    expect(body.match(/Closes #\d+/g)).toEqual(['Closes #42'])
   })
   it('links a Linear issue without a closing keyword', () => {
     const d = makeDeps()

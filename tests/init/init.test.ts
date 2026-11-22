@@ -20,13 +20,13 @@ afterEach(async () => {
 
 describe('initRumba', () => {
   it('creates the rumba folder and a managed workflow', async () => {
-    const r = await initRumba(root, 'hub')
-    expect(r.created).toEqual(expect.arrayContaining(['.rumba/hub/rumba.yml', '.rumba/hub/context.md', '.rumba/hub/lessons.md', '.github/workflows/rumba.yml']))
-    expect((await loadRumbas(root))[0].name).toBe('hub')
+    const r = await initRumba(root, 'shop')
+    expect(r.created).toEqual(expect.arrayContaining(['.rumba/shop/rumba.yml', '.rumba/shop/context.md', '.rumba/shop/lessons.md', '.github/workflows/rumba.yml']))
+    expect((await loadRumbas(root))[0].name).toBe('shop')
     expect(r.notes.join('\n')).toContain('do not start this repository\'s own CI')
   })
   it('says what a person must set up before enabling the workflow, and keeps the CI note word for word', async () => {
-    const { notes } = await initRumba(root, 'hub')
+    const { notes } = await initRumba(root, 'shop')
     expect(notes.join('\n')).toContain('${RUMBA_WORKDIR:-.}:/app')
     const text = notes.join('\n')
     expect(text).toContain('rumba-cli is not published to npm yet')
@@ -38,7 +38,7 @@ describe('initRumba', () => {
     )
   })
   it('explains the run step and the checkout credentials in the workflow', async () => {
-    await initRumba(root, 'hub')
+    await initRumba(root, 'shop')
     const lines = (await read(root, '.github/workflows/rumba.yml')).split('\n')
     const runAt = lines.findIndex((l) => l.trim() === '- name: Run rumba')
     const above = lines.slice(0, runAt).reverse()
@@ -50,22 +50,22 @@ describe('initRumba', () => {
     expect(job.steps.find((s) => s.uses?.startsWith('actions/checkout@'))?.with).not.toHaveProperty('persist-credentials')
   })
   it('adds a second rumba to the managed workflow matrix', async () => {
-    await initRumba(root, 'hub'); await initRumba(root, 'api')
-    expect(await read(root, '.github/workflows/rumba.yml')).toMatch(/rumba:\s*\[\s*hub,\s*api\s*\]/)
+    await initRumba(root, 'shop'); await initRumba(root, 'api')
+    expect(await read(root, '.github/workflows/rumba.yml')).toMatch(/rumba:\s*\[\s*shop,\s*api\s*\]/)
   })
   it('refuses an existing name and an invalid one', async () => {
-    await initRumba(root, 'hub'); await expect(initRumba(root, 'hub')).rejects.toThrow(/already exists/)
+    await initRumba(root, 'shop'); await expect(initRumba(root, 'shop')).rejects.toThrow(/already exists/)
     await expect(initRumba(root, 'Bad_Name')).rejects.toThrow(/lowercase letters, digits and hyphens/)
   })
   it('writes a workflow that matches the brief', async () => {
-    await initRumba(root, 'hub')
+    await initRumba(root, 'shop')
     const text = await read(root, '.github/workflows/rumba.yml')
     const wf = parse(text)
     expect(text.startsWith('# managed by rumba init')).toBe(true)
     expect(wf.on.schedule).toEqual([{ cron: '*/30 * * * *' }])
     expect(wf.on).toHaveProperty('workflow_dispatch')
     const job = Object.values(wf.jobs)[0] as Record<string, any>
-    expect(job.strategy.matrix.rumba).toEqual(['hub'])
+    expect(job.strategy.matrix.rumba).toEqual(['shop'])
     expect(job.concurrency).toEqual({ group: 'rumba-${{ matrix.rumba }}', 'cancel-in-progress': false })
     expect(job['timeout-minutes']).toBe(120)
     expect(job.permissions).toEqual({ contents: 'write', issues: 'write', 'pull-requests': 'write' })
@@ -83,14 +83,14 @@ describe('initRumba', () => {
   it('leaves a workflow it did not create alone and says to add the name by hand', async () => {
     await mkdir(path.join(root, '.github/workflows'), { recursive: true })
     await writeFile(path.join(root, '.github/workflows/rumba.yml'), 'name: mine\n')
-    const r = await initRumba(root, 'hub')
+    const r = await initRumba(root, 'shop')
     expect(r.created).not.toContain('.github/workflows/rumba.yml')
     expect(await read(root, '.github/workflows/rumba.yml')).toBe('name: mine\n')
-    expect(r.notes.join('\n')).toMatch(/add "hub" to .*by hand/)
+    expect(r.notes.join('\n')).toMatch(/add "shop" to .*by hand/)
   })
   it('starts context.md and lessons.md with a line saying what they are for', async () => {
-    await initRumba(root, 'hub')
-    expect((await read(root, '.rumba/hub/context.md')).trim()).not.toBe('')
-    expect((await read(root, '.rumba/hub/lessons.md')).trim()).not.toBe('')
+    await initRumba(root, 'shop')
+    expect((await read(root, '.rumba/shop/context.md')).trim()).not.toBe('')
+    expect((await read(root, '.rumba/shop/lessons.md')).trim()).not.toBe('')
   })
 })

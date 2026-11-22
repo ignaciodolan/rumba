@@ -6,8 +6,8 @@ describe('openPullRequest', () => {
   it('pushes, opens a draft when something is unverified, and links it on the ticket', async () => {
     const d = makeDeps(); const s = await openPullRequest(d, makeRumba(), makeTicket({ title: 'Profile 500', ref: '#123' }), verified(d))
     expect(s.state).toBe('pr_open'); expect(s.pullRequestUrl).toBe('https://example.test/pr/1')
-    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/hub/123', force: true }])
-    expect(d.codeHost.prs[0]).toMatchObject({ title: 'Profile 500 (#123)', head: 'rumba/hub/123', base: 'main', draft: true })
+    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: true }])
+    expect(d.codeHost.prs[0]).toMatchObject({ title: 'Profile 500 (#123)', head: 'rumba/shop/123', base: 'main', draft: true })
     expect(d.tracker.comments.at(-1)?.body).toContain('https://example.test/pr/1')
     expect(d.tracker.states.get('123')?.state).toBe('pr_open')
   })
@@ -22,9 +22,9 @@ describe('openPullRequest', () => {
     expect(d.codeHost.prs[0]!.body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
   })
   it('lists an undeclared file from the checks commit that is outside the paths', async () => {
-    const d = makeDeps(); d.workspace.changed = ['apps/hub/x.ts', 'packages/ui/helper.ts', 'tests/rumba/c1.test.ts']
+    const d = makeDeps(); d.workspace.changed = ['apps/shop/x.ts', 'packages/ui/helper.ts', 'tests/rumba/c1.test.ts']
     const v = verified(d); v.checkHashes = { ...v.checkHashes, 'packages/ui/helper.ts': 'h2' }
-    await openPullRequest(d, makeRumba({ paths: ['apps/hub/**'] }), makeTicket(), v)
+    await openPullRequest(d, makeRumba({ paths: ['apps/shop/**'] }), makeTicket(), v)
     const body = d.codeHost.prs[0]!.body
     expect(body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/helper\.ts/)
     expect(body.split("## Outside this rumba's scope")[1]).not.toContain('tests/rumba/c1.test.ts')

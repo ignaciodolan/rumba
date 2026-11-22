@@ -13,8 +13,8 @@ import { makeDeps, makeRumba, makeTicket, verified } from '../../../src/testing/
 
 const body = [
   '## Acceptance criteria',
-  '- Publishing a deal creates a public page',
-  '- Tests use a fake Notion client; nothing calls the network',
+  '- Placing an order sends a receipt',
+  '- Tests use a fake payment client; nothing calls the network',
 ].join('\n')
 const feature = { kind: 'triage' as const, workable: true, reason: '', ticketKind: 'feature' as const, criteria: null }
 
@@ -22,30 +22,30 @@ describe('triage marks a written criterion as not checkable', () => {
   it('keeps the written criteria, marks the named one not checkable with its reason, and needs no approval', async () => {
     const d = makeDeps()
     d.agent.script.triage = { ...feature, notCheckable: [{ id: 'c2', reason: 'A constraint on the tests, not a behaviour a command can observe.' }] }
-    const s = await triage(d, makeRumba(), makeTicket({ body }), newState('hub', d.clock()))
+    const s = await triage(d, makeRumba(), makeTicket({ body }), newState('shop', d.clock()))
     expect(s.state).toBe('criteria_ready')
     expect(s.criteria).toEqual([
-      { id: 'c1', text: 'Publishing a deal creates a public page', checkable: true },
-      { id: 'c2', text: 'Tests use a fake Notion client; nothing calls the network', checkable: false, reason: 'A constraint on the tests, not a behaviour a command can observe.' },
+      { id: 'c1', text: 'Placing an order sends a receipt', checkable: true },
+      { id: 'c2', text: 'Tests use a fake payment client; nothing calls the network', checkable: false, reason: 'A constraint on the tests, not a behaviour a command can observe.' },
     ])
   })
   it('shows the agent the written criteria with their ids, so it can name them', async () => {
     const d = makeDeps(); d.agent.script.triage = feature
-    await triage(d, makeRumba(), makeTicket({ body }), newState('hub', d.clock()))
+    await triage(d, makeRumba(), makeTicket({ body }), newState('shop', d.clock()))
     expect(d.agent.calls[0]!.criteria?.map((c) => c.id)).toEqual(['c1', 'c2'])
   })
   it('ignores ids that name no written criterion, and never rewords a criterion', async () => {
     const d = makeDeps()
     d.agent.script.triage = { ...feature, criteria: [{ id: 'c1', text: 'something else', checkable: true }], notCheckable: [{ id: 'c9', reason: 'x' }] }
-    const s = await triage(d, makeRumba(), makeTicket({ body }), newState('hub', d.clock()))
+    const s = await triage(d, makeRumba(), makeTicket({ body }), newState('shop', d.clock()))
     expect(s.criteria.map((c) => [c.text, c.checkable])).toEqual([
-      ['Publishing a deal creates a public page', true], ['Tests use a fake Notion client; nothing calls the network', true],
+      ['Placing an order sends a receipt', true], ['Tests use a fake payment client; nothing calls the network', true],
     ])
   })
   it('lets the remaining criteria be checked, so a passing constraint no longer stops the ticket', async () => {
     const d = makeDeps()
     d.agent.script.triage = { ...feature, notCheckable: [{ id: 'c2', reason: 'constraint' }] }
-    const ready = await triage(d, makeRumba(), makeTicket({ body }), newState('hub', d.clock()))
+    const ready = await triage(d, makeRumba(), makeTicket({ body }), newState('shop', d.clock()))
     d.agent.script['write-checks'] = { kind: 'write-checks', checks: [{ criterionId: 'c1', command: 'npm test -- c1', files: ['tests/rumba/c1.test.ts'] }] }
     const s = await reproduce(d, makeRumba(), makeTicket({ body }), ready)
     expect(s.state).toBe('checks_failing')
@@ -63,7 +63,7 @@ describe('a criterion marked not checkable', () => {
   })
   it('keeps its reason in the state comment', () => {
     const d = makeDeps()
-    const s = { ...newState('hub', d.clock()), criteria: [{ id: 'c1', text: 'T', checkable: false, reason: 'why' }] }
+    const s = { ...newState('shop', d.clock()), criteria: [{ id: 'c1', text: 'T', checkable: false, reason: 'why' }] }
     expect(decodeStateComment(encodeStateComment(s))?.criteria).toEqual([{ id: 'c1', text: 'T', checkable: false, reason: 'why' }])
   })
 })

@@ -10,7 +10,7 @@ describe('renderPullRequestBody', () => {
     expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` | fail | pass |')
     expect(body).toMatch(/## Not verified[\s\S]*C2/)
     expect(body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
-    expect(body).toContain('https://t/1'); expect(body).toContain('Rumba: hub')
+    expect(body).toContain('https://t/1'); expect(body).toContain('Rumba: shop')
   })
   it('never prints a secret from check output', () => {
     const s = verified(d); s.after![0]!.output = 'Bearer sk-live-999'

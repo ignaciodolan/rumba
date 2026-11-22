@@ -25,13 +25,13 @@ describe('a step that fails after the budget ran out', () => {
     d.clock = () => new Date(Date.UTC(2026, 0, 1, 0, minutes))
     const agentRun = d.agent.run.bind(d.agent)
     d.agent.run = async (task, w) => {
-      if (task.kind === 'write-checks') { minutes = 31; throw new Error('The agent changed protected paths: .rumba/hub/context.md') }
+      if (task.kind === 'write-checks') { minutes = 31; throw new Error('The agent changed protected paths: .rumba/shop/context.md') }
       return agentRun(task, w)
     }
-    const s = await advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
+    const s = await advanceTicket(d, makeRumba(), makeTicket(), newState('shop', d.clock()))
     expect(s.state).toBe('needs_human')
     expect(d.tracker.comments.at(-1)?.body).toBe(
-      'Rumba stopped work on this ticket: the time budget of 30 minutes ran out. The last step stopped with: The agent changed protected paths: .rumba/hub/context.md',
+      'Rumba stopped work on this ticket: the time budget of 30 minutes ran out. The last step stopped with: The agent changed protected paths: .rumba/shop/context.md',
     )
   })
 })
@@ -39,7 +39,7 @@ describe('a step that fails after the budget ran out', () => {
 describe('the environment check, when the project tests cannot run on the default branch', () => {
   it.each([124, 126, 127])('says so on exit %i instead of saying they fail', async (code) => {
     const d = makeDeps(); d.environment.commandExit = code; d.environment.commandOutput = 'Terminated'
-    const s = await checkEnvironment(d, makeRumba({ verify: { test: 'pnpm test' } }), makeTicket(), newState('hub', d.clock()))
+    const s = await checkEnvironment(d, makeRumba({ verify: { test: 'pnpm test' } }), makeTicket(), newState('shop', d.clock()))
     expect(s.state).toBe('needs_human'); expect(s.history.at(-1)?.note).toBe('project tests could not run on the default branch')
     const comment = d.tracker.comments.at(-1)!.body
     expect(comment).toMatch(new RegExp(`The project's tests \\(pnpm test\\) could not run on the default branch \\(exit ${code}\\)`))
@@ -52,7 +52,7 @@ describe('a ticket whose criteria are all marked not checkable', () => {
   it('says that no criterion can be checked, and lists the reasons', async () => {
     const d = makeDeps()
     const st = {
-      ...transition(transition(newState('hub', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind: 'feature' as const,
+      ...transition(transition(newState('shop', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind: 'feature' as const,
       criteria: [{ id: 'c1', text: 'Nothing calls the network', checkable: false, reason: 'a constraint on the tests' }],
     }
     const s = await reproduce(d, makeRumba(), makeTicket(), st)

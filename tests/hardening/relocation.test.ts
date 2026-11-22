@@ -33,15 +33,15 @@ describe('checks.relocate in rumba.yml', () => {
   const minimal = 'paths: []\ntracker: { kind: github }\nagent: { kind: claude-code }\nenvironment: { kind: docker, up: "u", exec: "e", down: "d" }\n'
 
   it('is on by default', async () => {
-    await write(root, '.rumba/hub/rumba.yml', minimal)
-    expect((await loadRumba(root, 'hub')).checks).toEqual({ relocate: true })
+    await write(root, '.rumba/shop/rumba.yml', minimal)
+    expect((await loadRumba(root, 'shop')).checks).toEqual({ relocate: true })
   })
 
   it('can be turned off, and must be a boolean', async () => {
-    await write(root, '.rumba/hub/rumba.yml', `${minimal}checks: { relocate: false }\n`)
-    expect((await loadRumba(root, 'hub')).checks).toEqual({ relocate: false })
-    await write(root, '.rumba/hub/rumba.yml', `${minimal}checks: { relocate: "no" }\n`)
-    await expect(loadRumba(root, 'hub')).rejects.toThrow(/checks\.relocate/)
+    await write(root, '.rumba/shop/rumba.yml', `${minimal}checks: { relocate: false }\n`)
+    expect((await loadRumba(root, 'shop')).checks).toEqual({ relocate: false })
+    await write(root, '.rumba/shop/rumba.yml', `${minimal}checks: { relocate: "no" }\n`)
+    await expect(loadRumba(root, 'shop')).rejects.toThrow(/checks\.relocate/)
   })
 })
 
@@ -109,7 +109,7 @@ describe('GitWorkspace, for relocation', () => {
   afterEach(async () => { await ws.cleanupAll() })
 
   it('reads a file as a commit holds it, and nothing for a missing file or a link', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, 'tests/rumba/c1.test.js', 'check\n')
     await symlink('c1.test.js', path.join(workdir, 'tests/rumba/link.js'))
     const sha = (await ws.commit(workdir, 'checks'))!
@@ -121,32 +121,32 @@ describe('GitWorkspace, for relocation', () => {
   })
 
   it('refuses to read a file that is not UTF-8 text, so two files never read the same', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await writeFile(path.join(workdir, 'test', 'bytes.test.js'), Buffer.from([0x61, 0xff, 0x62]))
     const sha = (await ws.commit(workdir, 'bytes'))!
     await expect(ws.readFileAt(workdir, sha, 'test/bytes.test.js')).rejects.toThrow(/not UTF-8/)
   })
 
   it('starts a branch like another one: from the commit that one started from, not from the default branch now', async () => {
-    const fix = await ws.prepare('rumba/hub/1', { fresh: true })
+    const fix = await ws.prepare('rumba/shop/1', { fresh: true })
     // The default branch moves on after the fix branch was made.
     await write(clone, 'later.txt', 'later\n')
     await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'later'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
-    const scratch = await ws.prepare('rumba/hub/1-relocated-base', { fresh: true, like: 'rumba/hub/1' })
+    const scratch = await ws.prepare('rumba/shop/1-relocated-base', { fresh: true, like: 'rumba/shop/1' })
     expect(scratch.baseSha).toBe(fix.baseSha)
-    const trusted = await ws.trustedCheckout('rumba/hub/1-relocated-base')
+    const trusted = await ws.trustedCheckout('rumba/shop/1-relocated-base')
     expect(existsSync(path.join(trusted, 'later.txt'))).toBe(false)
   })
 
   it('sets files to their content at a commit, deleting those the commit does not have', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, 'tests/rumba/c1.test.js', 'check\n')
     const checks = (await ws.commit(workdir, 'checks'))!
     await rm(path.join(workdir, 'tests/rumba/c1.test.js'))
     await write(workdir, 'test/a.test.js', 'existing\ncheck\n')
     const relocated = (await ws.commit(workdir, 'relocate'))!
 
-    const scratch = await ws.prepare('rumba/hub/1-relocated-base', { fresh: true })
+    const scratch = await ws.prepare('rumba/shop/1-relocated-base', { fresh: true })
     await ws.reset(scratch.workdir, checks)
     await ws.checkoutFiles(scratch.workdir, relocated, ['test/a.test.js', 'tests/rumba/c1.test.js'])
     expect(await readFile(path.join(scratch.workdir, 'test/a.test.js'), 'utf8')).toBe('existing\ncheck\n')
@@ -155,6 +155,6 @@ describe('GitWorkspace, for relocation', () => {
     expect(await ws.readFileAt(scratch.workdir, sha, 'test/a.test.js')).toBe('existing\ncheck\n')
     expect(await ws.readFileAt(scratch.workdir, sha, 'tests/rumba/c1.test.js')).toBeNull()
     // The fix branch is not touched.
-    expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(relocated)
+    expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(relocated)
   })
 })

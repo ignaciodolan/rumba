@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { loadRumba, loadRumbas } from '../../src/config/load.js'
 
 const minimal = `
-paths: ["apps/hub/**"]
+paths: ["apps/shop/**"]
 tracker: { kind: github }
 agent: { kind: claude-code }
 environment: { kind: docker, up: "docker compose up -d --wait", exec: "docker compose exec -T app", down: "docker compose down -v" }
@@ -29,16 +29,16 @@ afterEach(async () => {
 
 describe('loadRumbas', () => {
   it('loads a minimal docker rumba with defaults', async () => {
-    await write('.rumba/hub/rumba.yml', minimal)
-    await write('.rumba/hub/context.md', 'Hub is the admin app.')
-    await write('.rumba/hub/lessons.md', '- Use pnpm.')
+    await write('.rumba/shop/rumba.yml', minimal)
+    await write('.rumba/shop/context.md', 'Shop is the storefront.')
+    await write('.rumba/shop/lessons.md', '- Use pnpm.')
     const [r] = await loadRumbas(root)
-    expect(r.name).toBe('hub')
-    expect(r.dir).toBe(path.join(root, '.rumba', 'hub'))
+    expect(r.name).toBe('shop')
+    expect(r.dir).toBe(path.join(root, '.rumba', 'shop'))
     expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 })
-    expect(r.labels.optIn).toBe('rumba:hub')
+    expect(r.labels.optIn).toBe('rumba:shop')
     expect(r.environment).toMatchObject({ kind: 'docker', protected: ['docker-compose*.y*ml', 'compose*.y*ml', 'Dockerfile*', '*.dockerfile', '.dockerignore'] })
-    expect(r.context).toContain('Hub is the admin app.')
+    expect(r.context).toContain('Shop is the storefront.')
     expect(r.context).toContain('- Use pnpm.')
   })
   it('rejects an invalid folder name', async () => {
@@ -46,8 +46,8 @@ describe('loadRumbas', () => {
     await expect(loadRumbas(root)).rejects.toThrow(/Hub_1.*lowercase letters, digits and hyphens/)
   })
   it('requires a team for linear', async () => {
-    await write('.rumba/hub/rumba.yml', minimal.replace('kind: github', 'kind: linear'))
-    await expect(loadRumbas(root)).rejects.toThrow(/hub.*tracker\.team/)
+    await write('.rumba/shop/rumba.yml', minimal.replace('kind: github', 'kind: linear'))
+    await expect(loadRumbas(root)).rejects.toThrow(/shop.*tracker\.team/)
   })
   it('reports a missing .rumba folder', async () => {
     await expect(loadRumbas(root)).rejects.toThrow(/No rumbas found.*rumba init/)
@@ -57,11 +57,11 @@ describe('loadRumbas', () => {
     await expect(loadRumbas(root)).rejects.toThrow(/No rumbas found.*rumba init/)
   })
   it('reports a rumba folder without rumba.yml', async () => {
-    await mkdir(path.join(root, '.rumba', 'hub'), { recursive: true })
-    await expect(loadRumbas(root)).rejects.toThrow(/^hub.*rumba\.yml/)
+    await mkdir(path.join(root, '.rumba', 'shop'), { recursive: true })
+    await expect(loadRumbas(root)).rejects.toThrow(/^shop.*rumba\.yml/)
   })
   it('ignores unknown keys such as limits.max_review_rounds', async () => {
-    await write('.rumba/hub/rumba.yml', `${minimal}limits: { max_review_rounds: 5, max_fix_attempts: 4 }\nsomething_else: 1\n`)
+    await write('.rumba/shop/rumba.yml', `${minimal}limits: { max_review_rounds: 5, max_fix_attempts: 4 }\nsomething_else: 1\n`)
     const [r] = await loadRumbas(root)
     expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 4 })
   })
@@ -85,24 +85,24 @@ labels: { opt_in: auto, approved: ok }
     expect(r.context).toBe('')
   })
   it('prefixes schema errors with the rumba name and YAML path', async () => {
-    await write('.rumba/hub/rumba.yml', minimal.replace('claude-code', 'nope'))
-    await expect(loadRumbas(root)).rejects.toThrow(/^hub: agent\.kind/)
+    await write('.rumba/shop/rumba.yml', minimal.replace('claude-code', 'nope'))
+    await expect(loadRumbas(root)).rejects.toThrow(/^shop: agent\.kind/)
   })
   it('joins context and lessons, skipping empty files', async () => {
-    await write('.rumba/hub/rumba.yml', minimal)
-    await write('.rumba/hub/context.md', '  A  \n')
-    await write('.rumba/hub/lessons.md', '\n')
+    await write('.rumba/shop/rumba.yml', minimal)
+    await write('.rumba/shop/context.md', '  A  \n')
+    await write('.rumba/shop/lessons.md', '\n')
     expect((await loadRumbas(root))[0].context).toBe('A')
   })
 })
 
 describe('loadRumba', () => {
   it('names the rumbas that do exist', async () => {
-    await write('.rumba/hub/rumba.yml', minimal)
-    await expect(loadRumba(root, 'api')).rejects.toThrow(/No rumba named "api".*hub/)
+    await write('.rumba/shop/rumba.yml', minimal)
+    await expect(loadRumba(root, 'api')).rejects.toThrow(/No rumba named "api".*shop/)
   })
   it('loads one rumba by name', async () => {
-    await write('.rumba/hub/rumba.yml', minimal)
-    expect((await loadRumba(root, 'hub')).name).toBe('hub')
+    await write('.rumba/shop/rumba.yml', minimal)
+    expect((await loadRumba(root, 'shop')).name).toBe('shop')
   })
 })

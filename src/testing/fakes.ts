@@ -14,13 +14,13 @@ import type { Workspace } from '../ports/workspace.js'
 type Role = EnvRef['role']
 
 export function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
-  return { id: '123', ref: '#123', title: 'A ticket', body: 'Something is broken', url: 'https://example.test/issues/123', labels: ['rumba:hub'], ...overrides }
+  return { id: '123', ref: '#123', title: 'A ticket', body: 'Something is broken', url: 'https://example.test/issues/123', labels: ['rumba:shop'], ...overrides }
 }
 
 export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
   return {
-    name: 'hub',
-    dir: '.rumba/hub',
+    name: 'shop',
+    dir: '.rumba/shop',
     paths: [],
     tracker: { kind: 'github' },
     agent: { kind: 'claude-code' },
@@ -29,7 +29,7 @@ export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
     checks: { relocate: true },
     sandbox: { nodeVersion: '22' },
     limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 },
-    labels: defaultLabels('hub'),
+    labels: defaultLabels('shop'),
     context: '',
     ...overrides,
   }
@@ -44,7 +44,7 @@ export class FakeTracker implements Tracker {
   documents: LinkedDocument[] = []
   private onceKeys = new Map<string, Set<string>>()
 
-  constructor(private labels: LabelNames = defaultLabels('hub')) {}
+  constructor(private labels: LabelNames = defaultLabels('shop')) {}
 
   async ensureLabels(): Promise<void> {}
 
@@ -212,7 +212,7 @@ export class FakeWorkspace implements Workspace {
   commits: string[] = []
   resets: string[] = []
   cleanedAll = 0
-  /** Every prepare, commit, reset and cleanup, in order, e.g. `prepare rumba/hub/123 fresh /fake/1`. */
+  /** Every prepare, commit, reset and cleanup, in order, e.g. `prepare rumba/shop/123 fresh /fake/1`. */
   log: string[] = []
   private prepared = 0
 
@@ -231,7 +231,7 @@ export class FakeWorkspace implements Workspace {
   /** The commit the fix branch points at; commits and resets move it. Starts at the checks commit of `failing`. */
   branchTip = 'sha1'
   /** The fix branch of the default ticket; any other branch keeps its own tip in `otherTips`. */
-  fixBranch = 'rumba/hub/123'
+  fixBranch = 'rumba/shop/123'
   otherTips = new Map<string, string>()
   private branches = new Map<string, string>()
 
@@ -321,7 +321,7 @@ export function makeDeps(overrides: Partial<FakeDeps> = {}): FakeDeps {
 /** A 'checks_failing' state, built by real transitions, with one failing check c1. */
 export function failing(d: FakeDeps): TicketState {
   const now = d.clock()
-  let s = newState('hub', now)
+  let s = newState('shop', now)
   for (const to of ['triaged', 'criteria_ready', 'env_ready', 'checks_failing'] as const) s = transition(s, to, now)
   return {
     ...s,
@@ -329,7 +329,7 @@ export function failing(d: FakeDeps): TicketState {
     criteria: [{ id: 'c1', text: 'C1', checkable: true }],
     checks: [{ criterionId: 'c1', command: 'npm test -- c1', files: ['tests/rumba/c1.test.ts'] }],
     checkHashes: { 'tests/rumba/c1.test.ts': 'h1' },
-    branch: 'rumba/hub/123',
+    branch: 'rumba/shop/123',
     baseSha: 'base000',
     checksSha: 'sha1',
     before: [{ criterionId: 'c1', passed: false, exitCode: 1, output: 'check failed' }],

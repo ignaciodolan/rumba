@@ -37,17 +37,17 @@ describe('infrastructure failures are not fix failures', () => {
   it('does not take a check that died of infrastructure on the base commit as evidence', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = { kind: 'write-checks', checks: [{ criterionId: 'c1', command: 'npm test -- c1', files: ['tests/rumba/c1.test.ts'] }] }
     d.workspace.hashes = H; d.environment.checkResults = [{ passed: false, ...oom }, { passed: false, ...oom }]
-    const ready = { ...transition(transition(newState('hub', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind: 'bug' as const, criteria: [{ id: 'c1', text: 'C1', checkable: true }] }
+    const ready = { ...transition(transition(newState('shop', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind: 'bug' as const, criteria: [{ id: 'c1', text: 'C1', checkable: true }] }
     await expect(reproduce(d, makeRumba(), makeTicket(), ready)).rejects.toBeInstanceOf(InfrastructureError)
   })
   it('counts infrastructure in the environment check as an error, not as tests that fail', async () => {
     const d = makeDeps(); d.environment.commandResults = [oom, oom]
-    await expect(checkEnvironment(d, withTests, makeTicket(), newState('hub', d.clock()))).rejects.toBeInstanceOf(InfrastructureError)
+    await expect(checkEnvironment(d, withTests, makeTicket(), newState('shop', d.clock()))).rejects.toBeInstanceOf(InfrastructureError)
     expect(d.tracker.comments).toEqual([])
   })
   it('rethrows an environment that did not come up for infrastructure, instead of a final needs_human', async () => {
     const d = makeDeps(); d.environment.upError = new InfrastructureError('Not enough disk space for Docker: 1.2 GB free, at least 5 GB needed.')
-    await expect(checkEnvironment(d, withTests, makeTicket(), newState('hub', d.clock()))).rejects.toThrow(/Not enough disk/)
+    await expect(checkEnvironment(d, withTests, makeTicket(), newState('shop', d.clock()))).rejects.toThrow(/Not enough disk/)
   })
   it('says plainly on the ticket that it was the infrastructure, and that it counts as an error', async () => {
     const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
@@ -77,13 +77,13 @@ describe('a failing command is run once more before an attempt is charged', () =
 describe('every attempt is recorded on the ticket', () => {
   it('stores each attempt: the checks, the project tests, and a short tail of the output', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.environment.passes = () => true
-    d.environment.commandResults = [{ exitCode: 1, output: 'x'.repeat(5000) + ' FAIL deals.test.ts' }, { exitCode: 1, output: 'FAIL deals.test.ts' }]
+    d.environment.commandResults = [{ exitCode: 1, output: 'x'.repeat(5000) + ' FAIL orders.test.ts' }, { exitCode: 1, output: 'FAIL orders.test.ts' }]
     const s = await build(d, withTests, makeTicket(), failing(d))
     expect(s.state).toBe('verified')
     expect(s.attempts).toHaveLength(2)
     expect(s.attempts![0]).toMatchObject({ n: 1, outcome: 'project-tests-failed', projectTests: 'failed', checks: [{ criterionId: 'c1', passed: true, exitCode: 0 }] })
     expect(s.attempts![0]!.tail.length).toBeLessThanOrEqual(1200)
-    expect(s.attempts![0]!.tail).toContain('FAIL deals.test.ts')
+    expect(s.attempts![0]!.tail).toContain('FAIL orders.test.ts')
     expect(s.attempts![1]).toMatchObject({ n: 2, outcome: 'verified', projectTests: 'passed' })
   })
   it('explains a fix_failed from the ticket alone, attempt by attempt', async () => {

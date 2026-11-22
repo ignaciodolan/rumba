@@ -5,7 +5,7 @@ import { AgentError } from '../../../src/ports/agent.js'
 import { makeDeps, makeRumba, makeTicket } from '../../../src/testing/fakes.js'
 
 const ready = (d: ReturnType<typeof makeDeps>, kind: 'bug' | 'feature', n = 1) => ({
-  ...transition(transition(newState('hub', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind,
+  ...transition(transition(newState('shop', d.clock()), 'triaged', d.clock()), 'criteria_ready', d.clock()), kind,
   criteria: Array.from({ length: n }, (_, i) => ({ id: `c${i + 1}`, text: `C${i + 1}`, checkable: true })) })
 const checksFor = (n: number) => ({ kind: 'write-checks' as const,
   checks: Array.from({ length: n }, (_, i) => ({ criterionId: `c${i + 1}`, command: `npm test -- c${i + 1}`, files: [`tests/rumba/c${i + 1}.test.ts`] })) })
@@ -24,10 +24,10 @@ describe('reproduce', () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.hashes = { 'tests/rumba/c1.test.ts': 'h1' }
     const s = await reproduce(d, makeRumba(), makeTicket({ id: '123' }), ready(d, 'bug'))
     expect(s.state).toBe('checks_failing')
-    expect(s.branch).toBe('rumba/hub/123'); expect(s.baseSha).toBe('base000'); expect(s.checksSha).toBe('sha1')
+    expect(s.branch).toBe('rumba/shop/123'); expect(s.baseSha).toBe('base000'); expect(s.checksSha).toBe('sha1')
     expect(s.before).toEqual([expect.objectContaining({ criterionId: 'c1', passed: false })])
     expect(s.checkHashes).toEqual({ 'tests/rumba/c1.test.ts': 'h1' })
-    expect(d.environment.ups).toEqual([{ branch: 'rumba/hub/123', sha: 'sha1', role: 'before' }]); expect(d.environment.downs).toBe(1)
+    expect(d.environment.ups).toEqual([{ branch: 'rumba/shop/123', sha: 'sha1', role: 'before' }]); expect(d.environment.downs).toBe(1)
   })
   it('marks a bug not_reproducible when its check passes', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.environment.passes = () => true
@@ -54,8 +54,8 @@ describe('reproduce', () => {
   it('passes the checkable criteria and context to the agent', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1)
     const st = ready(d, 'feature', 2); st.criteria[1]!.checkable = false
-    await reproduce(d, makeRumba({ context: 'Hub notes' }), makeTicket(), st)
-    expect(d.agent.calls[0]).toMatchObject({ kind: 'write-checks', context: 'Hub notes', environmentKind: 'docker', criteria: [st.criteria[0]] })
+    await reproduce(d, makeRumba({ context: 'Shop notes' }), makeTicket(), st)
+    expect(d.agent.calls[0]).toMatchObject({ kind: 'write-checks', context: 'Shop notes', environmentKind: 'docker', criteria: [st.criteria[0]] })
   })
   it('drops checks for unknown criteria and needs a human if none are left', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = { kind: 'write-checks', checks: [{ criterionId: 'zzz', command: 'x', files: [] }] }
@@ -76,10 +76,10 @@ describe('reproduce', () => {
     const [agentDir] = d.agent.workdirs; const [envDir] = d.environment.upWorkdirs
     expect(envDir).not.toBe(agentDir)
     expect(d.workspace.log).toEqual([
-      `prepare rumba/hub/123 fresh ${agentDir}`,
+      `prepare rumba/shop/123 fresh ${agentDir}`,
       `commit ${agentDir} allowEmpty`,
       `cleanup ${agentDir}`,
-      `prepare rumba/hub/123 existing ${envDir}`,
+      `prepare rumba/shop/123 existing ${envDir}`,
       `hash ${envDir}`,
       `up ${envDir}`,
       `down ${envDir}`,
@@ -90,7 +90,7 @@ describe('reproduce', () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['.env']; trace(d)
     await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/\.env/)
     const [agentDir] = d.agent.workdirs
-    expect(d.workspace.log).toEqual([`prepare rumba/hub/123 fresh ${agentDir}`, `commit ${agentDir} allowEmpty`, `cleanup ${agentDir}`])
+    expect(d.workspace.log).toEqual([`prepare rumba/shop/123 fresh ${agentDir}`, `commit ${agentDir} allowEmpty`, `cleanup ${agentDir}`])
   })
   it('returns its state when a cleanup fails', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1)
@@ -120,8 +120,8 @@ describe('reproduce', () => {
     expect(d.tracker.states.get('123')?.before![0]!.output).not.toContain('s3cret')
   })
   it('rejects checks that touched a protected path before running them', async () => {
-    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['.rumba/hub/context.md']
-    await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/\.rumba\/hub\/context\.md/)
+    const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1); d.workspace.changed = ['.rumba/shop/context.md']
+    await expect(reproduce(d, makeRumba(), makeTicket(), ready(d, 'bug'))).rejects.toThrow(/\.rumba\/shop\/context\.md/)
     expect(d.environment.ups).toEqual([])
   })
   it('hashes declared check files and every file from the checks commit', async () => {
@@ -133,7 +133,7 @@ describe('reproduce', () => {
   })
   it('throws on a state that is not criteria_ready', async () => {
     const d = makeDeps()
-    await expect(reproduce(d, makeRumba(), makeTicket(), newState('hub', d.clock()))).rejects.toThrow()
+    await expect(reproduce(d, makeRumba(), makeTicket(), newState('shop', d.clock()))).rejects.toThrow()
   })
   it('does not mutate the state it is given', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = checksFor(1)
@@ -160,7 +160,7 @@ describe('reproduce', () => {
     expect((err as Error).message).toBe('The check file tests/rumba/c2.test.ts was not committed; is it ignored by git?')
     expect(d.environment.ups).toEqual([])
     const [envDir] = d.workspace.log.filter((l) => l.startsWith('hash ')).map((l) => l.slice(5))
-    expect(d.workspace.log.slice(-3)).toEqual([`prepare rumba/hub/123 existing ${envDir}`, `hash ${envDir}`, `cleanup ${envDir}`])
+    expect(d.workspace.log.slice(-3)).toEqual([`prepare rumba/shop/123 existing ${envDir}`, `hash ${envDir}`, `cleanup ${envDir}`])
   })
 })
 

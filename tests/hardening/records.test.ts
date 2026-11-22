@@ -15,7 +15,7 @@ let dir: string
 beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), 'rumba-records-')) })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
 
-const fixTask: AgentTask = { kind: 'fix', ticket: makeTicket({ id: '18', ref: '#18' }), context: '', environmentKind: 'docker', attempt: 2 }
+const fixTask: AgentTask = { kind: 'fix', ticket: makeTicket({ id: '42', ref: '#42' }), context: '', environmentKind: 'docker', attempt: 2 }
 
 describe('the transcript of an agent call', () => {
   it('keeps the last part of what the CLI printed with the result', async () => {
@@ -37,9 +37,9 @@ describe('recordingAgent', () => {
     const records = new FileRunRecords(path.join(dir, 'run-1'))
     const agent = recordingAgent(inner, records, ['sk-secret-1'])
     await agent.run(fixTask, '/w')
-    const files = await readdir(path.join(dir, 'run-1', '18'))
+    const files = await readdir(path.join(dir, 'run-1', '42'))
     expect(files).toEqual(['01-fix-attempt-2.md'])
-    const text = await readFile(path.join(dir, 'run-1', '18', files[0]!), 'utf8')
+    const text = await readFile(path.join(dir, 'run-1', '42', files[0]!), 'utf8')
     expect(text).toContain('Lower-cased the slug using [redacted].')
     expect(text).toContain('thinking… token [redacted] … done')
     expect(text).not.toContain('sk-secret-1')
@@ -48,7 +48,7 @@ describe('recordingAgent', () => {
     const inner = new FakeAgent(); inner.script.triage = new AgentError('Claude Code exited with code 1:\nrate limited')
     const records = new FileRunRecords(path.join(dir, 'run-2'))
     await expect(recordingAgent(inner, records, []).run({ ...fixTask, kind: 'triage', attempt: undefined }, '/w')).rejects.toThrow('rate limited')
-    const text = await readFile(path.join(dir, 'run-2', '18', '01-triage.md'), 'utf8')
+    const text = await readFile(path.join(dir, 'run-2', '42', '01-triage.md'), 'utf8')
     expect(text).toContain('rate limited')
   })
   it('keeps the files private to the user', async () => {
@@ -57,6 +57,6 @@ describe('recordingAgent', () => {
     await recordingAgent(inner, records, []).run(fixTask, '/w')
     const { stat } = await import('node:fs/promises')
     expect((await stat(path.join(dir, 'run-3'))).mode & 0o777).toBe(0o700)
-    expect((await stat(path.join(dir, 'run-3', '18', '01-fix-attempt-2.md'))).mode & 0o777).toBe(0o600)
+    expect((await stat(path.join(dir, 'run-3', '42', '01-fix-attempt-2.md'))).mode & 0o777).toBe(0o600)
   })
 })
