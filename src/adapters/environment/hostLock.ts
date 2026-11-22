@@ -61,14 +61,19 @@ export class HostLock {
     const giveUp = Date.now() + timeoutMs
     for (;;) {
       const judged = await stat(this.file).catch(() => null)
+      const judgedText = await readFile(this.file, 'utf8').catch(() => null)
       const owner = await this.tryTake()
       if (owner === null) return
       if (owner === 'unreadable' ? await this.oldUnreadable() : !this.isAlive(owner.pid)) {
         // The process that held it is gone, or its lock was never written whole. Remove it, but
         // only if it is still the file that was judged: another waiter may have replaced it.
         await this.beforeRemoveStale()
+        // Same inode, same modification time and same content: an inode number can be reused
+        // for a new lock at once, so the number alone is not enough.
         const now = await stat(this.file).catch(() => null)
-        if (judged !== null && now !== null && now.ino === judged.ino && now.dev === judged.dev) await unlink(this.file).catch(() => undefined)
+        const nowText = await readFile(this.file, 'utf8').catch(() => null)
+        const same = judged !== null && now !== null && now.ino === judged.ino && now.dev === judged.dev && now.mtimeMs === judged.mtimeMs && nowText === judgedText
+        if (same) await unlink(this.file).catch(() => undefined)
         if (Date.now() < giveUp) continue
       }
       if (Date.now() >= giveUp) {
