@@ -398,3 +398,11 @@ describe('judgeRelocation, after the third review', () => {
     }
   })
 })
+
+describe('judgeRelocation, lines at the top of a check', () => {
+  it("keeps a check's pragma or directive: dropping one changes how it runs", () => {
+    const pragma = ['// @vitest', 'environment node'].join('-')
+    expect(judgeRelocation(input({ before: { [FROM]: `${pragma}\n${ORIGINAL}`, [TO]: EXISTING } }))).toMatch(/at the top/)
+    expect(judgeRelocation(input({ before: { [FROM]: `'use strict'\n${ORIGINAL}`, [TO]: EXISTING } }))).toMatch(/use strict/)
+  })
+})

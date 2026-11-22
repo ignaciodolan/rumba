@@ -194,12 +194,14 @@ function sameFile(to: string, before: string | null, after: string, sources: { f
   const effects = new Set([...was.effects, ...moved.flatMap((m) => [...m.effects])])
   if (effects.size !== now.effects.size || [...effects].some((e) => !now.effects.has(e))) return `${code(to)} must import the same modules for their side effects as the verified checks.`
 
-  // Comments before the code: the file's own stay, and only the checks' own may join them.
-  const notes = countOf(now.notes)
-  for (const n of was.notes) if (!take(notes, n)) return `A comment at the top of ${code(to)} is missing: ${code(n)}.`
-  for (const n of moved.flatMap((m) => m.notes)) take(notes, n)
-  const strayNote = [...notes].find(([, c]) => c > 0)
-  if (strayNote) return `${code(to)} has a line at the top that is in no check Rumba verified: ${code(strayNote[0])}.`
+  // Lines before the code (comments, pragmas, a package clause, 'use strict') can change how
+  // a file runs: every one of the file's and the check's stays, and no other is added.
+  const notes = new Set(now.notes)
+  const kept = new Set([...was.notes, ...moved.flatMap((m) => m.notes)])
+  const dropped = [...kept].find((n) => !notes.has(n))
+  if (dropped !== undefined) return `A line at the top of ${code(to)} or of the check is missing from ${code(to)}: ${code(dropped)}.`
+  const strayNote = [...notes].find((n) => !kept.has(n))
+  if (strayNote !== undefined) return `${code(to)} has a line at the top that is in no check Rumba verified: ${code(strayNote)}.`
 
   // Every line, by its text: nothing added and nothing lost.
   const texts = countOf(now.body.map((l) => l.text))
