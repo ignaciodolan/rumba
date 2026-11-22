@@ -94,9 +94,16 @@ type Moved = { sha: string; moves: Move[]; checks: Check[] }
 async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, workdir: string, from: string): Promise<Moved | { reason: string }> {
   // Before the agent writes anything: what the checks commit and the fix changed since the base.
   const changedByFix = await deps.workspace.changedFiles(workdir, state.baseSha!)
+  // Check files that were already on the base commit, such as a fixture an earlier ticket's
+  // checks left there: other code may import them, so they stay where they are.
+  const kept: string[] = []
+  for (const f of [...new Set(state.checks.flatMap((c) => c.files))]) {
+    const atBase = await deps.workspace.readFileAt(workdir, state.baseSha!, f).catch(() => '')
+    if (atBase !== null) kept.push(f)
+  }
   const result = await deps.agent.run({
     kind: 'relocate-checks', ticket, context: rumba.context, environmentKind: rumba.environment.kind, timeoutMs: timeLeft(deps), ...execPrefixOf(rumba),
-    criteria: state.criteria, checks: state.checks,
+    criteria: state.criteria, checks: state.checks, ...(kept.length > 0 ? { lockedFiles: kept } : {}),
   }, workdir)
   if (result.kind !== 'relocate-checks') throw new Error(`Agent returned ${result.kind} for a relocate-checks task`)
 
@@ -116,7 +123,7 @@ async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: Ticke
   }
   const checks = result.checks.filter((c) => state.checks.some((o) => o.criterionId === c.criterionId))
   const unlike = judgeRelocation({
-    original: state.checks, moves: result.moves, relocated: result.checks, changed, before, after, protectedGlobs: rumba.environment.protected, changedByFix,
+    original: state.checks, moves: result.moves, relocated: result.checks, changed, before, after, protectedGlobs: rumba.environment.protected, changedByFix, kept,
   })
   if (unlike !== null) return { reason: `Rumba compared the moved checks with the ones it verified, line by line. ${unlike}` }
   return { sha, moves: result.moves, checks }
