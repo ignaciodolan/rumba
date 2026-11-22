@@ -35,6 +35,11 @@ export interface RelocationInput {
   protectedGlobs: string[]
   /** Files the checks commit and the fix changed, since the base commit. */
   changedByFix?: string[]
+  /**
+   * Check files that were in the repository before Rumba's checks: a fixture an earlier
+   * ticket's checks left, say. Other code may import them, so they stay where they are.
+   */
+  kept?: string[]
 }
 
 const PLAIN_PATH = /^[A-Za-z0-9._+@-]+(?:\/[A-Za-z0-9._+@-]+)*$/
@@ -44,7 +49,9 @@ const MAX_LINES = 3000
 
 /** Null when the relocation kept every check as it was; otherwise why not. */
 export function judgeRelocation(i: RelocationInput): string | null {
-  const originals = [...new Set(i.original.flatMap((c) => c.files))]
+  const kept = new Set(i.kept ?? [])
+  // Only what Rumba's checks added moves; whatever was there before stays, unchanged.
+  const originals = [...new Set(i.original.flatMap((c) => c.files))].filter((f) => !kept.has(f))
   const froms = i.moves.map((m) => m.from)
   const tos = [...new Set(i.moves.map((m) => m.to))]
 
@@ -55,6 +62,8 @@ export function judgeRelocation(i: RelocationInput): string | null {
   const extra = given.filter((id, n) => !ids.includes(id) || given.indexOf(id) !== n)
   if (extra.length > 0) return `The relocation gave checks Rumba did not write, or gave one twice: ${extra.map(code).join(', ')}.`
 
+  const staying = froms.filter((f) => kept.has(f))
+  if (staying.length > 0) return `${list(staying)} was in the repository before Rumba's checks, and other code may import it, so it must stay where it is.`
   const unmoved = originals.filter((f) => !froms.includes(f))
   if (unmoved.length > 0) return `The relocation did not move ${list(unmoved)}.`
   const strangers = froms.filter((f, n) => !originals.includes(f) || froms.indexOf(f) !== n)
@@ -65,7 +74,8 @@ export function judgeRelocation(i: RelocationInput): string | null {
   if (shared.length > 0) return `A file can take only one check, and ${list(shared)} was given more than one.`
   const fixed = tos.filter((t) => (i.changedByFix ?? []).includes(t))
   if (fixed.length > 0) return `A check cannot move into a file the fix changed, since that change could fail on the base commit in its place: ${list(fixed)}.`
-  const intoCheck = tos.filter((t) => originals.includes(t))
+  // Kept files included: a kept file stays as it was, so nothing may move into it either.
+  const intoCheck = tos.filter((t) => originals.includes(t) || kept.has(t))
   if (intoCheck.length > 0) return `The relocation moved a check into one of Rumba's own check files: ${list(intoCheck)}.`
 
   // Unambiguously: no two moved files may answer to one module name, before or after, and no
@@ -97,12 +107,14 @@ export function judgeRelocation(i: RelocationInput): string | null {
   for (const check of i.relocated) {
     const original = i.original.find((c) => c.criterionId === check.criterionId)!
     const mine = i.moves.filter((m) => original.files.includes(m.from))
-    const places = [...new Set(mine.map((m) => m.to))].sort()
+    const places = [...new Set([...mine.map((m) => m.to), ...original.files.filter((f) => kept.has(f))])].sort()
     if (JSON.stringify([...new Set(check.files)].sort()) !== JSON.stringify(places)) {
       return `The relocated check for ${code(check.criterionId)} must list exactly its new files, ${list(places)}, not ${list(check.files)}.`
     }
     // Longest paths first, so that one path inside another is never half replaced.
-    const command = [...mine].sort((a, b) => b.from.length - a.from.length).reduce((c, m) => c.split(m.from).join(m.to), original.command)
+    // Each path only where it stands whole, so a kept `x.test.tsx.snap` is not taken for a moved `x.test.tsx`.
+    const command = [...mine].sort((a, b) => b.from.length - a.from.length)
+      .reduce((c, m) => c.replace(new RegExp(`(?<![\\w.\\-/])${m.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.\\-/])`, 'g'), () => m.to), original.command)
     if (check.command !== command) {
       return `The relocated command for ${code(check.criterionId)} must be the verified one with only the file paths changed, ${code(command)}, not ${code(check.command)}.`
     }
