@@ -7,7 +7,20 @@ export interface Ticket { id: string; ref: string; title: string; body: string; 
 /** `reason`: why a criterion is not checkable, when triage said so. */
 export interface Criterion { id: string; text: string; checkable: boolean; reason?: string }
 export interface Check { criterionId: string; command: string; files: string[] }
-export interface CheckResult { criterionId: string; passed: boolean; exitCode: number; output: string }
+/** `infrastructure`: set by the environment when the run died of the machine (out of memory, full disk, a timeout), not of the code. */
+export interface CheckResult { criterionId: string; passed: boolean; exitCode: number; output: string; infrastructure?: string }
+/** How the project's own tests went in one attempt. */
+export type ProjectTestsResult = 'passed' | 'failed' | 'infrastructure' | 'not-run'
+/** One fix attempt, as recorded on the ticket so that its outcome can be explained from the ticket alone. */
+export interface AttemptRecord {
+  n: number
+  outcome: 'verified' | 'checks-failed' | 'project-tests-failed' | 'guard' | 'no-change' | 'infrastructure'
+  checks: { criterionId: string; passed: boolean; exitCode: number }[]
+  projectTests: ProjectTestsResult
+  note?: string
+  /** A short, cleaned tail of the output that decided the outcome. */
+  tail: string
+}
 export interface LinkedDocument { title: string; body: string }
 export interface LabelNames { optIn: string; statePrefix: string; approved: string; retry: string }
 export interface TicketState {
@@ -27,6 +40,10 @@ export interface TicketState {
   pullRequestUrl?: string
   before?: CheckResult[]
   after?: CheckResult[]
+  /** Every fix attempt, in order. */
+  attempts?: AttemptRecord[]
+  /** The agent's summary of the fix that passed, for the pull request. */
+  fixSummary?: string
   lease?: { runId: string; at: string }
   history: { state: StateName; at: string; note?: string }[]
 }

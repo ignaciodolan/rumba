@@ -67,8 +67,9 @@ Optional: "notCheckable": [{ "id": "c2", "reason": "why no command can check it"
 }`,
   fix: `{
   "kind": "fix",
-  "summary": "what you changed and why, in a few sentences"
-}`,
+  "summary": "what you changed and why, in a few sentences; it goes in the pull request"
+}
+When you find that no change is needed, change no file and add "noChangeNeeded": "why", for example because the checks already pass and the failure came from somewhere else. Rumba then verifies the code once more as it stands.`,
 }
 
 function cut(text: string, max: number, note: string): string {
@@ -127,14 +128,27 @@ function checkRules(task: AgentTask): string {
 
 function whereChecksRun(execPrefix: string): string {
   return [
+    "- Your sandbox is not the project's environment. Its Node version, services, installed packages and memory differ, so a check or a test you run here can pass or fail differently there. Rumba runs every check, and the project's tests, in the project's environment after you finish, and runs a failing one a second time before it counts.",
     `- Rumba runs each check inside the project's container, not in this sandbox, as: ${execPrefix} sh -c '<command>'`,
     "- The command runs in that container's working directory, which the project's compose file sets, against the code under test.",
     '- You cannot run the checks there yourself. Tools you install in this sandbox are not in that container; a check may only use what the project\'s container has.',
   ].join('\n')
 }
 
+function situation(task: AgentTask): string[] {
+  const status = task.checkStatus ?? []
+  if (status.length === 0) return []
+  const passing = status.filter((c) => c.passed).map((c) => c.criterionId)
+  const failing = status.filter((c) => !c.passed).map((c) => c.criterionId)
+  const lines = ['', 'Where things stand after the last run:']
+  if (passing.length > 0) lines.push(`- Checks that pass now: ${passing.join(', ')}.`)
+  if (failing.length > 0) lines.push(`- Checks that fail now: ${failing.join(', ')}.`)
+  if (failing.length === 0 && task.projectTests === 'failed') lines.push("- Every check passes. Only the project's own tests failed. Their output is below. Fix what they show, or say that no change is needed if the failure has nothing to do with this change.")
+  return lines
+}
+
 function fixRules(task: AgentTask): string {
-  const rules = ['- Do not edit the check files, and do not change what the checks test.']
+  const rules = ['- Do not edit the check files, and do not change what the checks test.', ...situation(task)]
   const locked = task.lockedFiles ?? []
   if (locked.length > 0) {
     rules.push('', 'These files are locked. You must not change, move or delete them:', ...locked.map((f) => `- ${f}`))

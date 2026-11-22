@@ -76,7 +76,14 @@ function render(i: EvidenceInput, cap: number | null): string {
   const { ticket, rumba, state } = i
   const sections: string[] = []
 
-  sections.push(`## Ticket\n\n${ticket.url}\n\nRumba: ${rumba.name}`)
+  if (state.fixSummary) {
+    // The agent wrote it; it is quoted, and @-mentions are broken so nobody is notified.
+    const quoted = state.fixSummary.trim().replace(/@(?=\w)/g, '@\u200b').split('\n').map((l) => `> ${l}`).join('\n')
+    sections.push(`## Summary\n\n${quoted}`)
+  }
+  // A GitHub issue of this repository is closed by the merge; a Linear issue is linked.
+  const closes = rumba.tracker.kind === 'github' && /^#\d+$/.test(ticket.ref) ? `\n\nCloses ${ticket.ref}` : ''
+  sections.push(`## Ticket\n\n${ticket.url}${closes}\n\nRumba: ${rumba.name}`)
 
   const rows = state.checks.flatMap((check) => {
     const criterion = state.criteria.find((c) => c.id === check.criterionId)

@@ -8,7 +8,15 @@ export const STATE_MARKER = 'rumba-state-v1'
 const stateName = z.enum(STATE_NAMES)
 const durableState = z.enum(STATE_NAMES).refine(s => DURABLE.includes(s))
 const count = z.number().int().nonnegative()
-const checkResult = z.object({ criterionId: z.string(), passed: z.boolean(), exitCode: z.number(), output: z.string() })
+const checkResult = z.object({ criterionId: z.string(), passed: z.boolean(), exitCode: z.number(), output: z.string(), infrastructure: z.string().optional() })
+const attempt = z.object({
+  n: count,
+  outcome: z.enum(['verified', 'checks-failed', 'project-tests-failed', 'guard', 'no-change', 'infrastructure']),
+  checks: z.array(z.object({ criterionId: z.string(), passed: z.boolean(), exitCode: z.number() })),
+  projectTests: z.enum(['passed', 'failed', 'infrastructure', 'not-run']),
+  note: z.string().optional(),
+  tail: z.string(),
+})
 
 // Tracker comments are untrusted input, so the decoded state is validated strictly.
 const ticketState = z.object({
@@ -28,6 +36,8 @@ const ticketState = z.object({
   pullRequestUrl: z.string().optional(),
   before: z.array(checkResult).optional(),
   after: z.array(checkResult).optional(),
+  attempts: z.array(attempt).optional(),
+  fixSummary: z.string().optional(),
   lease: z.object({ runId: z.string(), at: z.string() }).optional(),
   history: z.array(z.object({ state: stateName, at: z.string(), note: z.string().optional() })),
 })
@@ -53,6 +63,7 @@ export function encodeStateComment(s: TicketState): string {
   const slim: TicketState = { ...s }
   if (s.before !== undefined) slim.before = drop(s.before)
   if (s.after !== undefined) slim.after = drop(s.after)
+  if (s.attempts !== undefined) slim.attempts = s.attempts.map((a) => ({ ...a, tail: OUTPUT_DROPPED }))
   const body = encode(slim)
   if (body.length <= MAX_STATE_COMMENT) return body
   throw new Error(`The state is too large to store: ${body.length} characters, over the limit of ${MAX_STATE_COMMENT}.`)
