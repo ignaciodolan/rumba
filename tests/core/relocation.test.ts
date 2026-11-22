@@ -295,7 +295,8 @@ describe('judgeRelocation, against names and paths', () => {
       after: { 'tests/rumba/test_c1.py': null, 'tests/test_parse.py': after },
       protectedGlobs: [],
     })
-    expect(r).toMatch(/defines `parse`/)
+    // Refused either way: the def is top-level code that is not a test, and it binds `parse`.
+    expect(r).toMatch(/nothing but tests|defines `parse`/)
   })
 })
 
@@ -363,6 +364,37 @@ describe('judgeRelocation, names the file binds itself', () => {
   it('refuses a file that binds it by unpacking, in a loop, inside a block, or imports below its top', () => {
     for (const line of ['a, parse = 1, lambda t: 1', 'for parse in [lambda t: 1]:\n    pass', 'if True:\n    parse = lambda t: 1', 'try:\n    from app.fake import parse\nexcept ImportError:\n    pass']) {
       expect(py(`from app.parse import parse\n\n${line}\n\ndef test_other():\n    assert True\n`), line).not.toBeNull()
+    }
+  })
+})
+
+describe('judgeRelocation, after the third review', () => {
+  it('keeps titles exact when the command filters by name, even by part of a title', () => {
+    for (const filter of ['-t c1', '--testNamePattern=c1', '-k c1']) {
+      const r = judgeRelocation(input({
+        original: [{ criterionId: 'c1', command: `npx vitest run ${FROM} ${filter}`, files: [FROM] }],
+        relocated: [{ criterionId: 'c1', command: `npx vitest run ${TO} ${filter}`, files: [TO] }],
+      }))
+      expect(r, filter).toMatch(/title/)
+    }
+    // Go runs packages, and picks tests by name with -run.
+    const goOriginal = 'package slug\n\nimport "testing"\n\nfunc TestC1Strong(t *testing.T) {\n\tif Slug("A") != "a" {\n\t\tt.Fatal("x")\n\t}\n}\n'
+    const goAfter = goOriginal.replace('TestC1Strong', 'TestLowerCases')
+    const r = judgeRelocation({
+      original: [{ criterionId: 'c1', command: 'go test ./slug/rumba -run TestC1', files: ['slug/rumba/c1_test.go'] }],
+      moves: [{ from: 'slug/rumba/c1_test.go', to: 'slug/lower_test.go' }],
+      relocated: [{ criterionId: 'c1', command: 'go test ./slug/rumba -run TestC1', files: ['slug/lower_test.go'] }],
+      changed: ['slug/rumba/c1_test.go', 'slug/lower_test.go'],
+      before: { 'slug/rumba/c1_test.go': goOriginal }, after: { 'slug/rumba/c1_test.go': null, 'slug/lower_test.go': goAfter }, protectedGlobs: [],
+    })
+    expect(r).not.toBeNull()
+  })
+
+  it('merges only into a file whose top level holds nothing but tests', () => {
+    for (const top of ["globalThis.fetch = async () => ({ ok: true })", "process.env.FEATURE_SAVE = 'off'", "nock('https://api').get('/').reply(200)", 'Date.now = () => 0']) {
+      const existing = EXISTING.replace("describe('profile'", `${top}\n\ndescribe('profile'`)
+      const after = MERGED.replace("describe('profile'", `${top}\n\ndescribe('profile'`)
+      expect(judgeRelocation(input({ before: { [FROM]: ORIGINAL, [TO]: existing } }, { [TO]: after })), top).toMatch(/nothing but tests/)
     }
   })
 })

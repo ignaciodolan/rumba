@@ -101,7 +101,7 @@ export function judgeRelocation(i: RelocationInput): string | null {
     const text = i.before[move.from] ?? ''
     // A command that picks tests by title would run fewer of them once a title changed.
     const bare = original.files.reduce((c, f) => c.split(f).join(' '), original.command)
-    const keepTitles = titlesIn(text).some((t) => t.length > 0 && bare.includes(t))
+    const keepTitles = NAME_FILTER.test(bare) || titlesIn(text).some((t) => t.length > 0 && bare.includes(t))
     const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles)
     if (reason !== null) return reason
   }
@@ -118,6 +118,12 @@ function titlesIn(text: string): string[] {
     return [m[2] ?? m[1]!]
   })
 }
+
+/** A command option that picks tests by name: a renamed test could fall out of it. */
+const NAME_FILTER = /(?:^|\s)(?:-t|--testNamePattern|--test-name-pattern|-k|-run|--run|--grep|-g|--filter|-m|--match|--test-name|-p|--tests|--testcase)(?:[\s=]|$)|::/
+
+/** A top-level line that opens a test, or only closes brackets. Nothing else may sit at the top level of a file a check merges into. */
+const TEST_TOP = /^(?:(?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(|(?:async\s+)?def\s+test_|class\s+Test|func\s+(?:Test|Benchmark|Example|Fuzz)\w*\s*\(|[)}\];,\s]+$)/
 
 /** Lines that set up or mock what every test in a file sees. */
 const HOOKS = /\b(?:before(?:Each|All)|after(?:Each|All)|setUp|tearDown|setup_method|setup_function|setup_module|setup_class|teardown_\w+|autouse|usefixtures|vi\.(?:mock|doMock|spyOn|stubGlobal|stubEnv|useFakeTimers)|jest\.(?:mock|doMock|spyOn|useFakeTimers)|mock\.patch|monkeypatch|TestMain)\b/
@@ -153,6 +159,9 @@ function sameFile(to: string, before: string | null, after: string, sources: { f
   // A file's hooks and mocks apply to every test in it, the moved check too.
   const hook = (before ?? '').split(/\r?\n/).find((l) => HOOKS.test(l))
   if (hook !== undefined) return `${code(to)} has hooks or mocks that would apply to the check, so it cannot take one: ${code(hook.trim())}.`
+  // Anything else at the top level runs before the check too, so the file must hold nothing but tests.
+  const stray = parse(to, before ?? '', true).body.find((l) => l.indent === '' && !TEST_TOP.test(l.text))
+  if (stray !== undefined) return `${code(to)} must hold nothing but tests at its top level to take a check, and has ${code(stray.text)}.`
   if ([now, was, ...moved].some((p) => p.body.length > MAX_LINES)) return `${code(to)} is too large to compare.`
   const conflict = [now, was, ...moved].find((p) => p.conflict !== undefined)?.conflict
   if (conflict !== undefined) return `${conflict} is imported twice, as two different things.`
