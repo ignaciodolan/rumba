@@ -87,13 +87,19 @@ export class GitWorkspace implements Workspace {
     this.author = o.author ?? (async () => RUMBA_IDENTITY)
   }
 
-  async prepare(branch: string, opts: { fresh: boolean }): Promise<{ workdir: string; baseSha: string }> {
-    return opts.fresh ? this.prepareFresh(branch) : this.prepareExisting(branch)
+  async prepare(branch: string, opts: { fresh: boolean; like?: string }): Promise<{ workdir: string; baseSha: string }> {
+    return opts.fresh ? this.prepareFresh(branch, opts.like) : this.prepareExisting(branch)
   }
 
-  private async prepareFresh(branch: string): Promise<{ workdir: string; baseSha: string }> {
-    await this.git(['fetch', '-q', this.remote, this.defaultBranch])
-    const baseSha = await this.git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])
+  private async prepareFresh(branch: string, like?: string): Promise<{ workdir: string; baseSha: string }> {
+    let baseSha: string
+    if (like === undefined) {
+      await this.git(['fetch', '-q', this.remote, this.defaultBranch])
+      baseSha = await this.git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])
+    } else {
+      if (!(await this.branchExists(like))) throw new Error(`Branch ${like} does not exist in ${this.repoRoot}`)
+      baseSha = this.bases.get(like) ?? (await this.forkPoint(like))
+    }
     await this.git(['worktree', 'prune'])
     for (const dir of await this.registered(branch)) await this.removeWorktree(dir)
     if (await this.branchExists(branch)) await this.git(['branch', '-D', branch])
@@ -289,7 +295,10 @@ export class GitWorkspace implements Workspace {
     if (entry === null || (entry.mode !== '100644' && entry.mode !== '100755')) return null
     const size = Number((await this.git(['cat-file', '-s', entry.oid])).trim())
     if (size > MAX_READ_BYTES) throw new Error(`${file} is too large to read (${size} bytes)`)
-    return (await this.gitResult(['cat-file', 'blob', entry.oid], [0], { strip: false })).stdout
+    const text = (await this.gitResult(['cat-file', 'blob', entry.oid], [0], { strip: false })).stdout
+    // Bytes that are not UTF-8 read as U+FFFD, and two different files must never read as the same text.
+    if (text.includes('\uFFFD')) throw new Error(`${file} is not UTF-8 text`)
+    return text
   }
 
   async checkoutFiles(workdir: string, sha: string, files: string[]): Promise<void> {

@@ -1,16 +1,25 @@
+import path from 'node:path'
 import { protectedViolations } from './guards.js'
 import type { Check, Move } from './types.js'
 
 /**
  * Whether a relocation of Rumba's checks into the project's tests kept them as they were.
  *
- * A relocation may move a check to another file, merge it into an existing test file, change
- * its imports, its test titles and its indentation. Nothing else: every other line of each
- * check must be in its new file, in the same order, and the new files may hold no line that
- * was not in a check or already there. The lines already in a file a check merged into stay,
- * in their order. This is a line check: it says nothing about what the imports now point at
- * or what the commands run. Rumba runs the relocated checks on the change and on the base
- * commit for that.
+ * A relocation may move a check to another file, or merge it into an existing test file. It
+ * may change three things, and each only so far:
+ * - imports: only how they are written. Every name a check imported must still be imported,
+ *   from the same module and as the same thing, and nothing else may be imported. Imports
+ *   are read only at the top of a file.
+ * - test titles: the string given to describe, it or test, the name of a `test_` function or
+ *   a `Test` class. The call and its modifiers stay, so `it.skip` is never `it`.
+ * - where a check sits: its lines move as one block, kept together and in order, with their
+ *   indentation relative to each other. A file it merged into keeps its own lines, in order,
+ *   with their indentation.
+ * Nothing may be added. The command must be the verified one with only the file paths
+ * changed, and the check's files must be exactly its new places, which must be test files.
+ *
+ * This says nothing about what the code under test does. Rumba also runs every relocated
+ * check, on the change and on the base commit, for that.
  */
 export interface RelocationInput {
   /** The checks Rumba wrote and verified. */
@@ -27,9 +36,9 @@ export interface RelocationInput {
 }
 
 /** More lines than any test file needs; a larger one is not compared. */
-const MAX_LINES = 5000
+const MAX_LINES = 3000
 
-/** Null when the relocation kept every check as it was; otherwise why not, in one sentence. */
+/** Null when the relocation kept every check as it was; otherwise why not. */
 export function judgeRelocation(i: RelocationInput): string | null {
   const originals = [...new Set(i.original.flatMap((c) => c.files))]
   const froms = i.moves.map((m) => m.from)
@@ -38,9 +47,9 @@ export function judgeRelocation(i: RelocationInput): string | null {
   const ids = i.original.map((c) => c.criterionId)
   const given = i.relocated.map((c) => c.criterionId)
   const lost = ids.filter((id) => !given.includes(id))
-  if (lost.length > 0) return `No relocated check was given for ${lost.join(', ')}.`
+  if (lost.length > 0) return `No relocated check was given for ${lost.map(code).join(', ')}.`
   const extra = given.filter((id, n) => !ids.includes(id) || given.indexOf(id) !== n)
-  if (extra.length > 0) return `The relocation gave checks Rumba did not write, or gave one twice: ${extra.join(', ')}.`
+  if (extra.length > 0) return `The relocation gave checks Rumba did not write, or gave one twice: ${extra.map(code).join(', ')}.`
 
   const unmoved = originals.filter((f) => !froms.includes(f))
   if (unmoved.length > 0) return `The relocation did not move ${list(unmoved)}.`
@@ -53,95 +62,213 @@ export function judgeRelocation(i: RelocationInput): string | null {
   if (touched.length > 0) return `The relocation changed protected paths: ${list(touched)}.`
   const outside = i.changed.filter((f) => !originals.includes(f) && !tos.includes(f))
   if (outside.length > 0) return `The relocation changed files other than the checks and their new places: ${list(outside)}.`
-  const left = froms.filter((f) => i.after[f] !== null && i.after[f] !== undefined)
+  const notTests = tos.filter((t) => !isTestPath(t))
+  if (notTests.length > 0) return `A check may only move into a test file, not into ${list(notTests)}.`
+  const left = froms.filter((f) => typeof i.after[f] === 'string')
   if (left.length > 0) return `The relocation left the old check files in place: ${list(left)}.`
   const missing = tos.filter((t) => typeof i.after[t] !== 'string')
   if (missing.length > 0) return `The relocated files are missing, or are not regular files: ${list(missing)}.`
 
   for (const check of i.relocated) {
     const original = i.original.find((c) => c.criterionId === check.criterionId)!
-    if (check.files.length === 0) return `The relocated check for ${check.criterionId} lists no files.`
-    const absent = check.files.filter((f) => typeof i.after[f] !== 'string')
-    if (absent.length > 0) return `The relocated check for ${check.criterionId} needs files that do not exist: ${list(absent)}.`
-    const stale = froms.filter((f) => check.files.includes(f) || check.command.includes(f))
-    if (stale.length > 0) return `The relocated check for ${check.criterionId} still uses the old check file ${list(stale)}.`
-    const mine = i.moves.filter((m) => original.files.includes(m.from)).map((m) => m.to)
-    if (original.files.some((f) => original.command.includes(f)) && !mine.some((t) => check.command.includes(t))) {
-      return `The relocated command for ${check.criterionId} does not name its new test file ${list(mine)}.`
+    const mine = i.moves.filter((m) => original.files.includes(m.from))
+    const places = [...new Set(mine.map((m) => m.to))].sort()
+    if (JSON.stringify([...new Set(check.files)].sort()) !== JSON.stringify(places)) {
+      return `The relocated check for ${code(check.criterionId)} must list exactly its new files, ${list(places)}, not ${list(check.files)}.`
+    }
+    // Longest paths first, so that one path inside another is never half replaced.
+    const command = [...mine].sort((a, b) => b.from.length - a.from.length).reduce((c, m) => c.split(m.from).join(m.to), original.command)
+    if (check.command !== command) {
+      return `The relocated command for ${code(check.criterionId)} must be the verified one with only the file paths changed, ${code(command)}, not ${code(check.command)}.`
     }
   }
 
   for (const to of tos) {
-    const reason = sameLines(to, i.before[to] ?? '', i.after[to]!, i.moves.filter((m) => m.to === to).map((m) => ({ file: m.from, text: i.before[m.from] ?? '' })))
+    const sources = i.moves.filter((m) => m.to === to).map((m) => ({ file: m.from, text: i.before[m.from] ?? '' }))
+    const reason = sameFile(to, i.before[to] ?? null, i.after[to]!, sources)
     if (reason !== null) return reason
   }
   return null
 }
 
-/** Whether `after` is `before` plus the lines of `checks`, each kept in order, with nothing else. */
-function sameLines(to: string, before: string, after: string, checks: { file: string; text: string }[]): string | null {
-  const now = significant(after)
-  const was = significant(before)
-  const moved = checks.map((c) => ({ file: c.file, lines: significant(c.text) }))
-  if ([now, was, ...moved.map((m) => m.lines)].some((l) => l.length > MAX_LINES)) return `${code(to)} is too large to compare.`
+/** A path a test runner would pick up, or a file in a test folder, and never a file that configures the tests. */
+export function isTestPath(file: string): boolean {
+  const name = path.posix.basename(file)
+  if (name.startsWith('.') || /^(?:conftest\.py|__init__\.py|setup\.(?:py|cfg)|pytest\.ini|tox\.ini|package\.json|Makefile)$/i.test(name)) return false
+  if (/(?:^|[._-])(?:config|setup|setupfiles|globalsetup|teardown)(?:[._-]|$)/i.test(name) || /^tsconfig/i.test(name)) return false
+  if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name) || /^test_\w+\.py$/.test(name) || /_test\.(?:py|go)$/.test(name) || /Tests?\.(?:java|kt|cs)$/.test(name)) return true
+  return path.posix.dirname(file).split('/').some((part) => /^(?:tests?|__tests__|specs?|e2e)$/.test(part))
+}
 
-  const count = new Map<string, number>()
-  for (const line of now) count.set(line, (count.get(line) ?? 0) + 1)
-  let lost: string | null = null
-  for (const source of [{ file: to, lines: was }, ...moved]) {
-    for (const line of source.lines) {
-      const n = count.get(line) ?? 0
-      if (n === 0) {
-        lost ??= source.file === to
-          ? `A line already in ${code(to)} is missing from it after the relocation: ${code(line)}.`
-          : `A line of ${code(source.file)} is missing from ${code(to)}: ${code(line)}.`
-      } else {
-        count.set(line, n - 1)
-      }
+interface Line { indent: string; text: string }
+interface Parsed {
+  /** Each name an import binds, and what it binds it to. */
+  bindings: Map<string, string>
+  /** Modules imported for their side effects only. */
+  effects: Set<string>
+  /** Comment lines before the first line of code. */
+  notes: string[]
+  /** Every other line that is not blank, with its test titles replaced by a mark. */
+  body: Line[]
+  /** Set when one name is imported as two different things. */
+  conflict?: string
+}
+
+/** Whether `after` is `before` plus the moved checks, as described above. */
+function sameFile(to: string, before: string | null, after: string, sources: { file: string; text: string }[]): string | null {
+  const now = parse(to, after)
+  const was = parse(to, before ?? '')
+  const moved = sources.map((s) => ({ file: s.file, ...parse(s.file, s.text) }))
+  if ([now, was, ...moved].some((p) => p.body.length > MAX_LINES)) return `${code(to)} is too large to compare.`
+  const conflict = [now, was, ...moved].find((p) => p.conflict !== undefined)?.conflict
+  if (conflict !== undefined) return `${conflict} is imported twice, as two different things.`
+
+  // Imports: the same names, bound to the same things, and no others.
+  const need = new Map(was.bindings)
+  for (const m of moved) {
+    for (const [name, target] of m.bindings) {
+      if (need.has(name) && need.get(name) !== target) return `${code(name)} is imported as two different things by ${code(m.file)} and ${code(to)}.`
+      need.set(name, target)
     }
   }
-  // A changed line is both: the new line says more about what happened.
-  const added = [...count].find(([, n]) => n > 0)
-  if (added) return `${code(to)} has a line that is in no check Rumba verified: ${code(added[0])}.${lost === null ? '' : ` ${lost}`}`
-  if (lost !== null) return lost
-
-  for (const source of [{ file: to, lines: was }, ...moved]) {
-    if (!inOrder(source.lines, now)) return `The lines of ${code(source.file)} are not in their order in ${code(to)}.`
+  for (const [name, target] of need) {
+    if (now.bindings.get(name) !== target) return `${code(to)} must import ${code(name)} as ${code(target)}, as the verified checks did.`
   }
+  for (const [name, target] of now.bindings) {
+    if (!need.has(name)) return `${code(to)} imports ${code(name)} (${code(target)}), which no verified check imported.`
+  }
+  const effects = new Set([...was.effects, ...moved.flatMap((m) => [...m.effects])])
+  if (effects.size !== now.effects.size || [...effects].some((e) => !now.effects.has(e))) return `${code(to)} must import the same modules for their side effects as the verified checks.`
+
+  // Comments before the code: the file's own stay, and only the checks' own may join them.
+  const notes = countOf(now.notes)
+  for (const n of was.notes) if (!take(notes, n)) return `A comment at the top of ${code(to)} is missing: ${code(n)}.`
+  for (const n of moved.flatMap((m) => m.notes)) take(notes, n)
+  const strayNote = [...notes].find(([, c]) => c > 0)
+  if (strayNote) return `${code(to)} has a line at the top that is in no check Rumba verified: ${code(strayNote[0])}.`
+
+  // Every line, by its text: nothing added and nothing lost.
+  const texts = countOf(now.body.map((l) => l.text))
+  let gone: string | null = null
+  for (const source of [{ file: to, body: was.body }, ...moved]) {
+    for (const line of source.body) {
+      if (take(texts, line.text)) continue
+      gone ??= source.file === to
+        ? `A line already in ${code(to)} is missing from it after the relocation: ${code(line.text)}.`
+        : `A line of ${code(source.file)} is missing from ${code(to)}: ${code(line.text)}.`
+    }
+  }
+  // A changed line is both; the new line says more about what happened.
+  const added = [...texts].find(([, c]) => c > 0)
+  if (added) return `${code(to)} has a line that is in no check Rumba verified: ${code(added[0])}.${gone === null ? '' : ` ${gone}`}`
+  if (gone !== null) return gone
+
+  // Where the lines are: the file's own in order, each check as one block, indentation kept.
+  if (!fits(now.body, was.body, moved.map((m) => m.body))) {
+    return `${code(to)} keeps every line, but not in place: each check must stay one block, in its order and with its own indentation, and the lines already in the file must stay as they were.`
+  }
+
+  const shadowed = shadowedTests(after, before ?? '')
+  if (shadowed !== null) return `${code(to)} defines the test ${code(shadowed)} twice, so the first one would never run.`
   return null
 }
 
-/** Whether `part` is a subsequence of `whole`. */
-function inOrder(part: string[], whole: string[]): boolean {
-  let at = 0
-  for (const line of whole) if (at < part.length && line === part[at]) at += 1
-  return at === part.length
+/**
+ * Whether `now` is `was` with each block inserted whole somewhere: `was` lines exactly as they
+ * were, and each block's lines in order with their indentation relative to each other.
+ */
+function fits(now: Line[], was: Line[], blocks: Line[][]): boolean {
+  const all = (1 << blocks.length) - 1
+  const lengths = blocks.map((b) => b.length)
+  const placed = (at: number, k: number): boolean => {
+    const block = blocks[k]!
+    if (block.length === 0 || at + block.length > now.length) return false
+    const base = commonIndent(block)
+    let offset: string | null = null
+    for (let n = 0; n < block.length; n++) {
+      const want = block[n]!
+      const got = now[at + n]!
+      if (got.text !== want.text) return false
+      const rest = want.indent.slice(base.length)
+      if (!got.indent.endsWith(rest)) return false
+      const lead = got.indent.slice(0, got.indent.length - rest.length)
+      if (offset === null) offset = lead
+      else if (lead !== offset) return false
+    }
+    return true
+  }
+  // Blocks with no lines (a check of imports only) fit anywhere.
+  const start = blocks.reduce((used, b, k) => (b.length === 0 ? used | (1 << k) : used), 0)
+  // An explicit stack: a file of thousands of lines would overflow a recursive search.
+  const seen = new Set<string>()
+  const stack: [number, number][] = [[0, start]]
+  while (stack.length > 0) {
+    const [at, used] = stack.pop()!
+    const key = `${at},${used}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const j = at - blocks.reduce((sum, _b, k) => sum + (used & (1 << k) ? lengths[k]! : 0), 0)
+    if (at === now.length) {
+      if (j === was.length && used === all) return true
+      continue
+    }
+    if (j < was.length && now[at]!.text === was[j]!.text && now[at]!.indent === was[j]!.indent) stack.push([at + 1, used])
+    for (let k = 0; k < blocks.length; k++) {
+      if (!(used & (1 << k)) && placed(at, k)) stack.push([at + lengths[k]!, used | (1 << k)])
+    }
+  }
+  return false
 }
 
-// What may change in a relocation: whole import statements, a test's title, indentation. The
-// patterns are strict, so that no code can ride along on a line taken for an import.
-const QUOTED = String.raw`(['"])[^'"\x60\\]+\1`
-const IMPORT_LINES = [
-  // JavaScript and TypeScript
-  new RegExp(String.raw`^import\s[^;'"\x60()=]*\sfrom\s*${QUOTED}\s*;?$`),
-  new RegExp(String.raw`^import\s*${QUOTED}\s*;?$`),
-  new RegExp(String.raw`^export\s[^;'"\x60()=]*\sfrom\s*${QUOTED}\s*;?$`),
-  new RegExp(String.raw`^(?:const|let|var)\s+(?:[\w$]+|\{[\w$\s,:]*\})\s*=\s*require\(\s*${QUOTED}\s*\)\s*;?$`),
-  // Python
-  /^import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*$/,
-  /^from\s+[\w.]+\s+import\s+[\w\s,*]+$/,
-  // Go
-  /^import\s+(?:[\w.]+\s+)?"[^"\\]+"$/,
-]
-/** The first line of an import that spans lines, the lines inside it, and its last line. */
-const IMPORT_BLOCKS: { start: RegExp; inside: RegExp; end: RegExp }[] = [
-  { start: /^(?:import|export)\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{[\w$\s,]*$/, inside: /^[\w$\s,]*$/, end: new RegExp(String.raw`^[\w$\s,]*\}\s*from\s*${QUOTED}\s*;?$`) },
-  { start: /^from\s+[\w.]+\s+import\s*\([\w\s,]*$/, inside: /^[\w\s,]*$/, end: /^[\w\s,]*\)$/ },
-  { start: /^import\s*\($/, inside: /^(?:[\w.]+\s+)?"[^"\\]+"$/, end: /^\)$/ },
-]
-// A test title: the first argument of describe, it, test and the like, when it is a string,
-// and the name of a Python or Go test function or class. The call and its modifiers stay, so
-// `it.skip` is never taken for `it`, and a test cannot be renamed out of its runner.
+/** The indentation all lines of a block share: the shortest one, when every other starts with it. */
+function commonIndent(block: Line[]): string {
+  if (block.length === 0) return ''
+  const shortest = block.reduce((s, l) => (l.indent.length < s.length ? l.indent : s), block[0]!.indent)
+  return block.every((l) => l.indent.startsWith(shortest)) ? shortest : ''
+}
+
+/** A Python test name that appears twice at one indentation after the relocation, and did not before. */
+function shadowedTests(after: string, before: string): string | null {
+  const names = (text: string) => countOf(text.split(/\r?\n/).flatMap((l) => {
+    const m = /^(\s*)(?:(?:async\s+)?def\s+(test_\w*)|class\s+(Test\w*))/.exec(l)
+    return m ? [`${m[1]}${m[2] ?? m[3]}`] : []
+  }))
+  const was = names(before)
+  for (const [name, n] of names(after)) if (n > 1 && n > (was.get(name) ?? 0)) return name.trim()
+  return null
+}
+
+function countOf(items: string[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const x of items) m.set(x, (m.get(x) ?? 0) + 1)
+  return m
+}
+
+function take(m: Map<string, number>, x: string): boolean {
+  const n = m.get(x) ?? 0
+  if (n === 0) return false
+  m.set(x, n - 1)
+  return true
+}
+
+// Imports are matched by strict patterns: what a name binds to must be readable from the line
+// alone, and no code can ride along on a line taken for an import. No `/` is allowed outside
+// the module name, so no comment can open or close on one.
+const MODULE = String.raw`(?<q>['"])([^'"\x60\\\s]+)\k<q>`
+const JS_IMPORT = new RegExp(String.raw`^import\s+(?:type\s+)?([\w$\s,{}*]+?)\s+from\s*${MODULE}\s*;?$`)
+const JS_EFFECT = new RegExp(String.raw`^import\s*${MODULE}\s*;?$`)
+const JS_REQUIRE = new RegExp(String.raw`^(?:const|let|var)\s+([\w$]+|\{[\w$\s,:]*\})\s*=\s*require\(\s*${MODULE}\s*\)\s*;?$`)
+const JS_BLOCK = { start: /^import\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{[\w$\s,]*$/, inside: /^[\w$\s,]*$/, end: new RegExp(String.raw`^[\w$\s,]*\}\s*from\s*${MODULE}\s*;?$`) }
+const PY_IMPORT = /^import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)$/
+const PY_FROM = /^from\s+(\.*[\w.]*)\s+import\s+([\w\s,*]+)$/
+const PY_BLOCK = { start: /^from\s+(\.*[\w.]*)\s+import\s*\([\w\s,]*$/, inside: /^[\w\s,]*$/, end: /^[\w\s,]*\)$/ }
+const GO_IMPORT = /^import\s+(?:([\w.]+)\s+)?"([^"\\\s]+)"$/
+const GO_BLOCK = { start: /^import\s*\($/, inside: /^(?:[\w.]+\s+)?"[^"\\\s]+"$/, end: /^\)$/ }
+const BLOCKS = [JS_BLOCK, PY_BLOCK, GO_BLOCK]
+// A comment line before the code: `//` or `#`, or a block comment that opens and closes on the line.
+const NOTE = /^(?:\/\/|#)|^\/\*(?:(?!\*\/).)*\*\/$/
+
+// A test title, replaced by a mark; the call before it stays as written.
 const TITLES: [RegExp, string][] = [
   [/^((?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(\s*)(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\$]|\\.)*`)/, '$1<title>'],
   [/^((?:async\s+)?def\s+test_)\w*/, '$1<title>'],
@@ -149,31 +276,137 @@ const TITLES: [RegExp, string][] = [
   [/^(func\s+(?:Test|Benchmark|Example|Fuzz))\w*/, '$1<title>'],
 ]
 
-/** The lines that matter, trimmed: no blank line, no import, and every test title replaced by a mark. */
-function significant(text: string): string[] {
-  const out: string[] = []
-  const keep = (line: string) => { if (line !== '') out.push(TITLES.reduce((l, [p, mark]) => l.replace(p, mark), line)) }
-  let block: { rule: (typeof IMPORT_BLOCKS)[number]; lines: string[] } | null = null
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim()
-    if (block !== null) {
-      if (block.rule.end.test(line)) { block = null; continue }
-      if (block.rule.inside.test(line)) { block.lines.push(line); continue }
-      // Not an import after all: the lines taken for its start count again.
-      block.lines.forEach(keep)
-      block = null
-    }
-    if (line === '' || IMPORT_LINES.some((p) => p.test(line))) continue
-    const rule: (typeof IMPORT_BLOCKS)[number] | undefined = IMPORT_BLOCKS.find((b) => b.start.test(line))
-    if (rule) { block = { rule, lines: [line] }; continue }
-    keep(line)
+/** A file's imports and comments up to its first line of code, and every line after that. */
+function parse(file: string, text: string): Parsed {
+  const out: Parsed = { bindings: new Map(), effects: new Set(), notes: [], body: [] }
+  const bind = (name: string, target: string) => {
+    if (out.bindings.has(name) && out.bindings.get(name) !== target) out.conflict ??= code(name)
+    out.bindings.set(name, target)
   }
-  block?.lines.forEach(keep)
+  const lines = text.split(/\r?\n/)
+  let n = 0
+  // The top of the file: blank lines, comments and imports, until the first line of code.
+  for (; n < lines.length; n++) {
+    const line = lines[n]!.trim()
+    if (line === '') continue
+    if (NOTE.test(line)) { out.notes.push(line); continue }
+    if (readImport(file, line, bind, out.effects)) continue
+    const end = blockEnd(lines, n)
+    if (end !== null && readBlock(file, lines.slice(n, end + 1).map((l) => l.trim()), bind, out.effects)) { n = end; continue }
+    break
+  }
+  for (; n < lines.length; n++) {
+    const raw = lines[n]!
+    const line = raw.trim()
+    if (line === '') continue
+    const indent = raw.slice(0, raw.length - raw.trimStart().length)
+    out.body.push({ indent, text: TITLES.reduce((l, [p, mark]) => l.replace(p, mark), line) })
+  }
   return out
 }
 
+/** The last line of an import that starts at line `n` and spans lines, or null. */
+function blockEnd(lines: string[], n: number): number | null {
+  const block = BLOCKS.find((b) => b.start.test(lines[n]!.trim()))
+  if (!block) return null
+  for (let end = n + 1; end < lines.length; end++) {
+    const line = lines[end]!.trim()
+    if (block.end.test(line)) return end
+    if (!block.inside.test(line)) return null
+  }
+  return null
+}
+
+function readBlock(file: string, lines: string[], bind: (name: string, target: string) => void, effects: Set<string>): boolean {
+  if (GO_BLOCK.start.test(lines[0]!)) return lines.slice(1, -1).filter((l) => l !== '').every((l) => readImport(file, `import ${l}`, bind, effects))
+  // One line again: a Python block loses its brackets.
+  const joined = lines.join(' ')
+  return readImport(file, PY_BLOCK.start.test(lines[0]!) ? joined.replace(/\(/, ' ').replace(/\)$/, '') : joined, bind, effects)
+}
+
+/** Reads one import statement into `bind` and `effects`. False when the line is not one Rumba can read. */
+function readImport(file: string, line: string, bind: (name: string, target: string) => void, effects: Set<string>): boolean {
+  let m = JS_EFFECT.exec(line)
+  if (m) { effects.add(jsModule(file, m[2]!)); return true }
+  m = JS_IMPORT.exec(line)
+  if (m) {
+    const mod = jsModule(file, m[3]!)
+    const spec = /^(?:([\w$]+)\s*(?:,\s*|$))?(?:\{([\w$\s,]*)\}|\*\s+as\s+([\w$]+))?$/.exec(m[1]!.trim())
+    if (!spec || (!spec[1] && spec[2] === undefined && !spec[3])) return false
+    const named: [string, string][] = []
+    for (const part of (spec[2] ?? '').split(',').map((p) => p.trim().replace(/^type\s+/, '')).filter((p) => p !== '')) {
+      const one = /^([\w$]+)(?:\s+as\s+([\w$]+))?$/.exec(part)
+      if (!one) return false
+      named.push([one[2] ?? one[1]!, `${mod}#${one[1]}`])
+    }
+    if (spec[1]) bind(spec[1], `${mod}#default`)
+    if (spec[3]) bind(spec[3], `${mod}#*`)
+    for (const [name, target] of named) bind(name, target)
+    return true
+  }
+  m = JS_REQUIRE.exec(line)
+  if (m) {
+    const mod = jsModule(file, m[3]!)
+    const target = m[1]!
+    if (!target.startsWith('{')) { bind(target, `${mod}#require`); return true }
+    const named: [string, string][] = []
+    for (const part of target.slice(1, -1).split(',').map((p) => p.trim()).filter((p) => p !== '')) {
+      const one = /^([\w$]+)(?:\s*:\s*([\w$]+))?$/.exec(part)
+      if (!one) return false
+      named.push([one[2] ?? one[1]!, `${mod}#${one[1]}`])
+    }
+    for (const [name, t] of named) bind(name, t)
+    return true
+  }
+  m = PY_IMPORT.exec(line)
+  if (m) {
+    for (const part of m[1]!.split(',').map((p) => p.trim())) {
+      const [name, alias] = part.split(/\s+as\s+/)
+      if (alias) bind(alias, `py:${name}#*`)
+      else { bind(name!.split('.')[0]!, `py:${name!.split('.')[0]}#*`); effects.add(`py:${name}`) }
+    }
+    return true
+  }
+  m = PY_FROM.exec(line)
+  if (m) {
+    const mod = pyModule(file, m[1]!)
+    const named: [string, string][] = []
+    const parts = m[2]!.split(',').map((p) => p.trim()).filter((p) => p !== '')
+    for (const part of parts) {
+      const one = /^(\w+|\*)(?:\s+as\s+(\w+))?$/.exec(part)
+      if (!one) return false
+      named.push([one[1] === '*' ? '' : (one[2] ?? one[1]!), `${mod}#${one[1]}`])
+    }
+    for (const [name, target] of named) if (name === '') effects.add(target); else bind(name, target)
+    return true
+  }
+  m = GO_IMPORT.exec(line)
+  if (m) {
+    const name = m[1] ?? m[2]!.split('/').at(-1)!
+    if (name === '_' || name === '.') effects.add(`go:${m[2]}#${name}`)
+    else bind(name, `go:${m[2]}`)
+    return true
+  }
+  return false
+}
+
+/** A relative module, as the repository path it names; any other module as written. */
+function jsModule(file: string, spec: string): string {
+  return spec.startsWith('./') || spec.startsWith('../') ? `js:${path.posix.normalize(path.posix.join(path.posix.dirname(file), spec))}` : `js:${spec}`
+}
+
+function pyModule(file: string, spec: string): string {
+  const dots = /^\.*/.exec(spec)![0].length
+  if (dots === 0) return `py:${spec}`
+  let dir = path.posix.dirname(file)
+  for (let n = 1; n < dots; n++) dir = path.posix.dirname(dir)
+  return `py:${path.posix.join(dir, spec.slice(dots).replace(/\./g, '/'))}`
+}
+
 function code(text: string): string {
-  return `\`${text.length > 200 ? `${text.slice(0, 200)}…` : text}\``
+  const flat = text.length > 200 ? `${text.slice(0, 200)}…` : text
+  const ticks = '`'.repeat(Math.max(0, ...[...flat.matchAll(/`+/g)].map((m) => m[0].length)) + 1)
+  return ticks.length > 1 ? `${ticks} ${flat} ${ticks}` : `${ticks}${flat}${ticks}`
 }
 
 function list(files: string[]): string {

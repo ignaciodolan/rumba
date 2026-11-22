@@ -50,8 +50,10 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
 
     const handle = await deps.environment.up({ branch, sha: checksSha, role: 'before', timeoutMs: timeLeft(deps) }, workdir)
     try {
+      // The branch was made again from the default branch, so a relocation from an earlier run no longer applies.
+      const { relocation: _relocation, ...fresh } = state
       let current: TicketState = {
-        ...transition(state, 'env_ready', deps.clock()), branch, baseSha, checksSha, checks,
+        ...transition(fresh, 'env_ready', deps.clock()), branch, baseSha, checksSha, checks,
       }
       await deps.tracker.writeState(ticket, current)
 

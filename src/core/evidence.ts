@@ -123,7 +123,7 @@ function render(i: EvidenceInput, cap: number | null): string {
   } else if (state.relocation?.status === 'rejected') {
     sections.push([
       '## Checks', '',
-      "Rumba moved its checks into the project's tests, then rejected the move and undid it, for this reason:", '',
+      "Rumba tried to move its checks into the project's tests. It rejected the attempt and put the branch back on the verified change, for this reason:", '',
       block(state.relocation.reason ?? 'no reason was recorded'), '',
       'The checks in this pull request are as Rumba wrote them, in files of their own, and the results are theirs.',
     ].join('\n'))

@@ -278,7 +278,7 @@ describe(dockerAvailable ? 'planted bug, end to end' : 'planted bug, end to end 
     expect(await git(repoRoot, 'log', '--format=%s', '-1', 'rumba/demo/1')).toMatch(/^fix: /)
     const body = codeHost.prs[0].body
     expect(body).toContain('| `node --test test/rumba-c1.test.js` | `test/rumba-c1.test.js` | fail | pass |')
-    expect(body).toMatch(/rejected the move and undid it/)
+    expect(body).toMatch(/rejected the attempt and put the branch back on the verified change/)
     // Nothing of the weakened move ran.
     expect(envWorkdirs.size).toBe(3)
   }, 300_000)

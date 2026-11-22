@@ -216,13 +216,13 @@ export class FakeWorkspace implements Workspace {
   log: string[] = []
   private prepared = 0
 
-  async prepare(branch: string, opts: { fresh: boolean }): Promise<{ workdir: string; baseSha: string }> {
+  async prepare(branch: string, opts: { fresh: boolean; like?: string }): Promise<{ workdir: string; baseSha: string }> {
     // Each call gets its own directory, as a real worktree would.
     this.prepared += 1
     const workdir = `/fake/${this.prepared}/${branch}`
     this.branches.set(workdir, branch)
     if (branch !== this.fixBranch && opts.fresh) this.otherTips.set(branch, 'base000')
-    this.log.push(`prepare ${branch} ${opts.fresh ? 'fresh' : 'existing'} ${workdir}`)
+    this.log.push(`prepare ${branch} ${opts.fresh ? 'fresh' : 'existing'}${opts.like ? ` like ${opts.like}` : ''} ${workdir}`)
     return { workdir, baseSha: 'base000' }
   }
 

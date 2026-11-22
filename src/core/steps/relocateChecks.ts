@@ -48,7 +48,7 @@ export async function relocateChecks(deps: Deps, rumba: RumbaConfig, ticket: Tic
     // Before anything runs: the checkouts that run get their own folder, never this one.
     await cleanupQuietly(deps.workspace, workdir)
   }
-  const outcome: Outcome = 'reason' in moved ? moved : await failSoft(() => runMoved(deps, rumba, state, moved as Moved))
+  const outcome: Outcome = 'reason' in moved ? moved : await failSoft(() => runMoved(deps, rumba, state, moved as Moved, workdir))
 
   if ('reason' in outcome) {
     await restore(deps, branch, from)
@@ -119,18 +119,19 @@ async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: Ticke
 }
 
 /** The moved checks run in the project's environment: on the change, then on the base commit. */
-async function runMoved(deps: Deps, rumba: RumbaConfig, state: TicketState, moved: Moved): Promise<Outcome> {
-  const onChange = await onTheChange(deps, rumba, state, moved.sha, moved.checks)
+async function runMoved(deps: Deps, rumba: RumbaConfig, state: TicketState, moved: Moved, agentDir: string): Promise<Outcome> {
+  const onChange = await onTheChange(deps, rumba, state, moved.sha, moved.checks, agentDir)
   if ('reason' in onChange) return onChange
-  const onBase = await onTheBase(deps, state, moved.sha, moved.checks, [...new Set([...moved.moves.map((m) => m.to), ...moved.moves.map((m) => m.from)])])
+  const onBase = await onTheBase(deps, state, moved.sha, moved.checks, [...new Set([...moved.moves.map((m) => m.to), ...moved.moves.map((m) => m.from)])], agentDir)
   if ('reason' in onBase) return onBase
   return { ...moved, after: onChange.results, before: onBase.results }
 }
 
 /** In a new checkout of the relocation commit: every moved check passes, and so do the project's own tests. */
-async function onTheChange(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checks: Check[]): Promise<{ results: CheckResult[] } | { reason: string }> {
+async function onTheChange(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checks: Check[], agentDir: string): Promise<{ results: CheckResult[] } | { reason: string }> {
   const { workdir } = await deps.workspace.prepare(state.branch!, { fresh: false })
   try {
+    notWhereTheAgentWrote(workdir, agentDir)
     const handle = await deps.environment.up({ branch: state.branch!, sha, role: 'after', timeoutMs: timeLeft(deps) }, workdir)
     try {
       const results = await runChecks(deps, handle, checks)
@@ -159,12 +160,14 @@ async function onTheChange(deps: Deps, rumba: RumbaConfig, state: TicketState, s
 /**
  * On the base commit with the relocated checks on it, every moved check fails. The commit is
  * the checks commit, which the checks Rumba wrote failed on, with the moved files set to their
- * relocated content; it is made on a branch of its own, which is never pushed.
+ * relocated content, on a branch of its own that starts where the fix branch did. Rumba never
+ * pushes it; a vercel-preview environment pushes it as a throwaway branch and deletes it.
  */
-async function onTheBase(deps: Deps, state: TicketState, sha: string, checks: Check[], files: string[]): Promise<{ results: CheckResult[] } | { reason: string }> {
+async function onTheBase(deps: Deps, state: TicketState, sha: string, checks: Check[], files: string[], agentDir: string): Promise<{ results: CheckResult[] } | { reason: string }> {
   const branch = `${state.branch!}-relocated-base`
-  const { workdir } = await deps.workspace.prepare(branch, { fresh: true })
+  const { workdir } = await deps.workspace.prepare(branch, { fresh: true, like: state.branch! })
   try {
+    notWhereTheAgentWrote(workdir, agentDir)
     await deps.workspace.reset(workdir, state.checksSha!)
     await deps.workspace.checkoutFiles(workdir, sha, files)
     const base = await deps.workspace.commit(workdir, 'test: the relocated checks on the base commit', { allowEmpty: true })
@@ -184,6 +187,11 @@ async function onTheBase(deps: Deps, state: TicketState, sha: string, checks: Ch
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
+}
+
+/** A checkout that would run where the agent wrote (its folder could not be removed, say) is refused. */
+function notWhereTheAgentWrote(workdir: string, agentDir: string): void {
+  if (workdir === agentDir) throw new Error('The checkout for the run is the folder the agent wrote in, which was not removed.')
 }
 
 async function runChecks(deps: Deps, handle: Awaited<ReturnType<Deps['environment']['up']>>, checks: Check[]): Promise<CheckResult[]> {

@@ -169,3 +169,92 @@ describe('judgeRelocation', () => {
     expect(judgeRelocation({ ...base, after: { ...files.after, 'tests/test_slug.py': merged.replace('def test_lower_cases_the_slug', 'def lower_cases_the_slug') } })).not.toBeNull()
   })
 })
+
+// Ways around a line check found in review. Each is a move that keeps the check's lines, or
+// seems to, while changing what it does.
+describe('judgeRelocation, against a hostile move', () => {
+  const PY_FROM = 'tests/rumba/test_c1.py'
+  const PY_TO = 'tests/test_parse.py'
+  function python(original: string, after: string, existing: string | null = null) {
+    return judgeRelocation({
+      original: [{ criterionId: 'c1', command: `pytest ${PY_FROM}`, files: [PY_FROM] }],
+      moves: [{ from: PY_FROM, to: PY_TO }],
+      relocated: [{ criterionId: 'c1', command: `pytest ${PY_TO}`, files: [PY_TO] }],
+      changed: [PY_FROM, PY_TO],
+      before: { [PY_FROM]: original, [PY_TO]: existing },
+      after: { [PY_FROM]: null, [PY_TO]: after },
+      protectedGlobs: [],
+    })
+  }
+
+  it('comments lines out between two import lines', () => {
+    const lines = MERGED.split('\n')
+    lines.splice(2, 0, "import path, /* from 'node:path'")
+    lines.push("import a */ { join } from 'node:path'")
+    expect(judgeRelocation(input({}, { [TO]: lines.join('\n') }))).not.toBeNull()
+  })
+
+  it('imports a different thing under the same name', () => {
+    const strict = ORIGINAL.replace("import { describe, expect, it } from 'vitest'", "import { describe, it } from 'vitest'\nimport { strict as assert } from 'node:assert'")
+    const loose = MERGED.replace("import { describe, expect, it } from 'vitest'", "import { describe, expect, it } from 'vitest'\nimport assert from 'node:assert'")
+    expect(judgeRelocation(input({ before: { [FROM]: strict, [TO]: EXISTING } }, { [TO]: loose }))).toMatch(/assert/)
+  })
+
+  it('imports a module for its side effects that no check imported', () => {
+    const lines = MERGED.split('\n'); lines.splice(1, 0, "import '../src/setupMocks'")
+    expect(judgeRelocation(input({}, { [TO]: lines.join('\n') }))).toMatch(/side effects/)
+  })
+
+  it('imports inside a test, where an import line is code like any other', () => {
+    const after = 'from app.parse import parse\n\ndef test_parses():\n    from app.fake import parse\n    assert parse("1") == 1\n'
+    expect(python('from app.parse import parse\n\ndef test_c1():\n    assert parse("1") == 1\n', after)).not.toBeNull()
+  })
+
+  it('indents a Python assertion into a block that ends before it runs', () => {
+    const original = 'import pytest\nfrom app.parse import parse\n\ndef test_c1():\n    with pytest.raises(ValueError):\n        parse("bad")\n    assert parse("1") == 1\n'
+    const after = 'import pytest\nfrom app.parse import parse\n\ndef test_parses():\n    with pytest.raises(ValueError):\n        parse("bad")\n        assert parse("1") == 1\n'
+    expect(python(original, after)).toMatch(/not in place/)
+  })
+
+  it('gives two Python tests the same name, so only the last one runs', () => {
+    const original = 'from app.parse import parse\n\ndef test_c1_strong():\n    assert parse("1") == 1\n\ndef test_c1_weak():\n    assert parse("1") is not None\n'
+    const after = 'from app.parse import parse\n\ndef test_parses():\n    assert parse("1") == 1\n\ndef test_parses():\n    assert parse("1") is not None\n'
+    expect(python(original, after)).toMatch(/twice/)
+  })
+
+  it('splits the check around lines already in the file', () => {
+    // The check's opening lines go inside an existing describe.skip, and its closing lines
+    // pair up with the existing ones.
+    const existing = "import { describe, expect, it } from 'vitest'\nimport { loadProfile } from '../src/profile'\n\ndescribe.skip('old', () => {\n  it('loads', () => {})\n})\n"
+    const split = [
+      "import { describe, expect, it } from 'vitest'", "import { loadProfile, saveProfile } from '../src/profile'", '',
+      "describe.skip('old', () => {", "describe('c1', () => {",
+      "  it('c1: saving a profile returns 200', async () => {", "    const res = await saveProfile({ name: 'Ada' })", '    expect(res.status).toBe(200)', "    expect(res.body.name).toBe('Ada')", '  })',
+      "  it('loads', () => {})", '})', '})', '',
+    ].join('\n')
+    expect(judgeRelocation(input({ before: { [FROM]: ORIGINAL, [TO]: existing } }, { [TO]: split }))).toMatch(/not in place/)
+  })
+
+  it('names a command that runs something else, or only some of the tests', () => {
+    for (const command of [`grep -q save src/profile.ts # ${TO}`, `npx vitest run ${TO} -t "returns 200"`, `npx vitest run ${TO} || true`]) {
+      expect(judgeRelocation(input({ relocated: [{ criterionId: 'c1', command, files: [TO] }] }))).toMatch(/only the file paths changed/)
+    }
+  })
+
+  it('lists a source file among the check files, which would hide it from the scope warning', () => {
+    expect(judgeRelocation(input({ relocated: [{ criterionId: 'c1', command: `npx vitest run ${TO}`, files: [TO, 'src/billing/charge.ts'] }] }))).toMatch(/exactly its new files/)
+  })
+
+  it('moves a check into a file that configures the tests', () => {
+    for (const to of ['tests/conftest.py', 'vitest.setup.ts', 'test/setup.ts', 'jest.config.js', 'Makefile', 'src/profile.ts']) {
+      const r = judgeRelocation(input({ moves: [{ from: FROM, to }], relocated: [{ criterionId: 'c1', command: `npx vitest run ${to}`, files: [to] }], changed: [FROM, to] }, { [to]: MERGED }))
+      expect(r, to).toMatch(/only move into a test file/)
+    }
+  })
+
+  it('adds a comment line at the top, such as a test environment pragma', () => {
+    // Built in two parts, so that vitest does not take it for this file's own pragma.
+    const pragma = ['// @vitest', 'environment happy-dom'].join('-')
+    expect(judgeRelocation(input({}, { [TO]: `${pragma}\n${MERGED}` }))).toMatch(/at the top/)
+  })
+})

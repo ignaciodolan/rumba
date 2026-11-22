@@ -140,11 +140,12 @@ function checkRules(task: AgentTask): string {
 
 function relocateRules(): string {
   return [
-    '- Move every check file listed above, and delete it from where it was. Give each one in "moves", from its old path to its new one.',
-    '- Keep every other line of a check exactly as it is, in the same order. You may change only the import lines, the test titles and the indentation: a title is the name in describe, it or test, or the name after test_ or Test of a test function or class. Do not add, remove or change any other line, not even to match the style of the file.',
-    '- When you merge a check into an existing test file, add its lines to that file and keep the lines already there as they are, except the imports, which you may merge.',
+    '- Move every check file listed above into a test file of the project, and delete it from where it was. Give each one in "moves", from its old path to its new one. A new place must be a test file (a .test. or .spec. file, a test_ or _test file, or a file in a test folder), never a file that sets up or configures the tests.',
+    '- Keep every line of a check exactly as it is. You may change only three things: how the imports are written (keep every import, from the same module, as the same name; you may merge them with the imports already in the file and fix relative paths), the test titles (the name given to describe, it or test, or the name after test_ or Test of a test function or class), and where the check sits.',
+    '- Keep each check together, as one block, with its indentation relative to itself. You may shift the whole block, for example into an existing describe block.',
+    '- When you merge a check into an existing test file, keep the lines already there exactly as they are, apart from merging imports. Do not add any other line, not even a comment, and do not change the style of the check.',
     '- Do not change any other file.',
-    '- For each criterion, give the command that runs its check from the new place. The command must name the test file it runs.',
+    '- For each criterion, give the command that runs its check from the new place: the command above, with only the file path changed. List exactly the check\'s new files in "files".',
     '- Rumba compares the moved lines with the ones it verified, then runs each moved check on the change, where it must pass, and on the base commit, where it must fail. If anything differs, Rumba keeps the checks where they were.',
   ].join('\n')
 }

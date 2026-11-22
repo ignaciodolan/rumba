@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { advanceTicket } from '../../../src/core/engine.js'
+import { openPullRequest } from '../../../src/core/steps/openPullRequest.js'
+import { reproduce } from '../../../src/core/steps/reproduce.js'
+import { newState, transition } from '../../../src/core/states.js'
 import { decodeStateComment, encodeStateComment } from '../../../src/core/stateComment.js'
 import { relocateChecks } from '../../../src/core/steps/relocateChecks.js'
 import type { TicketState } from '../../../src/core/types.js'
@@ -83,14 +86,22 @@ describe('relocateChecks', () => {
   })
 
   it('rejects a relocated check that passes on the base commit too', async () => {
-    // `|| true` keeps every line of the check, so only the run on the base commit can catch it.
+    // Every line kept, but the block placed where it no longer runs (inside an existing
+    // describe.skip, say): only the run on the base commit can tell.
     const { d, state } = setup()
-    d.agent.script['relocate-checks'] = { ...moved, checks: [{ criterionId: 'c1', command: `npx vitest run ${TO} || true`, files: [TO] }] }
     d.environment.passes = () => true
     const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
     expect(s.relocation).toMatchObject({ status: 'rejected' })
     expect(s.relocation?.reason).toMatch(/c1 passes on the base commit/)
     expect(d.workspace.branchTip).toBe(FIX)
+  })
+
+  it('rejects a command that is not the verified one with the new path, before anything runs', async () => {
+    const { d, state } = setup()
+    d.agent.script['relocate-checks'] = { ...moved, checks: [{ criterionId: 'c1', command: `npx vitest run ${TO} || true`, files: [TO] }] }
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(s.relocation?.reason).toContain('must be the verified one with only the file paths changed')
+    expect(d.environment.ups).toEqual([])
   })
 
   it('rejects a relocated check that fails on the change', async () => {
@@ -164,6 +175,36 @@ describe('relocateChecks', () => {
     const { d, state } = setup()
     const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+})
+
+describe('relocation and the rest of the ticket', () => {
+  it('starts the base run on a branch that starts where the fix branch did', async () => {
+    const { d, state } = setup()
+    await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(d.workspace.log).toContain('prepare rumba/hub/123-relocated-base fresh like rumba/hub/123 /fake/3/rumba/hub/123-relocated-base')
+  })
+
+  it('warns about a check moved outside the paths of the rumba, like any other change', async () => {
+    const { d, state } = setup()
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    d.workspace.changed = ['src/profile.ts', TO]
+    await openPullRequest(d, makeRumba({ paths: ['src/**'] }), makeTicket(), s)
+    expect(d.codeHost.prs[0]!.body).toMatch(/## Outside this rumba's scope[\s\S]*test\/profile\.test\.ts/)
+  })
+
+  it('forgets a relocation from an earlier run once the branch is made again', async () => {
+    const d = makeDeps()
+    d.agent.script['write-checks'] = { kind: 'write-checks', checks: [{ criterionId: 'c1', command: `npx vitest run ${FROM}`, files: [FROM] }] }
+    const now = d.clock()
+    const ready: TicketState = {
+      ...transition(transition(newState('hub', now), 'triaged', now), 'criteria_ready', now), kind: 'bug',
+      criteria: [{ id: 'c1', text: 'C1', checkable: true }],
+      relocation: { status: 'relocated', from: 'old-fix', sha: 'old-move', moves: moved.moves, original: [] },
+    }
+    const s = await reproduce(d, makeRumba(), makeTicket(), ready)
+    expect(s.state).toBe('checks_failing')
+    expect(s.relocation).toBeUndefined()
   })
 })
 

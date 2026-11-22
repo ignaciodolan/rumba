@@ -57,10 +57,12 @@ describe('the relocate-checks task', () => {
     expect(p).toContain("Move Rumba's checks into the project's own tests")
     expect(p).toContain('tests/rumba/c1.test.ts')
     expect(p).toMatch(/merge/i)
-    expect(p).toMatch(/Keep every other line of a check exactly as it is, in the same order/)
-    expect(p).toMatch(/import lines, the test titles and the indentation/)
+    expect(p).toMatch(/Keep every line of a check exactly as it is/)
+    expect(p).toMatch(/how the imports are written[\s\S]*the test titles[\s\S]*where the check sits/)
+    expect(p).toMatch(/as one block/)
+    expect(p).toMatch(/never a file that sets up or configures the tests/)
     expect(p).toMatch(/on the base commit, where it must fail/)
-    expect(p).toMatch(/name the test file/)
+    expect(p).toMatch(/the command above, with only the file path changed/)
     expect(p).toContain('docker compose exec -T app')
     expect(p).toContain('"kind": "relocate-checks"')
     expect(p).toContain('"moves"')
@@ -115,6 +117,24 @@ describe('GitWorkspace, for relocation', () => {
     expect(await ws.readFileAt(workdir, sha, 'tests/rumba/missing.js')).toBeNull()
     expect(await ws.readFileAt(workdir, sha, 'tests/rumba/link.js')).toBeNull()
     expect(await ws.readFileAt(workdir, sha, 'tests/rumba')).toBeNull()
+  })
+
+  it('refuses to read a file that is not UTF-8 text, so two files never read the same', async () => {
+    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    await writeFile(path.join(workdir, 'test', 'bytes.test.js'), Buffer.from([0x61, 0xff, 0x62]))
+    const sha = (await ws.commit(workdir, 'bytes'))!
+    await expect(ws.readFileAt(workdir, sha, 'test/bytes.test.js')).rejects.toThrow(/not UTF-8/)
+  })
+
+  it('starts a branch like another one: from the commit that one started from, not from the default branch now', async () => {
+    const fix = await ws.prepare('rumba/hub/1', { fresh: true })
+    // The default branch moves on after the fix branch was made.
+    await write(clone, 'later.txt', 'later\n')
+    await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'later'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+    const scratch = await ws.prepare('rumba/hub/1-relocated-base', { fresh: true, like: 'rumba/hub/1' })
+    expect(scratch.baseSha).toBe(fix.baseSha)
+    const trusted = await ws.trustedCheckout('rumba/hub/1-relocated-base')
+    expect(existsSync(path.join(trusted, 'later.txt'))).toBe(false)
   })
 
   it('sets files to their content at a commit, deleting those the commit does not have', async () => {
