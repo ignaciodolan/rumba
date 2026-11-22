@@ -136,13 +136,14 @@ export function judgeRelocation(i: RelocationInput): string | null {
 
 /** The test titles a file gives: the strings and names the title rules would replace. */
 function titlesIn(text: string): string[] {
-  return text.split(/\r?\n/).flatMap((raw) => {
-    const line = raw.trim()
-    const m = /^(?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/.exec(line)
-      ?? /^(?:async\s+)?def\s+(test_\w*)/.exec(line) ?? /^class\s+(Test\w*)/.exec(line) ?? /^func\s+((?:Test|Benchmark|Example|Fuzz)\w*)/.exec(line)
-    if (!m) return []
-    return [m[2] ?? m[1]!]
+  const lines = text.split(/\r?\n/).map((l) => l.trim())
+  // A JavaScript title's text, each piece between expressions on its own when it says something.
+  const js = jsTitles(lines).titles.flatMap((pieces) => (pieces.length === 1 ? pieces : pieces.map((p) => p.trim()).filter((p) => p.length >= 3)))
+  const named = lines.flatMap((line) => {
+    const m = /^(?:async\s+)?def\s+(test_\w*)/.exec(line) ?? /^class\s+(Test\w*)/.exec(line) ?? /^func\s+((?:Test|Benchmark|Example|Fuzz)\w*)/.exec(line)
+    return m ? [m[1]!] : []
   })
+  return [...js, ...named]
 }
 
 /** A command option that picks tests by name: a renamed test could fall out of it. */
@@ -328,9 +329,9 @@ const BLOCKS = [JS_BLOCK, PY_BLOCK, GO_BLOCK]
 // A comment line before the code: `//` or `#`, or a block comment that opens and closes on the line.
 const NOTE = /^(?:\/\/|#)|^\/\*(?:(?!\*\/).)*\*\/$|^package\s+\w+$|^(['"])use strict\1;?$/
 
-// A test title, replaced by a mark; the call before it stays as written.
+// A test title, replaced by a mark; the call before it stays as written. JavaScript titles
+// are read by `jsTitles`; these are the names of Python and Go tests.
 const TITLES: [RegExp, string][] = [
-  [/^((?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(\s*)(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\$]|\\.)*`)/, '$1<title>'],
   [/^((?:async\s+)?def\s+test_)\w*/, '$1<title>'],
   [/^(class\s+Test)\w*/, '$1<title>'],
   [/^(func\s+(?:Test|Benchmark|Example|Fuzz))\w*/, '$1<title>'],
@@ -360,9 +361,144 @@ function parse(file: string, text: string, keepTitles = false): Parsed {
     const line = raw.trim()
     if (line === '') continue
     const indent = raw.slice(0, raw.length - raw.trimStart().length)
-    out.body.push({ indent, text: keepTitles ? line : TITLES.reduce((l, [p, mark]) => l.replace(p, mark), line) })
+    out.body.push({ indent, text: line })
+  }
+  if (!keepTitles) {
+    const masked = jsTitles(out.body.map((l) => l.text)).lines
+    out.body = out.body.map((l, k) => ({ indent: l.indent, text: TITLES.reduce((t, [p, mark]) => t.replace(p, mark), masked[k]!) }))
   }
   return out
+}
+
+/** A call that takes a test's title as its first argument: describe, it, test and the like, with any modifiers. */
+const TEST_CALL = /^((?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(\s*)/
+
+/**
+ * A string literal at `s[at]`: its length, the mark that stands for it, and its text. A
+ * template literal's mark keeps every `${...}` expression as written and in order, so only
+ * its text may change. Null when there is no literal there, when it does not close on the
+ * line, or when an expression holds a template of its own (too intricate to read safely).
+ */
+export function readTitle(s: string, at: number): { length: number; mark: string; text: string[] } | null {
+  const q = s[at]
+  if (q !== "'" && q !== '"' && q !== '`') return null
+  const text: string[] = ['']
+  const expressions: string[] = []
+  let n = at + 1
+  while (n < s.length) {
+    const c = s[n]!
+    if (c === '\\') { text[text.length - 1] += s.slice(n, n + 2); n += 2; continue }
+    if (c === q) return { length: n + 1 - at, mark: `<title${expressions.map((e) => `\${${e}}`).join('')}>`, text }
+    if (q === '`' && c === '$' && s[n + 1] === '{') {
+      const end = expressionEnd(s, n + 2)
+      if (end === null) return null
+      expressions.push(s.slice(n + 2, end))
+      text.push('')
+      n = end + 1
+      continue
+    }
+    text[text.length - 1] += c
+    n += 1
+  }
+  return null
+}
+
+/** The index of the `}` that closes an expression starting at `from`, skipping quoted strings; null if none, or if it holds a template. */
+function expressionEnd(s: string, from: number): number | null {
+  let depth = 0
+  for (let n = from; n < s.length; n++) {
+    const c = s[n]!
+    if (c === '`') return null
+    if (c === "'" || c === '"') {
+      const lit = readTitle(s, n)
+      if (lit === null) return null
+      n += lit.length - 1
+      continue
+    }
+    if (c === '{') depth += 1
+    else if (c === '}') {
+      if (depth === 0) return n
+      depth -= 1
+    }
+  }
+  return null
+}
+
+/**
+ * Every JavaScript test title in `lines` (trimmed), replaced by its mark, and the titles' text.
+ * A title is the first argument of a test call, on the call's line or alone on the next one,
+ * or, for `.each`, the first argument of the call that follows the table, on the line where
+ * the table closes.
+ */
+function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
+  const out = [...lines]
+  const titles: string[][] = []
+  // A line ending in `it(`: its title may be alone on the next line.
+  let next = false
+  // Inside an `.each(` table: how deep its brackets are.
+  let table: number | null = null
+  const mask = (k: number, at: number, requireAfter: RegExp) => {
+    const t = readTitle(out[k]!, at)
+    if (t === null || !requireAfter.test(out[k]!.slice(at + t.length))) return
+    out[k] = out[k]!.slice(0, at) + t.mark + out[k]!.slice(at + t.length)
+    titles.push(t.text)
+  }
+  for (let k = 0; k < out.length; k++) {
+    const line = out[k]!
+    if (next) {
+      next = false
+      mask(k, 0, /^\s*,/)
+      continue
+    }
+    if (table !== null) {
+      const closed = tableEnd(line, 0, table)
+      if (closed === null) { table = null; continue }
+      if (typeof closed === 'number') { table = closed; continue }
+      table = null
+      mask(k, closed.title, /^\s*,/)
+      continue
+    }
+    const call = TEST_CALL.exec(line)
+    if (call === null) continue
+    const at = call[0].length
+    if (/\.each\s*\(\s*$/.test(call[1]!)) {
+      const closed = tableEnd(line, at, 1)
+      if (closed === null) continue
+      if (typeof closed === 'number') { table = closed; continue }
+      mask(k, closed.title, /^\s*,/)
+      continue
+    }
+    if (at === line.length) { next = true; continue }
+    mask(k, at, /^\s*[,)]/)
+  }
+  return { lines: out, titles }
+}
+
+/**
+ * Scans an `.each(` table from `from` at bracket depth `depth`. When the table closes on this
+ * line and a call follows, `{ title }` is where that call's first argument starts; when it
+ * does not close, the depth to carry to the next line; null when it closes without a call
+ * after it, or when a string does not close on the line.
+ */
+function tableEnd(line: string, from: number, depth: number): { title: number } | number | null {
+  for (let n = from; n < line.length; n++) {
+    const c = line[n]!
+    if (c === "'" || c === '"' || c === '`') {
+      const lit = readTitle(line, n)
+      if (lit === null) return null
+      n += lit.length - 1
+      continue
+    }
+    if (c === '(' || c === '[' || c === '{') depth += 1
+    else if (c === ')' || c === ']' || c === '}') {
+      depth -= 1
+      if (depth === 0) {
+        const after = /^\s*\(\s*/.exec(line.slice(n + 1))
+        return after === null ? null : { title: n + 1 + after[0].length }
+      }
+    }
+  }
+  return depth
 }
 
 /** The last line of an import that starts at line `n` and spans lines, or null. */
