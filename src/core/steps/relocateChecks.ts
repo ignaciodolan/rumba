@@ -96,11 +96,11 @@ async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: Ticke
   const changedByFix = await deps.workspace.changedFiles(workdir, state.baseSha!)
   // Check files that were already on the base commit, such as a fixture an earlier ticket's
   // checks left there: other code may import them, so they stay where they are.
+  // A file that cannot be read there is not guessed at: the error rejects the relocation.
+  const checkFiles = [...new Set(state.checks.flatMap((c) => c.files))]
   const kept: string[] = []
-  for (const f of [...new Set(state.checks.flatMap((c) => c.files))]) {
-    const atBase = await deps.workspace.readFileAt(workdir, state.baseSha!, f).catch(() => '')
-    if (atBase !== null) kept.push(f)
-  }
+  for (const f of checkFiles) if ((await deps.workspace.readFileAt(workdir, state.baseSha!, f)) !== null) kept.push(f)
+  if (kept.length === checkFiles.length) return { reason: 'Every check file was already in the repository before Rumba\'s checks, so there is nothing to move.' }
   const result = await deps.agent.run({
     kind: 'relocate-checks', ticket, context: rumba.context, environmentKind: rumba.environment.kind, timeoutMs: timeLeft(deps), ...execPrefixOf(rumba),
     criteria: state.criteria, checks: state.checks, ...(kept.length > 0 ? { lockedFiles: kept } : {}),

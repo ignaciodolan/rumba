@@ -12,7 +12,7 @@ export interface AgentTask {
   checks?: Check[]
   /** Also carries guard violations, criterionId 'guard'. */
   failures?: { criterionId: string; output: string }[]
-  /** Fix tasks: files whose content Rumba guards, which the agent must not change. */
+  /** Fix tasks: files whose content Rumba guards, which the agent must not change. Relocate tasks: check files that were in the repository before Rumba's checks, which stay where they are. */
   lockedFiles?: string[]
   /** Docker environments: the prefix Rumba puts before `sh -c '<check>'` to run a check in the project's container. */
   execPrefix?: string

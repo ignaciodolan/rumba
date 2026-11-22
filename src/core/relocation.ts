@@ -74,7 +74,8 @@ export function judgeRelocation(i: RelocationInput): string | null {
   if (shared.length > 0) return `A file can take only one check, and ${list(shared)} was given more than one.`
   const fixed = tos.filter((t) => (i.changedByFix ?? []).includes(t))
   if (fixed.length > 0) return `A check cannot move into a file the fix changed, since that change could fail on the base commit in its place: ${list(fixed)}.`
-  const intoCheck = tos.filter((t) => originals.includes(t))
+  // Kept files included: a kept file stays as it was, so nothing may move into it either.
+  const intoCheck = tos.filter((t) => originals.includes(t) || kept.has(t))
   if (intoCheck.length > 0) return `The relocation moved a check into one of Rumba's own check files: ${list(intoCheck)}.`
 
   // Unambiguously: no two moved files may answer to one module name, before or after, and no
@@ -111,7 +112,9 @@ export function judgeRelocation(i: RelocationInput): string | null {
       return `The relocated check for ${code(check.criterionId)} must list exactly its new files, ${list(places)}, not ${list(check.files)}.`
     }
     // Longest paths first, so that one path inside another is never half replaced.
-    const command = [...mine].sort((a, b) => b.from.length - a.from.length).reduce((c, m) => c.split(m.from).join(m.to), original.command)
+    // Each path only where it stands whole, so a kept `x.test.tsx.snap` is not taken for a moved `x.test.tsx`.
+    const command = [...mine].sort((a, b) => b.from.length - a.from.length)
+      .reduce((c, m) => c.replace(new RegExp(`(?<![\\w.\\-/])${m.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.\\-/])`, 'g'), () => m.to), original.command)
     if (check.command !== command) {
       return `The relocated command for ${code(check.criterionId)} must be the verified one with only the file paths changed, ${code(command)}, not ${code(check.command)}.`
     }

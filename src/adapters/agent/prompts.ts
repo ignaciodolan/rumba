@@ -143,7 +143,7 @@ function relocateRules(task: AgentTask): string {
   return [
     ...(kept.length > 0
       ? [
-        "- These check files were in the repository before Rumba's checks, and other code may import them. Leave them where they are, unchanged, import them from there, and list them in each check's \"files\" as before:",
+        "- These check files were in the repository before Rumba's checks, and other code may import them. Leave them where they are, unchanged, do not move a check into one of them, import them from there, and keep each one in the \"files\" of the checks that list it:",
         ...kept.map((f) => `  - ${f}`),
       ]
       : []),

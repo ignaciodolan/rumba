@@ -121,3 +121,59 @@ describe('the relocate-checks prompt', () => {
     expect(p).toMatch(/Move every other check file listed above/)
   })
 })
+
+describe('after review: kept files stay unchanged', () => {
+  it('refuses a move into a kept file', () => {
+    const OLD = 'tests/rumba/c1.test.ts'
+    const old = "import { expect, it } from 'vitest'\n\nit('c1 old', () => {\n  expect(1).toBe(1)\n})\n"
+    const moved = page('./proposals-fixture').replace(/^import \{ describe, expect, it \} from 'vitest'\n/, '')
+    const r = judgeRelocation({
+      original: [{ criterionId: 'c3', command: `pnpm exec vitest run ${FROM} -t c3`, files: [FROM, OLD] }],
+      moves: [{ from: FROM, to: OLD }],
+      relocated: [{ criterionId: 'c3', command: `pnpm exec vitest run ${OLD} -t c3`, files: [OLD] }],
+      changed: [FROM, OLD],
+      before: { [FROM]: page('./proposals-fixture'), [OLD]: old },
+      after: { [FROM]: null, [OLD]: `${old}\n${moved}` },
+      protectedGlobs: [],
+      kept: [OLD],
+    })
+    expect(r).toMatch(/must stay where it is|Rumba's own check files/)
+  })
+
+  it('rewrites a moved path in the command without touching a kept path that starts with it', () => {
+    const KEPT = 'tests/rumba/p2-page.test.tsx.snap'
+    const r = judgeRelocation({
+      ...relocation(),
+      original: [{ criterionId: 'c3', command: `pnpm exec vitest run ${FROM} -t c3 --snap ${KEPT}`, files: [FROM, FIXTURE] }],
+      relocated: [{ criterionId: 'c3', command: `pnpm exec vitest run ${TO} -t c3 --snap ${KEPT}`, files: [TO, FIXTURE] }],
+    })
+    expect(r).toBeNull()
+  })
+})
+
+describe('after review: the step', () => {
+  function base() {
+    const d = makeDeps()
+    const state: TicketState = { ...verified(d), checks: [{ criterionId: 'c1', command: `pnpm exec vitest run ${FROM} -t c3`, files: [FROM, FIXTURE] }], checkHashes: { [FROM]: 'h' } }
+    state.criteria = [{ id: 'c1', text: 'C1', checkable: true }]
+    d.workspace.branchTip = 'fix000'
+    d.workspace.changedSince = { base000: [FROM] }
+    return { d, state }
+  }
+
+  it('does not run the agent when every check file was already in the repository', async () => {
+    const { d, state } = base()
+    d.workspace.files = { base000: { [FROM]: 'x', [FIXTURE]: FIXTURE_TEXT } }
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(d.agent.calls).toHaveLength(0)
+    expect(s.relocation?.reason).toMatch(/nothing to move/)
+  })
+
+  it('rejects the relocation when it cannot tell whether a check file was there before', async () => {
+    const { d, state } = base()
+    d.workspace.readFileAt = async () => { throw new Error('git failed') }
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(d.agent.calls).toHaveLength(0)
+    expect(s.relocation?.reason).toMatch(/git failed/)
+  })
+})
