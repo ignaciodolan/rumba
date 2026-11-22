@@ -14,7 +14,7 @@ import { HttpVercelClient, VercelPreviewEnvironment } from './adapters/environme
 import { DockerSandbox } from './adapters/sandbox/docker.js'
 import { GitHubTracker } from './adapters/tracker/github.js'
 import { LinearTracker, SdkLinearGateway } from './adapters/tracker/linear.js'
-import { GitWorkspace, RUMBA_IDENTITY } from './adapters/workspace/git.js'
+import { GitWorkspace, LOCATION_VARS, RUMBA_IDENTITY } from './adapters/workspace/git.js'
 import type { RumbaConfig } from './config/load.js'
 import { redact, redactDeep } from './core/redact.js'
 import { STATE_NAMES } from './core/states.js'
@@ -227,7 +227,7 @@ export async function githubAccount(octokit: Octokit): Promise<{ login: string; 
 export async function cloneIdentity(root: string, env: NodeJS.ProcessEnv = process.env): Promise<{ name: string; email: string } | null> {
   const get = async (key: string) => {
     // Without variables that would point git at another repository than the clone.
-    const own = Object.fromEntries(Object.entries(env).filter(([k]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR'].includes(k)))
+    const own = Object.fromEntries(Object.entries(env).filter(([k]) => !LOCATION_VARS.includes(k)))
     const r = await execa('git', ['config', '--get', key], { cwd: root, env: own, extendEnv: false, stdin: 'ignore', reject: false })
     return r.exitCode === 0 ? r.stdout.trim() : ''
   }

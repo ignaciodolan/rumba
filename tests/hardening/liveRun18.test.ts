@@ -173,3 +173,83 @@ describe('the wiring', () => {
     await deps.workspace.cleanupAll()
   })
 })
+
+describe('after review: following a moved file cannot be abused', () => {
+  const base = (over: Partial<Parameters<typeof judgeRelocation>[0]> = {}) => {
+    const check = (fixture: string, helper: string) => `import { expect, it } from 'vitest'\nimport { seed } from '${fixture}'\nimport { makeUser } from '${helper}'\n\nit('c1', () => {\n  expect(seed(makeUser())).toBe(1)\n})\n`
+    return {
+      original: [{ criterionId: 'c1', command: 'npx vitest run tests/rumba/c1.test.ts', files: ['tests/rumba/c1.test.ts', 'tests/rumba/fixture.ts'] }],
+      moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/users/c1-seed.test.ts' }, { from: 'tests/rumba/fixture.ts', to: 'tests/helpers/factory.js' }],
+      relocated: [{ criterionId: 'c1', command: 'npx vitest run tests/users/c1-seed.test.ts', files: ['tests/users/c1-seed.test.ts', 'tests/helpers/factory.js'] }],
+      changed: ['tests/rumba/c1.test.ts', 'tests/rumba/fixture.ts', 'tests/users/c1-seed.test.ts', 'tests/helpers/factory.js'],
+      before: { 'tests/rumba/c1.test.ts': check('./fixture', '../helpers/factory'), 'tests/rumba/fixture.ts': 'export const seed = (u: unknown) => 1\n', 'tests/helpers/factory.ts': 'export const makeUser = () => ({})\n' } as Record<string, string | null>,
+      after: { 'tests/rumba/c1.test.ts': null, 'tests/rumba/fixture.ts': null, 'tests/users/c1-seed.test.ts': check('../helpers/factory', '../helpers/factory'), 'tests/helpers/factory.js': 'export const seed = (u: unknown) => 1\n' } as Record<string, string | null>,
+      protectedGlobs: [], ...over,
+    }
+  }
+
+  it('refuses a moved file whose new module name is already taken, here by a project helper the check imports', () => {
+    expect(judgeRelocation(base())).toMatch(/already/)
+  })
+
+  it('refuses two moved files that answer to one module name', () => {
+    const r = base({
+      original: [{ criterionId: 'c1', command: 'npx vitest run tests/rumba/c1.test.ts', files: ['tests/rumba/c1.test.ts', 'tests/rumba/f.ts', 'tests/rumba/f.tsx'] }],
+      moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/users/c1.test.ts' }, { from: 'tests/rumba/f.ts', to: 'tests/u/a.ts' }, { from: 'tests/rumba/f.tsx', to: 'tests/u/b.tsx' }],
+      changed: ['tests/rumba/c1.test.ts', 'tests/rumba/f.ts', 'tests/rumba/f.tsx', 'tests/users/c1.test.ts', 'tests/u/a.ts', 'tests/u/b.tsx'],
+    })
+    expect(judgeRelocation(r)).toMatch(/same module name/)
+  })
+
+  it('keeps .mjs and .cjs apart from .js', () => {
+    const r = relocate('./fixture.mjs', '../helpers/fixture.js', 'tests/rumba/fixture.mjs', 'tests/helpers/fixture.mjs')
+    expect(judgeRelocation(r)).not.toBeNull()
+    expect(judgeRelocation(relocate('./fixture.mjs', '../helpers/fixture.mjs', 'tests/rumba/fixture.mjs', 'tests/helpers/fixture.mjs'))).toBeNull()
+  })
+
+  it('follows a moved Python module, by relative and by dotted import', () => {
+    const check = (imp: string) => `${imp}\n\ndef test_c1():\n    assert seed() == 1\n`
+    const r = (from: string, to: string) => judgeRelocation({
+      original: [{ criterionId: 'c1', command: 'pytest tests/rumba/test_c1.py', files: ['tests/rumba/test_c1.py', 'tests/rumba/fixture.py'] }],
+      moves: [{ from: 'tests/rumba/test_c1.py', to: 'tests/api/test_seed.py' }, { from: 'tests/rumba/fixture.py', to: 'tests/api/seed_data.py' }],
+      relocated: [{ criterionId: 'c1', command: 'pytest tests/api/test_seed.py', files: ['tests/api/test_seed.py', 'tests/api/seed_data.py'] }],
+      changed: ['tests/rumba/test_c1.py', 'tests/rumba/fixture.py', 'tests/api/test_seed.py', 'tests/api/seed_data.py'],
+      before: { 'tests/rumba/test_c1.py': check(from), 'tests/rumba/fixture.py': 'def seed():\n    return 1\n' },
+      after: { 'tests/rumba/test_c1.py': null, 'tests/rumba/fixture.py': null, 'tests/api/test_seed.py': check(to), 'tests/api/seed_data.py': 'def seed():\n    return 1\n' },
+      protectedGlobs: [],
+    })
+    expect(r('from .fixture import seed', 'from .seed_data import seed')).toBeNull()
+    expect(r('from tests.rumba.fixture import seed', 'from tests.api.seed_data import seed')).toBeNull()
+    expect(r('from tests.rumba.fixture import seed', 'from tests.api.other import seed')).not.toBeNull()
+  })
+
+  it('accepts ordinary test names with setup-like words, and still refuses setup-like helpers', () => {
+    for (const ok of ['tests/user-setup.test.ts', 'tests/api-config.test.ts', 'tests/helper.test.ts']) expect(isTestPath(ok), ok).toBe(true)
+    for (const no of ['tests/vitestsetup.ts', 'tests/setupenv.ts', 'tests/HTTPSetup.ts', 'tests/setup2.ts', 'tests/conftest2.py', 'tests/helpers/unsupported-blocks.ts']) expect(isTestPath(no), no).toBe(false)
+  })
+})
+
+function relocate(fromImport: string, toImport: string, fixtureFrom: string, fixtureTo: string): Parameters<typeof judgeRelocation>[0] {
+  const check = (imp: string) => `import { expect, it } from 'vitest'\nimport { seed } from '${imp}'\n\nit('c1', () => {\n  expect(seed()).toBe(1)\n})\n`
+  return {
+    original: [{ criterionId: 'c1', command: 'npx vitest run tests/rumba/c1.test.ts', files: ['tests/rumba/c1.test.ts', fixtureFrom] }],
+    moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/users/c1.test.ts' }, { from: fixtureFrom, to: fixtureTo }],
+    relocated: [{ criterionId: 'c1', command: 'npx vitest run tests/users/c1.test.ts', files: ['tests/users/c1.test.ts', fixtureTo] }],
+    changed: ['tests/rumba/c1.test.ts', fixtureFrom, 'tests/users/c1.test.ts', fixtureTo],
+    before: { 'tests/rumba/c1.test.ts': check(fromImport), [fixtureFrom]: 'export const seed = () => 1\n' },
+    after: { 'tests/rumba/c1.test.ts': null, [fixtureFrom]: null, 'tests/users/c1.test.ts': check(toImport), [fixtureTo]: 'export const seed = () => 1\n' },
+    protectedGlobs: [],
+  }
+}
+
+describe('cloneIdentity, isolated from the environment', () => {
+  it('ignores GIT_DIR and the like, which would point git at another repository', async () => {
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), 'rumba-identity-env-')))
+    const other = path.join(root, 'other'); const clone = path.join(root, 'clone')
+    const isolated = { ...process.env, GIT_CONFIG_GLOBAL: path.join(root, 'none'), GIT_CONFIG_NOSYSTEM: '1' }
+    for (const dir of [other, clone]) { await mkdir(dir); await execa('git', ['init', '-q'], { cwd: dir, env: isolated }) }
+    await execa('git', ['config', 'user.name', 'Other'], { cwd: other, env: isolated }); await execa('git', ['config', 'user.email', 'other@example.test'], { cwd: other, env: isolated })
+    expect(await cloneIdentity(clone, { ...isolated, GIT_DIR: path.join(other, '.git') })).toBeNull()
+    await rm(root, { recursive: true, force: true })
+  })
+})
