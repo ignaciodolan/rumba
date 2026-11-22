@@ -258,3 +258,43 @@ describe('judgeRelocation, against a hostile move', () => {
     expect(judgeRelocation(input({}, { [TO]: `${pragma}\n${MERGED}` }))).toMatch(/at the top/)
   })
 })
+
+describe('judgeRelocation, against names and paths', () => {
+  it('refuses a new place whose path is not plain, since it goes into a shell command', () => {
+    for (const to of ['test/a.test.ts; curl x', 'test/$(id).test.ts', 'test/a b.test.ts', 'test/-rf.test.ts', "test/a'.test.ts"]) {
+      const r = judgeRelocation(input({ moves: [{ from: FROM, to }], relocated: [{ criterionId: 'c1', command: `npx vitest run ${to}`, files: [to] }], changed: [FROM, to] }, { [to]: MERGED }))
+      expect(r, to).toMatch(/plain path/)
+    }
+  })
+
+  it('refuses a star import that could rebind a name the check imports', () => {
+    const original = 'from app.parse import parse\n\ndef test_c1():\n    assert parse("1") == 1\n'
+    const after = 'from app.parse import parse\nfrom app.fakes import *\n\ndef test_parses():\n    assert parse("1") == 1\n'
+    const r = judgeRelocation({
+      original: [{ criterionId: 'c1', command: 'pytest tests/rumba/test_c1.py', files: ['tests/rumba/test_c1.py'] }],
+      moves: [{ from: 'tests/rumba/test_c1.py', to: 'tests/test_parse.py' }],
+      relocated: [{ criterionId: 'c1', command: 'pytest tests/test_parse.py', files: ['tests/test_parse.py'] }],
+      changed: ['tests/rumba/test_c1.py', 'tests/test_parse.py'],
+      before: { 'tests/rumba/test_c1.py': original, 'tests/test_parse.py': 'from app.fakes import *\n\ndef test_other():\n    assert True\n' },
+      after: { 'tests/rumba/test_c1.py': null, 'tests/test_parse.py': `${after}\ndef test_other():\n    assert True\n` },
+      protectedGlobs: [],
+    })
+    expect(r).toMatch(/star import|imports everything/)
+  })
+
+  it('refuses to merge into a file that defines, at its top level, a name the check imports', () => {
+    const original = 'from app.parse import parse\n\ndef test_c1():\n    assert parse("1") == 1\n'
+    const existing = 'def parse(text):\n    return 1\n\ndef test_other():\n    assert parse("x") == 1\n'
+    const after = 'from app.parse import parse\n\ndef parse(text):\n    return 1\n\ndef test_other():\n    assert parse("x") == 1\n\ndef test_parses():\n    assert parse("1") == 1\n'
+    const r = judgeRelocation({
+      original: [{ criterionId: 'c1', command: 'pytest tests/rumba/test_c1.py', files: ['tests/rumba/test_c1.py'] }],
+      moves: [{ from: 'tests/rumba/test_c1.py', to: 'tests/test_parse.py' }],
+      relocated: [{ criterionId: 'c1', command: 'pytest tests/test_parse.py', files: ['tests/test_parse.py'] }],
+      changed: ['tests/rumba/test_c1.py', 'tests/test_parse.py'],
+      before: { 'tests/rumba/test_c1.py': original, 'tests/test_parse.py': existing },
+      after: { 'tests/rumba/test_c1.py': null, 'tests/test_parse.py': after },
+      protectedGlobs: [],
+    })
+    expect(r).toMatch(/defines `parse`/)
+  })
+})

@@ -35,6 +35,8 @@ export interface RelocationInput {
   protectedGlobs: string[]
 }
 
+const PLAIN_PATH = /^[A-Za-z0-9._+@-]+(?:\/[A-Za-z0-9._+@-]+)*$/
+
 /** More lines than any test file needs; a larger one is not compared. */
 const MAX_LINES = 3000
 
@@ -62,6 +64,9 @@ export function judgeRelocation(i: RelocationInput): string | null {
   if (touched.length > 0) return `The relocation changed protected paths: ${list(touched)}.`
   const outside = i.changed.filter((f) => !originals.includes(f) && !tos.includes(f))
   if (outside.length > 0) return `The relocation changed files other than the checks and their new places: ${list(outside)}.`
+  // A new place goes into the check's command, which runs in a shell: letters, digits and . _ - + @ only.
+  const unplain = tos.filter((t) => !PLAIN_PATH.test(t) || t.split('/').some((part) => part.startsWith('-') || part === '..' || part === '.'))
+  if (unplain.length > 0) return `A new place for a check must be a plain path (letters, digits, and . _ - + @ / only): ${list(unplain)}.`
   const notTests = tos.filter((t) => !isTestPath(t))
   if (notTests.length > 0) return `A check may only move into a test file, not into ${list(notTests)}.`
   const left = froms.filter((f) => typeof i.after[f] === 'string')
@@ -136,6 +141,14 @@ function sameFile(to: string, before: string | null, after: string, sources: { f
   }
   for (const [name, target] of now.bindings) {
     if (!need.has(name)) return `${code(to)} imports ${code(name)} (${code(target)}), which no verified check imported.`
+  }
+  // A star or dot import binds names no line shows, so it could rebind one the check imports.
+  if ([...now.effects].some((e) => e.endsWith('#*') || e.endsWith('#.'))) return `${code(to)} has an import that imports everything into the file (a star import), so Rumba cannot tell what its names are.`
+  // Nor may the file itself define, at its top level, a name the check imports.
+  for (const m of moved) {
+    for (const name of m.bindings.keys()) {
+      if (was.body.some((l) => l.indent === '' && definesAt(l.text, name))) return `${code(to)} defines ${code(name)} itself, which the check imports.`
+    }
   }
   const effects = new Set([...was.effects, ...moved.flatMap((m) => [...m.effects])])
   if (effects.size !== now.effects.size || [...effects].some((e) => !now.effects.has(e))) return `${code(to)} must import the same modules for their side effects as the verified checks.`
@@ -218,6 +231,12 @@ function fits(now: Line[], was: Line[], blocks: Line[][]): boolean {
     }
   }
   return false
+}
+
+/** Whether a top-level line defines `name`: a def, class, function or variable of that name. */
+function definesAt(line: string, name: string): boolean {
+  const n = name.replace(/[$]/g, '\\$')
+  return new RegExp(`^(?:(?:async\\s+)?def|class|function\\*?|const|let|var|export\\s+(?:const|let|var|function|class))\\s+${n}\\b|^${n}\\s*(?::[^=]*)?=(?!=)`).test(line)
 }
 
 /** The indentation all lines of a block share: the shortest one, when every other starts with it. */
