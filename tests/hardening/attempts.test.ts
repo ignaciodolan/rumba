@@ -30,7 +30,9 @@ describe('infrastructure failures are not fix failures', () => {
     const stored = d.tracker.states.get('123')!
     expect(stored.fixAttempts).toBe(0)
     expect(stored.attempts?.at(-1)).toMatchObject({ n: 1, outcome: 'infrastructure', projectTests: 'infrastructure', checks: [{ criterionId: 'c1', passed: true }] })
-    expect(d.environment.downs).toBe(1)
+    // The second run is a fresh checkout and a fresh environment, never the same containers again.
+    expect(d.environment.ups).toHaveLength(2); expect(d.environment.downs).toBe(2)
+    expect(new Set(d.environment.upWorkdirs).size).toBe(2)
   })
   it('does not take a check that died of infrastructure on the base commit as evidence', async () => {
     const d = makeDeps(); d.agent.script['write-checks'] = { kind: 'write-checks', checks: [{ criterionId: 'c1', command: 'npm test -- c1', files: ['tests/rumba/c1.test.ts'] }] }
@@ -129,5 +131,20 @@ describe('the fix agent is told the true situation', () => {
     expect(comment).toMatch(/^The agent says no change is needed: The failing test is unrelated to this ticket\./)
     expect(comment).toContain('FAIL other.test.ts')
     expect(comment).not.toMatch(/changed no files/)
+  })
+})
+
+describe('a second run can not be gamed by the code under test', () => {
+  it('runs the second try in a fresh checkout and environment, so state left by the first run is gone', async () => {
+    const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H
+    // Code that fails the first time and leaves a marker to pass the second time, in the same environment.
+    const markers = new Set<string>()
+    d.environment.runCheck = async (h, check) => {
+      const passed = markers.has(h.workdir)
+      markers.add(h.workdir)
+      return { criterionId: check.criterionId, passed, exitCode: passed ? 0 : 1, output: passed ? 'ok' : 'first run fails' }
+    }
+    const s = await build(d, makeRumba({ limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 1 } }), makeTicket(), failing(d))
+    expect(s.state).toBe('fix_failed')
   })
 })

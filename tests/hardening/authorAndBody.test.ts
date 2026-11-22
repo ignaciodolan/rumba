@@ -67,6 +67,15 @@ describe('the pull request body', () => {
     expect(body).toMatch(/^## Summary\n\n> Lower-cases the slug in `slugify`, as @​someone asked\./)
     expect(body).toContain('Closes #18')
   })
+  it('keeps the summary from closing other issues or adding images', () => {
+    const d = makeDeps()
+    const s = { ...verified(d), fixSummary: 'Fixes #42 and closes https://github.com/o/r/issues/7. ![x](https://evil.test/pixel.png)' }
+    const body = renderPullRequestBody({ ticket: makeTicket({ ref: '#18' }), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    const summary = body.slice(0, body.indexOf('## Ticket'))
+    expect(summary).not.toMatch(/#42\b/); expect(summary).not.toContain('issues/7')
+    expect(summary).not.toContain('![')
+    expect(body.match(/Closes #\d+/g)).toEqual(['Closes #18'])
+  })
   it('links a Linear issue without a closing keyword', () => {
     const d = makeDeps()
     const body = renderPullRequestBody({ ticket: makeTicket({ ref: 'ENG-12', url: 'https://linear.app/x/issue/ENG-12' }), rumba: makeRumba({ tracker: { kind: 'linear', team: 'ENG' } }), state: verified(d), outsideScope: [], secrets: [] })
