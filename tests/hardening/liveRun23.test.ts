@@ -1,0 +1,123 @@
+// A live run: the checks for a second ticket reused a fixture that an earlier ticket's checks
+// had already put on the default branch (tests/rumba/proposals-fixture.ts), where seven other
+// tests import it. Rumba required every check file to be moved, so the agent moved the
+// fixture too, those seven tests could no longer import it, and `pnpm test` failed: the
+// relocation was rejected for a breakage Rumba's own rule forced.
+//
+// A check file that was already in the repository before Rumba's checks stays where it is.
+import { describe, expect, it } from 'vitest'
+import { buildPrompt } from '../../src/adapters/agent/prompts.js'
+import { judgeRelocation } from '../../src/core/relocation.js'
+import { relocateChecks } from '../../src/core/steps/relocateChecks.js'
+import type { TicketState } from '../../src/core/types.js'
+import { makeDeps, makeRumba, makeTicket, verified } from '../../src/testing/fakes.js'
+
+const FIXTURE = 'tests/rumba/proposals-fixture.ts'
+const FROM = 'tests/rumba/p2-page.test.tsx'
+const TO = 'tests/app/proposal-page.test.tsx'
+const page = (fixture: string) => [
+  "import { describe, expect, it } from 'vitest'",
+  `import { seedProposal } from '${fixture}'`,
+  "import { renderPage } from '@/app/p/render'",
+  '',
+  "describe('c3', () => {",
+  "  it('c3: shows the proposal', async () => {",
+  '    const p = await seedProposal()',
+  '    expect(await renderPage(p.token)).toContain(p.title)',
+  '  })',
+  '})',
+  '',
+].join('\n')
+const FIXTURE_TEXT = "export async function seedProposal() {\n  return { token: 't', title: 'T' }\n}\n"
+
+function relocation(over: { moves?: { from: string; to: string }[]; files?: string[]; after?: Record<string, string | null>; changed?: string[] } = {}) {
+  const moves = over.moves ?? [{ from: FROM, to: TO }]
+  return {
+    original: [{ criterionId: 'c3', command: `pnpm exec vitest run ${FROM} -t c3`, files: [FROM, FIXTURE] }],
+    moves,
+    relocated: [{ criterionId: 'c3', command: `pnpm exec vitest run ${TO} -t c3`, files: over.files ?? [TO, FIXTURE] }],
+    changed: over.changed ?? [FROM, TO],
+    before: { [FROM]: page('./proposals-fixture'), [FIXTURE]: FIXTURE_TEXT, [TO]: null, 'tests/helpers/proposals.ts': null } as Record<string, string | null>,
+    after: { [FROM]: null, [FIXTURE]: FIXTURE_TEXT, [TO]: page('../rumba/proposals-fixture'), 'tests/helpers/proposals.ts': null, ...over.after } as Record<string, string | null>,
+    protectedGlobs: [],
+    kept: [FIXTURE],
+  }
+}
+
+describe('a check file that was in the repository before the checks', () => {
+  it('stays where it is, and the moved check imports it from there', () => {
+    expect(judgeRelocation(relocation())).toBeNull()
+  })
+
+  it('may not be moved, since other code may import it', () => {
+    const r = relocation({
+      moves: [{ from: FROM, to: TO }, { from: FIXTURE, to: 'tests/helpers/proposals.ts' }],
+      files: [TO, 'tests/helpers/proposals.ts'],
+      changed: [FROM, TO, FIXTURE, 'tests/helpers/proposals.ts'],
+      after: { [FIXTURE]: null, 'tests/helpers/proposals.ts': FIXTURE_TEXT, [TO]: page('../helpers/proposals') },
+    })
+    expect(judgeRelocation(r)).toMatch(/was in the repository before Rumba's checks/)
+  })
+
+  it('may not be changed', () => {
+    const r = relocation({ changed: [FROM, TO, FIXTURE], after: { [FIXTURE]: `${FIXTURE_TEXT}export const extra = 1\n` } })
+    expect(judgeRelocation(r)).not.toBeNull()
+  })
+
+  it('stays among the relocated check\'s files', () => {
+    expect(judgeRelocation(relocation({ files: [TO] }))).toMatch(/exactly its new files/)
+  })
+})
+
+describe('the relocation step', () => {
+  function setup() {
+    const d = makeDeps()
+    const state: TicketState = { ...verified(d), checks: [{ criterionId: 'c1', command: `pnpm exec vitest run ${FROM} -t c3`, files: [FROM, FIXTURE] }], checkHashes: { [FROM]: 'h' } }
+    state.criteria = [{ id: 'c1', text: 'C1', checkable: true }]
+    d.workspace.branchTip = 'fix000'
+    d.workspace.commitResults = ['reloc00', 'relbase']
+    d.workspace.changed = [FROM, TO]
+    d.workspace.changedSince = { base000: [FROM, 'app/p/render.ts'] }
+    d.workspace.files = {
+      base000: { [FIXTURE]: FIXTURE_TEXT },
+      fix000: { [FROM]: page('./proposals-fixture'), [FIXTURE]: FIXTURE_TEXT },
+      reloc00: { [TO]: page('../rumba/proposals-fixture'), [FIXTURE]: FIXTURE_TEXT },
+    }
+    return { d, state }
+  }
+
+  it('tells the agent which check files were already there and stay, and keeps a move that leaves them', async () => {
+    const { d, state } = setup()
+    d.agent.script['relocate-checks'] = { kind: 'relocate-checks', moves: [{ from: FROM, to: TO }], checks: [{ criterionId: 'c1', command: `pnpm exec vitest run ${TO} -t c3`, files: [TO, FIXTURE] }] }
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(d.agent.calls[0]!.lockedFiles).toEqual([FIXTURE])
+    expect(s.relocation?.status).toBe('relocated')
+  })
+
+  it('rejects a move of a check file that was already there', async () => {
+    const { d, state } = setup()
+    d.workspace.changed = [FROM, TO, FIXTURE, 'tests/helpers/proposals.ts']
+    d.workspace.files.reloc00 = { [TO]: page('../helpers/proposals'), 'tests/helpers/proposals.ts': FIXTURE_TEXT }
+    d.agent.script['relocate-checks'] = {
+      kind: 'relocate-checks',
+      moves: [{ from: FROM, to: TO }, { from: FIXTURE, to: 'tests/helpers/proposals.ts' }],
+      checks: [{ criterionId: 'c1', command: `pnpm exec vitest run ${TO} -t c3`, files: [TO, 'tests/helpers/proposals.ts'] }],
+    }
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(s.relocation?.reason).toMatch(/was in the repository before Rumba's checks/)
+    expect(d.environment.ups).toEqual([])
+  })
+})
+
+describe('the relocate-checks prompt', () => {
+  it('names the check files that stay where they are', () => {
+    const p = buildPrompt({
+      kind: 'relocate-checks', ticket: makeTicket(), context: '', environmentKind: 'docker',
+      checks: [{ criterionId: 'c3', command: `pnpm exec vitest run ${FROM} -t c3`, files: [FROM, FIXTURE] }],
+      lockedFiles: [FIXTURE],
+    })
+    expect(p).toMatch(/were in the repository before Rumba's checks[\s\S]*tests\/rumba\/proposals-fixture\.ts/)
+    expect(p).toMatch(/Leave them where they are, unchanged/)
+    expect(p).toMatch(/Move every other check file listed above/)
+  })
+})
