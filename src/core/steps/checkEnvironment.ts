@@ -1,6 +1,6 @@
 import type { RumbaConfig } from '../../config/load.js'
 import type { Deps } from '../../ports/deps.js'
-import type { EnvHandle } from '../../ports/environment.js'
+import { type EnvHandle, InfrastructureError } from '../../ports/environment.js'
 import { timeLeft } from '../budget.js'
 import { fixBranch } from '../labels.js'
 import { cleanOutput } from '../redact.js'
@@ -41,6 +41,8 @@ export async function checkEnvironment(deps: Deps, rumba: RumbaConfig, ticket: T
     try {
       handle = await deps.environment.up({ branch, sha: baseSha, role: 'base', timeoutMs: timeLeft(deps) }, workdir)
     } catch (e) {
+      // The machine, not the project: count an error and try again on a later run.
+      if (e instanceof InfrastructureError) throw e
       return await stop('environment did not start',
         `Rumba could not bring this project's environment up on the default branch, so it did not start work on this ticket. ` +
         `Make sure the environment's files are on the default branch and that \`up\` works there.\n\n${fence(cleanOutput(messageOf(e), deps.secrets))}`)
@@ -48,8 +50,10 @@ export async function checkEnvironment(deps: Deps, rumba: RumbaConfig, ticket: T
     try {
       const test = rumba.verify.test
       if (test === undefined) return state
-      const ran = await deps.environment.runCommand(handle, test)
+      let ran = await deps.environment.runCommand(handle, test)
+      if (ran?.infrastructure) ran = await deps.environment.runCommand(handle, test)
       if (ran === null || ran.exitCode === 0) return state
+      if (ran.infrastructure) throw new InfrastructureError(`The project tests (${test}) failed twice on the default branch because ${ran.infrastructure}.`)
       if (COULD_NOT_RUN.includes(ran.exitCode)) {
         return await stop('project tests could not run on the default branch',
           `The project's tests (${test}) could not run on the default branch (exit ${ran.exitCode}): they timed out, cannot execute or were not found, ` +

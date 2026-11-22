@@ -1,6 +1,7 @@
 import type { RumbaConfig } from '../config/load.js'
 import type { Deps } from '../ports/deps.js'
 import { LEASE_MARGIN_MINUTES } from './budget.js'
+import { InfrastructureError } from '../ports/environment.js'
 import { advanceTicket } from './engine.js'
 import { cleanOutput } from './redact.js'
 import { ENDS, isDurable, newState, transition } from './states.js'
@@ -122,6 +123,11 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
     if (next.errorCount >= MAX_ERRORS) {
       next = transition(next, 'needs_human', deps.clock(), 'repeated errors')
       await deps.tracker.comment(ticket, `Rumba hit repeated errors on this ticket: ${message}`)
+    } else if (e instanceof InfrastructureError) {
+      // Say plainly that it was the machine, so nobody reads it as a problem with the change.
+      await deps.tracker.comment(ticket,
+        `Rumba stopped because of a problem with the machine, not with the change: ${message} ` +
+        `This counts as error ${next.errorCount} of ${MAX_ERRORS}, not as a fix attempt. The next run tries again.`)
     }
     await deps.tracker.writeState(ticket, next)
     return left(`error: ${message}`)

@@ -28,6 +28,13 @@ export interface Environment {
   up(ref: EnvRef, workdir: string): Promise<EnvHandle>
   runCheck(h: EnvHandle, check: Check): Promise<CheckResult>
   /** Null when the environment cannot run commands. */
-  runCommand(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string } | null>
+  runCommand(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string; infrastructure?: string } | null>
   down(h: EnvHandle): Promise<void>
 }
+
+/**
+ * The environment failed for a reason outside the change under test: the machine ran out of
+ * memory or disk, a command was killed or timed out, or another Rumba process held the
+ * environment too long. It counts as an error on the ticket, never as a fix attempt.
+ */
+export class InfrastructureError extends Error {}
