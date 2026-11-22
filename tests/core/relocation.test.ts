@@ -298,3 +298,71 @@ describe('judgeRelocation, against names and paths', () => {
     expect(r).toMatch(/defines `parse`/)
   })
 })
+
+describe('judgeRelocation, where a check may go', () => {
+  it('puts at most one check in a file, so one check cannot fail on the base commit for another', () => {
+    const two = input({
+      original: [{ criterionId: 'c1', command: `npx vitest run ${FROM}`, files: [FROM] }, { criterionId: 'c2', command: 'npx vitest run tests/rumba/c2.test.ts', files: ['tests/rumba/c2.test.ts'] }],
+      moves: [{ from: FROM, to: TO }, { from: 'tests/rumba/c2.test.ts', to: TO }],
+      relocated: [{ criterionId: 'c1', command: `npx vitest run ${TO}`, files: [TO] }, { criterionId: 'c2', command: `npx vitest run ${TO}`, files: [TO] }],
+      changed: [FROM, 'tests/rumba/c2.test.ts', TO],
+    })
+    expect(judgeRelocation(two)).toMatch(/one check/)
+  })
+
+  it('merges only at the end of a file, never inside one of its blocks', () => {
+    const inside = MERGED.replace("})\n\ndescribe('saving a profile'", "\ndescribe('saving a profile'").replace(/\}\)\n$/, '})\n})\n')
+    expect(judgeRelocation(input({}, { [TO]: inside }))).toMatch(/at the end/)
+  })
+
+  it('does not merge into a file with hooks or mocks, which would apply to the check', () => {
+    for (const hook of ["beforeEach(() => vi.spyOn(api, 'save'))", "vi.mock('../src/profile')"]) {
+      const existing = EXISTING.replace("describe('profile'", `${hook}\n\ndescribe('profile'`)
+      const after = MERGED.replace("describe('profile'", `${hook}\n\ndescribe('profile'`)
+      expect(judgeRelocation(input({ before: { [FROM]: ORIGINAL, [TO]: existing } }, { [TO]: after })), hook).toMatch(/hooks or mocks/)
+    }
+  })
+
+  it('does not merge into a file the fix changed', () => {
+    expect(judgeRelocation(input({ changedByFix: [TO, 'src/profile.ts'] }))).toMatch(/the fix changed/)
+  })
+
+  it('keeps the titles as written when the command picks tests by title', () => {
+    const r = judgeRelocation(input({
+      original: [{ criterionId: 'c1', command: `npx vitest run ${FROM} -t "c1: saving a profile returns 200"`, files: [FROM] }],
+      relocated: [{ criterionId: 'c1', command: `npx vitest run ${TO} -t "c1: saving a profile returns 200"`, files: [TO] }],
+    }))
+    expect(r).toMatch(/title/)
+  })
+
+  it('refuses a setup or helper file that is not named like one', () => {
+    for (const to of ['test/setupTests.ts', 'tests/__mocks__/axios.js', 'spec/spec_helper.rb']) {
+      const r = judgeRelocation(input({ moves: [{ from: FROM, to }], relocated: [{ criterionId: 'c1', command: `npx vitest run ${to}`, files: [to] }], changed: [FROM, to] }, { [to]: MERGED }))
+      expect(r, to).toMatch(/only move into a test file/)
+    }
+  })
+})
+
+describe('judgeRelocation, names the file binds itself', () => {
+  const py = (existing: string) => {
+    const original = 'from app.parse import parse\n\ndef test_c1():\n    assert parse("1") == 1\n'
+    const block = '\ndef test_parses():\n    assert parse("1") == 1\n'
+    return judgeRelocation({
+      original: [{ criterionId: 'c1', command: 'pytest tests/rumba/test_c1.py', files: ['tests/rumba/test_c1.py'] }],
+      moves: [{ from: 'tests/rumba/test_c1.py', to: 'tests/test_parse.py' }],
+      relocated: [{ criterionId: 'c1', command: 'pytest tests/test_parse.py', files: ['tests/test_parse.py'] }],
+      changed: ['tests/rumba/test_c1.py', 'tests/test_parse.py'],
+      before: { 'tests/rumba/test_c1.py': original, 'tests/test_parse.py': existing },
+      after: { 'tests/rumba/test_c1.py': null, 'tests/test_parse.py': `from app.parse import parse\n\n${existing.replace(/^from app\.parse import parse\n\n/, '')}${block}` },
+      protectedGlobs: [],
+    })
+  }
+  it('accepts a file that only uses the name', () => {
+    expect(py('from app.parse import parse\n\ndef test_other():\n    assert parse("2") == 2\n')).toBeNull()
+  })
+  it('refuses a file that binds it by unpacking, in a loop, inside a block, or imports below its top', () => {
+    for (const line of ['a, parse = 1, lambda t: 1', 'for parse in [lambda t: 1]:\n    pass', 'if True:\n    parse = lambda t: 1', 'try:\n    from app.fake import parse\nexcept ImportError:\n    pass']) {
+      expect(py(`from app.parse import parse\n\n${line}\n\ndef test_other():\n    assert True\n`), line).not.toBeNull()
+    }
+  })
+})

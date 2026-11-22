@@ -33,6 +33,8 @@ export interface RelocationInput {
   before: Record<string, string | null>
   after: Record<string, string | null>
   protectedGlobs: string[]
+  /** Files the checks commit and the fix changed, since the base commit. */
+  changedByFix?: string[]
 }
 
 const PLAIN_PATH = /^[A-Za-z0-9._+@-]+(?:\/[A-Za-z0-9._+@-]+)*$/
@@ -57,6 +59,12 @@ export function judgeRelocation(i: RelocationInput): string | null {
   if (unmoved.length > 0) return `The relocation did not move ${list(unmoved)}.`
   const strangers = froms.filter((f, n) => !originals.includes(f) || froms.indexOf(f) !== n)
   if (strangers.length > 0) return `The relocation moved files that are not Rumba's checks, or moved one twice: ${list(strangers)}.`
+  // One check per file: on the base commit, a file fails as a whole, so a second check in it
+  // could pass for failing without ever running.
+  const shared = tos.filter((t) => i.moves.filter((m) => m.to === t).length > 1)
+  if (shared.length > 0) return `A file can take only one check, and ${list(shared)} was given more than one.`
+  const fixed = tos.filter((t) => (i.changedByFix ?? []).includes(t))
+  if (fixed.length > 0) return `A check cannot move into a file the fix changed, since that change could fail on the base commit in its place: ${list(fixed)}.`
   const intoCheck = tos.filter((t) => originals.includes(t))
   if (intoCheck.length > 0) return `The relocation moved a check into one of Rumba's own check files: ${list(intoCheck)}.`
 
@@ -88,19 +96,37 @@ export function judgeRelocation(i: RelocationInput): string | null {
     }
   }
 
-  for (const to of tos) {
-    const sources = i.moves.filter((m) => m.to === to).map((m) => ({ file: m.from, text: i.before[m.from] ?? '' }))
-    const reason = sameFile(to, i.before[to] ?? null, i.after[to]!, sources)
+  for (const move of i.moves) {
+    const original = i.original.find((c) => c.files.includes(move.from))!
+    const text = i.before[move.from] ?? ''
+    // A command that picks tests by title would run fewer of them once a title changed.
+    const bare = original.files.reduce((c, f) => c.split(f).join(' '), original.command)
+    const keepTitles = titlesIn(text).some((t) => t.length > 0 && bare.includes(t))
+    const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles)
     if (reason !== null) return reason
   }
   return null
 }
 
+/** The test titles a file gives: the strings and names the title rules would replace. */
+function titlesIn(text: string): string[] {
+  return text.split(/\r?\n/).flatMap((raw) => {
+    const line = raw.trim()
+    const m = /^(?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/.exec(line)
+      ?? /^(?:async\s+)?def\s+(test_\w*)/.exec(line) ?? /^class\s+(Test\w*)/.exec(line) ?? /^func\s+((?:Test|Benchmark|Example|Fuzz)\w*)/.exec(line)
+    if (!m) return []
+    return [m[2] ?? m[1]!]
+  })
+}
+
+/** Lines that set up or mock what every test in a file sees. */
+const HOOKS = /\b(?:before(?:Each|All)|after(?:Each|All)|setUp|tearDown|setup_method|setup_function|setup_module|setup_class|teardown_\w+|autouse|usefixtures|vi\.(?:mock|doMock|spyOn|stubGlobal|stubEnv|useFakeTimers)|jest\.(?:mock|doMock|spyOn|useFakeTimers)|mock\.patch|monkeypatch|TestMain)\b/
+
 /** A path a test runner would pick up, or a file in a test folder, and never a file that configures the tests. */
 export function isTestPath(file: string): boolean {
   const name = path.posix.basename(file)
   if (name.startsWith('.') || /^(?:conftest\.py|__init__\.py|setup\.(?:py|cfg)|pytest\.ini|tox\.ini|package\.json|Makefile)$/i.test(name)) return false
-  if (/(?:^|[._-])(?:config|setup|setupfiles|globalsetup|teardown)(?:[._-]|$)/i.test(name) || /^tsconfig/i.test(name)) return false
+  if (/config|setup|teardown|helper|conftest|support/i.test(name) || file.split('/').some((part) => part === '__mocks__' || part === '__fixtures__')) return false
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name) || /^test_\w+\.py$/.test(name) || /_test\.(?:py|go)$/.test(name) || /Tests?\.(?:java|kt|cs)$/.test(name)) return true
   return path.posix.dirname(file).split('/').some((part) => /^(?:tests?|__tests__|specs?|e2e)$/.test(part))
 }
@@ -120,10 +146,13 @@ interface Parsed {
 }
 
 /** Whether `after` is `before` plus the moved checks, as described above. */
-function sameFile(to: string, before: string | null, after: string, sources: { file: string; text: string }[]): string | null {
-  const now = parse(to, after)
-  const was = parse(to, before ?? '')
-  const moved = sources.map((s) => ({ file: s.file, ...parse(s.file, s.text) }))
+function sameFile(to: string, before: string | null, after: string, sources: { file: string; text: string }[], keepTitles: boolean): string | null {
+  const now = parse(to, after, keepTitles)
+  const was = parse(to, before ?? '', keepTitles)
+  const moved = sources.map((s) => ({ file: s.file, ...parse(s.file, s.text, keepTitles) }))
+  // A file's hooks and mocks apply to every test in it, the moved check too.
+  const hook = (before ?? '').split(/\r?\n/).find((l) => HOOKS.test(l))
+  if (hook !== undefined) return `${code(to)} has hooks or mocks that would apply to the check, so it cannot take one: ${code(hook.trim())}.`
   if ([now, was, ...moved].some((p) => p.body.length > MAX_LINES)) return `${code(to)} is too large to compare.`
   const conflict = [now, was, ...moved].find((p) => p.conflict !== undefined)?.conflict
   if (conflict !== undefined) return `${conflict} is imported twice, as two different things.`
@@ -144,10 +173,13 @@ function sameFile(to: string, before: string | null, after: string, sources: { f
   }
   // A star or dot import binds names no line shows, so it could rebind one the check imports.
   if ([...now.effects].some((e) => e.endsWith('#*') || e.endsWith('#.'))) return `${code(to)} has an import that imports everything into the file (a star import), so Rumba cannot tell what its names are.`
-  // Nor may the file itself define, at its top level, a name the check imports.
+  // Nor may the file itself bind, anywhere, a name the check imports, or import anything below its top.
+  const late = was.body.find((l) => LATE_IMPORT.test(l.text))
+  if (late !== undefined) return `${code(to)} imports below its top, where Rumba cannot tell what it binds: ${code(late.text)}.`
   for (const m of moved) {
     for (const name of m.bindings.keys()) {
-      if (was.body.some((l) => l.indent === '' && definesAt(l.text, name))) return `${code(to)} defines ${code(name)} itself, which the check imports.`
+      const line = was.body.find((l) => binds(l.text, name))
+      if (line !== undefined) return `${code(to)} defines ${code(name)} itself, which the check imports: ${code(line.text)}.`
     }
   }
   const effects = new Set([...was.effects, ...moved.flatMap((m) => [...m.effects])])
@@ -173,12 +205,14 @@ function sameFile(to: string, before: string | null, after: string, sources: { f
   }
   // A changed line is both; the new line says more about what happened.
   const added = [...texts].find(([, c]) => c > 0)
-  if (added) return `${code(to)} has a line that is in no check Rumba verified: ${code(added[0])}.${gone === null ? '' : ` ${gone}`}`
+  const titles = keepTitles ? ' The command picks tests by title, so the titles must stay as written.' : ''
+  if (added) return `${code(to)} has a line that is in no check Rumba verified: ${code(added[0])}.${gone === null ? '' : ` ${gone}`}${titles}`
   if (gone !== null) return gone
 
   // Where the lines are: the file's own in order, each check as one block, indentation kept.
-  if (!fits(now.body, was.body, moved.map((m) => m.body))) {
-    return `${code(to)} keeps every line, but not in place: each check must stay one block, in its order and with its own indentation, and the lines already in the file must stay as they were.`
+  const expected = [...was.body, ...moved.flatMap((m) => m.body)]
+  if (expected.length !== now.body.length || expected.some((l, n) => l.text !== now.body[n]!.text || l.indent !== now.body[n]!.indent)) {
+    return `${code(to)} keeps every line, but not in place: a check goes at the end of the file, as one block, in its order, with its indentation as written, and the lines already in the file stay as they were.${titles}`
   }
 
   const shadowed = shadowedTests(after, before ?? '')
@@ -186,71 +220,26 @@ function sameFile(to: string, before: string | null, after: string, sources: { f
   return null
 }
 
+/** An import anywhere in a line: an import or from statement, a require, a dynamic import. */
+const LATE_IMPORT = /^(?:import|from)\s|\brequire\s*\(|\bimport\s*\(|\b__import__\b|\bimportlib\b/
+
 /**
- * Whether `now` is `was` with each block inserted whole somewhere: `was` lines exactly as they
- * were, and each block's lines in order with their indentation relative to each other.
+ * Whether a line may bind `name`, at any depth: a def, class, function or declaration of it,
+ * an `as` or `global` of it, a for loop over it, or `name` anywhere before an `=` (an
+ * assignment, a tuple unpacking, an annotated name). Wide on purpose: a line taken for one
+ * only stops a merge.
  */
-function fits(now: Line[], was: Line[], blocks: Line[][]): boolean {
-  const all = (1 << blocks.length) - 1
-  const lengths = blocks.map((b) => b.length)
-  const placed = (at: number, k: number): boolean => {
-    const block = blocks[k]!
-    if (block.length === 0 || at + block.length > now.length) return false
-    const base = commonIndent(block)
-    let offset: string | null = null
-    for (let n = 0; n < block.length; n++) {
-      const want = block[n]!
-      const got = now[at + n]!
-      if (got.text !== want.text) return false
-      const rest = want.indent.slice(base.length)
-      if (!got.indent.endsWith(rest)) return false
-      const lead = got.indent.slice(0, got.indent.length - rest.length)
-      if (offset === null) offset = lead
-      else if (lead !== offset) return false
-    }
-    return true
-  }
-  // Blocks with no lines (a check of imports only) fit anywhere.
-  const start = blocks.reduce((used, b, k) => (b.length === 0 ? used | (1 << k) : used), 0)
-  // An explicit stack: a file of thousands of lines would overflow a recursive search.
-  const seen = new Set<string>()
-  const stack: [number, number][] = [[0, start]]
-  while (stack.length > 0) {
-    const [at, used] = stack.pop()!
-    const key = `${at},${used}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    const j = at - blocks.reduce((sum, _b, k) => sum + (used & (1 << k) ? lengths[k]! : 0), 0)
-    if (at === now.length) {
-      if (j === was.length && used === all) return true
-      continue
-    }
-    if (j < was.length && now[at]!.text === was[j]!.text && now[at]!.indent === was[j]!.indent) stack.push([at + 1, used])
-    for (let k = 0; k < blocks.length; k++) {
-      if (!(used & (1 << k)) && placed(at, k)) stack.push([at + lengths[k]!, used | (1 << k)])
-    }
-  }
-  return false
-}
-
-/** Whether a top-level line defines `name`: a def, class, function or variable of that name. */
-function definesAt(line: string, name: string): boolean {
-  const n = name.replace(/[$]/g, '\\$')
-  return new RegExp(`^(?:(?:async\\s+)?def|class|function\\*?|const|let|var|export\\s+(?:const|let|var|function|class))\\s+${n}\\b|^${n}\\s*(?::[^=]*)?=(?!=)`).test(line)
-}
-
-/** The indentation all lines of a block share: the shortest one, when every other starts with it. */
-function commonIndent(block: Line[]): string {
-  if (block.length === 0) return ''
-  const shortest = block.reduce((s, l) => (l.indent.length < s.length ? l.indent : s), block[0]!.indent)
-  return block.every((l) => l.indent.startsWith(shortest)) ? shortest : ''
+function binds(line: string, name: string): boolean {
+  const n = name.replace(/\$/g, '\\$')
+  const word = `(?<![\\w$])${n}(?![\\w$])`
+  return new RegExp(`(?:def|class|function\\*?|const|let|var|as|global|nonlocal)\\s+${word}|\\bfor\\b[^:]*${word}[^:]*\\bin\\b|${word}.*?(?<![=!<>])=(?![=>])`).test(line)
 }
 
 /** A Python test name that appears twice at one indentation after the relocation, and did not before. */
 function shadowedTests(after: string, before: string): string | null {
   const names = (text: string) => countOf(text.split(/\r?\n/).flatMap((l) => {
-    const m = /^(\s*)(?:(?:async\s+)?def\s+(test_\w*)|class\s+(Test\w*))/.exec(l)
-    return m ? [`${m[1]}${m[2] ?? m[3]}`] : []
+    const m = /^(\s*)(?:(?:async\s+)?def\s+(test_\w*)|class\s+(Test\w*)|(test_\w*)\s*(?::[^=]*)?=(?!=))/.exec(l)
+    return m ? [`${m[1]}${m[2] ?? m[3] ?? m[4]}`] : []
   }))
   const was = names(before)
   for (const [name, n] of names(after)) if (n > 1 && n > (was.get(name) ?? 0)) return name.trim()
@@ -285,7 +274,7 @@ const GO_IMPORT = /^import\s+(?:([\w.]+)\s+)?"([^"\\\s]+)"$/
 const GO_BLOCK = { start: /^import\s*\($/, inside: /^(?:[\w.]+\s+)?"[^"\\\s]+"$/, end: /^\)$/ }
 const BLOCKS = [JS_BLOCK, PY_BLOCK, GO_BLOCK]
 // A comment line before the code: `//` or `#`, or a block comment that opens and closes on the line.
-const NOTE = /^(?:\/\/|#)|^\/\*(?:(?!\*\/).)*\*\/$/
+const NOTE = /^(?:\/\/|#)|^\/\*(?:(?!\*\/).)*\*\/$|^package\s+\w+$|^(['"])use strict\1;?$/
 
 // A test title, replaced by a mark; the call before it stays as written.
 const TITLES: [RegExp, string][] = [
@@ -296,7 +285,7 @@ const TITLES: [RegExp, string][] = [
 ]
 
 /** A file's imports and comments up to its first line of code, and every line after that. */
-function parse(file: string, text: string): Parsed {
+function parse(file: string, text: string, keepTitles = false): Parsed {
   const out: Parsed = { bindings: new Map(), effects: new Set(), notes: [], body: [] }
   const bind = (name: string, target: string) => {
     if (out.bindings.has(name) && out.bindings.get(name) !== target) out.conflict ??= code(name)
@@ -319,7 +308,7 @@ function parse(file: string, text: string): Parsed {
     const line = raw.trim()
     if (line === '') continue
     const indent = raw.slice(0, raw.length - raw.trimStart().length)
-    out.body.push({ indent, text: TITLES.reduce((l, [p, mark]) => l.replace(p, mark), line) })
+    out.body.push({ indent, text: keepTitles ? line : TITLES.reduce((l, [p, mark]) => l.replace(p, mark), line) })
   }
   return out
 }

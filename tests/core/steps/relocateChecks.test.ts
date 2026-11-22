@@ -36,6 +36,8 @@ function setup(merged = MERGED): { d: FakeDeps; state: TicketState } {
   d.workspace.branchTip = FIX
   d.workspace.commitResults = [RELOCATED, RELOCATED_AT_BASE]
   d.workspace.changed = [FROM, TO]
+  // Since the base commit: the check Rumba wrote and the fix.
+  d.workspace.changedSince = { base000: [FROM, 'src/profile.ts'] }
   d.workspace.files = { [FIX]: { [FROM]: ORIGINAL, [TO]: EXISTING }, [RELOCATED]: { [TO]: merged } }
   d.agent.script['relocate-checks'] = moved
   return { d, state }
@@ -101,6 +103,14 @@ describe('relocateChecks', () => {
     d.agent.script['relocate-checks'] = { ...moved, checks: [{ criterionId: 'c1', command: `npx vitest run ${TO} || true`, files: [TO] }] }
     const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
     expect(s.relocation?.reason).toContain('must be the verified one with only the file paths changed')
+    expect(d.environment.ups).toEqual([])
+  })
+
+  it('rejects a move into a file the fix changed', async () => {
+    const { d, state } = setup()
+    d.workspace.changedSince = { base000: [FROM, 'src/profile.ts', TO] }
+    const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
+    expect(s.relocation?.reason).toMatch(/file the fix changed/)
     expect(d.environment.ups).toEqual([])
   })
 
@@ -188,7 +198,7 @@ describe('relocation and the rest of the ticket', () => {
   it('warns about a check moved outside the paths of the rumba, like any other change', async () => {
     const { d, state } = setup()
     const s = await relocateChecks(d, makeRumba(), makeTicket(), state)
-    d.workspace.changed = ['src/profile.ts', TO]
+    d.workspace.changedSince = { base000: ['src/profile.ts', TO] }
     await openPullRequest(d, makeRumba({ paths: ['src/**'] }), makeTicket(), s)
     expect(d.codeHost.prs[0]!.body).toMatch(/## Outside this rumba's scope[\s\S]*test\/profile\.test\.ts/)
   })

@@ -265,8 +265,11 @@ export class FakeWorkspace implements Workspace {
     this.log.push(`reset ${workdir} ${sha}`)
   }
 
-  async changedFiles(_workdir: string, _sinceSha: string): Promise<string[]> {
-    return this.changed
+  /** What changedFiles returns since a given commit, when set; otherwise `changed`. */
+  changedSince: Record<string, string[]> = {}
+
+  async changedFiles(_workdir: string, sinceSha: string): Promise<string[]> {
+    return this.changedSince[sinceSha] ?? this.changed
   }
 
   async hashFiles(_workdir: string, files: string[]): Promise<Record<string, string>> {

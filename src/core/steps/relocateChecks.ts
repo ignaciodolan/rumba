@@ -27,10 +27,12 @@ type Outcome = { reason: string } | (Moved & { after: CheckResult[]; before: Che
 export async function relocateChecks(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState): Promise<TicketState> {
   if (state.state !== 'verified') throw new Error(`Cannot relocate checks from state ${state.state}`)
   const { branch } = state
-  if (!branch || !state.checksSha) throw new Error('Cannot relocate checks without a branch and a checks commit')
+  if (!branch || !state.checksSha || !state.baseSha) throw new Error('Cannot relocate checks without a branch, a base commit and a checks commit')
 
   if (state.relocation?.status === 'started') {
-    // A run stopped in the middle of a relocation: whatever it committed goes.
+    // A run stopped in the middle of a relocation: whatever it committed goes. The runner
+    // makes the branch again before a ticket gets back here, which forgets the relocation;
+    // this stays as a safeguard for a state that reaches this step some other way.
     const { from } = state.relocation
     await restore(deps, branch, from)
     return decide(deps, ticket, state, { status: 'rejected', from, reason: 'An earlier relocation was interrupted before Rumba could check it.' })
@@ -90,6 +92,8 @@ type Moved = { sha: string; moves: Move[]; checks: Check[] }
 
 /** The agent moves the checks in `workdir`; Rumba commits the move and compares it, line by line, with what it verified. */
 async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, workdir: string, from: string): Promise<Moved | { reason: string }> {
+  // Before the agent writes anything: what the checks commit and the fix changed since the base.
+  const changedByFix = await deps.workspace.changedFiles(workdir, state.baseSha!)
   const result = await deps.agent.run({
     kind: 'relocate-checks', ticket, context: rumba.context, environmentKind: rumba.environment.kind, timeoutMs: timeLeft(deps), ...execPrefixOf(rumba),
     criteria: state.criteria, checks: state.checks,
@@ -112,7 +116,7 @@ async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: Ticke
   }
   const checks = result.checks.filter((c) => state.checks.some((o) => o.criterionId === c.criterionId))
   const unlike = judgeRelocation({
-    original: state.checks, moves: result.moves, relocated: result.checks, changed, before, after, protectedGlobs: rumba.environment.protected,
+    original: state.checks, moves: result.moves, relocated: result.checks, changed, before, after, protectedGlobs: rumba.environment.protected, changedByFix,
   })
   if (unlike !== null) return { reason: `Rumba compared the moved checks with the ones it verified, line by line. ${unlike}` }
   return { sha, moves: result.moves, checks }
