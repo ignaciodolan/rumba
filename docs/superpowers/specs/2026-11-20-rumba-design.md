@@ -284,12 +284,15 @@ Two of each of the first three, so the interfaces are proven by a second impleme
 
 Pull request body:
 
-- link to the ticket, and which rumba produced it;
+- a short summary of the change, written by the agent;
+- link to the ticket, `Closes #<n>` for a GitHub issue, and which rumba produced it;
 - a table of criterion, check, result before, result after;
 - criteria not verified, if any;
 - files changed outside the rumba's scope, if any;
 - trimmed check output;
 - which environment, agent and model were used.
+
+Commits are made as the identity in `commit_author` (or `RUMBA_COMMIT_AUTHOR_NAME` and `_EMAIL`), else as the GitHub account Rumba runs as, so that integrations which check the author, such as a deployment that requires a project member, accept them.
 
 ## 12. Environments
 
@@ -370,6 +373,9 @@ Scheduling is a GitHub Actions workflow with a cron trigger and a manual trigger
 
 - An unexpected error leaves the ticket at its last durable state and adds one to an error count in the state comment.
 - After three errors on the same ticket it moves to `needs_human`. **(call)**
+- A failure that comes from the machine, not the change, is an error, never a fix attempt. Examples: Docker reports an out-of-memory kill, the command is killed (exit 137) or times out, the disk is full, or the test workers are killed. A failing verification is run once more, in a fresh checkout and environment, before it counts, and Rumba comments on the ticket when the machine was the cause. This also holds on the base commit and in the environment check.
+- Every fix attempt is recorded on the ticket: each check's result, the project tests' result, and a short tail of the output. A `fix_failed` can then be explained from the ticket alone. The fix agent is told which checks pass and which fail, and may answer that no change is needed with a reason. Rumba then verifies once more and, if the code still does not pass, stops with `needs_human` and that reason.
+- One docker environment runs at a time on a machine, guarded by a lock file that is taken over when its process is gone.
 - A ticket that runs out of time moves to `needs_human`. The budget bounds the whole ticket: each agent call and each environment command gets at most the time left, and a call cut short by it ends in `needs_human`, not in an error. Taking an environment down always gets its full limit.
 - A run's lease on a ticket lasts the budget, plus the time to take the environment down, plus a margin, so a run still working a ticket is never overtaken.
 

@@ -24,7 +24,7 @@ export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
     paths: [],
     tracker: { kind: 'github' },
     agent: { kind: 'claude-code' },
-    environment: { kind: 'docker', up: 'docker compose up -d', exec: 'docker compose exec app sh -c', down: 'docker compose down', protected: [], commandTimeoutMinutes: 10 },
+    environment: { kind: 'docker', up: 'docker compose up -d', exec: 'docker compose exec app sh -c', down: 'docker compose down', protected: [], commandTimeoutMinutes: 10, minFreeDiskGb: 5 },
     verify: {},
     sandbox: { nodeVersion: '22' },
     limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 },
@@ -140,6 +140,12 @@ export class FakeEnvironment implements Environment {
   canRunCommands = true
   commandExit = 0
   passes: (check: Check, role: Role) => boolean = (_c, role) => role === 'after'
+  /** Results the next check runs return, in order, before `passes` decides again. */
+  checkResults: Partial<CheckResult>[] = []
+  /** Results the next commands return, in order, before `commandExit` decides again. */
+  commandResults: { exitCode: number; output: string; infrastructure?: string }[] = []
+  /** The criterion of every check run, in order. */
+  checksRun: string[] = []
   private roles = new Map<EnvHandle, Role>()
 
   async up(ref: EnvRef, workdir: string): Promise<EnvHandle> {
@@ -153,15 +159,21 @@ export class FakeEnvironment implements Environment {
   }
 
   async runCheck(h: EnvHandle, check: Check): Promise<CheckResult> {
+    this.checksRun.push(check.criterionId)
+    const scripted = this.checkResults.shift()
+    if (scripted !== undefined) {
+      const passed = scripted.passed ?? false
+      return { criterionId: check.criterionId, passed, exitCode: scripted.exitCode ?? (passed ? 0 : 1), output: scripted.output ?? '', ...(scripted.infrastructure ? { infrastructure: scripted.infrastructure } : {}) }
+    }
     const role = this.roles.get(h) ?? 'after'
     const passed = this.passes(check, role)
     return { criterionId: check.criterionId, passed, exitCode: passed ? 0 : 1, output: passed ? 'check passed' : 'check failed' }
   }
 
-  async runCommand(_h: EnvHandle, command: string): Promise<{ exitCode: number; output: string } | null> {
+  async runCommand(_h: EnvHandle, command: string): Promise<{ exitCode: number; output: string; infrastructure?: string } | null> {
     if (!this.canRunCommands) return null
     this.commandsRun.push(command)
-    return { exitCode: this.commandExit, output: this.commandOutput }
+    return this.commandResults.shift() ?? { exitCode: this.commandExit, output: this.commandOutput }
   }
 
   async down(_h: EnvHandle): Promise<void> {
@@ -211,13 +223,26 @@ export class FakeWorkspace implements Workspace {
     return { workdir, baseSha: 'base000' }
   }
 
+  /** What the next commits return, in order; a null is a commit with nothing to commit. */
+  commitResults: (string | null)[] = []
+  /** The commit the fix branch points at; commits and resets move it. Starts at the checks commit of `failing`. */
+  branchTip = 'sha1'
+
+  async head(_workdir: string): Promise<string> {
+    return this.branchTip
+  }
+
   async commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null> {
-    this.commits.push(message)
     this.log.push(`commit ${workdir}${opts?.allowEmpty === true ? ' allowEmpty' : ''}`)
-    return `sha${this.commits.length}`
+    const scripted = this.commitResults.shift()
+    if (scripted === null) return null
+    this.commits.push(message)
+    this.branchTip = scripted ?? `sha${this.commits.length}`
+    return this.branchTip
   }
 
   async reset(workdir: string, sha: string): Promise<void> {
+    this.branchTip = sha
     this.resets.push(sha)
     this.log.push(`reset ${workdir} ${sha}`)
   }

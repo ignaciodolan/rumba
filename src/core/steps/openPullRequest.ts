@@ -1,4 +1,5 @@
 import type { RumbaConfig } from '../../config/load.js'
+import { inertTitle } from './build.js'
 import type { Deps } from '../../ports/deps.js'
 import { hasUnverified, renderPullRequestBody } from '../evidence.js'
 import { outsideScope } from '../guards.js'
@@ -16,7 +17,7 @@ export async function openPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ti
   await deps.codeHost.pushBranch(workdir, branch, { force: true })
 
   const url = await deps.codeHost.openPullRequest({
-    title: `${ticket.title} (${ticket.ref})`,
+    title: `${inertTitle(ticket.title)} (${ticket.ref})`,
     body: renderPullRequestBody({ ticket, rumba, state, outsideScope: outside, secrets: deps.secrets }),
     head: branch,
     base: await deps.codeHost.defaultBranch(),

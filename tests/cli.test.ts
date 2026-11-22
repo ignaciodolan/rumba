@@ -39,6 +39,18 @@ describe('rumba', () => {
     for (const c of ['run', 'status', 'init']) expect(help).toMatch(new RegExp(`^\\s+${c}\\b`, 'm'))
   })
 
+  it('prints where the records of the agent calls are, when there are any', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises'); const { tmpdir } = await import('node:os'); const path = await import('node:path')
+    const dir = await mkdtemp(path.join(tmpdir(), 'rumba-cli-records-'))
+    try {
+      const summary: RunSummary = { rumba: 'hub', advanced: [], left: [] }
+      const h = harness({ runRumba: async () => summary, recordsDir: () => dir })
+      await h.parse('run', '--name', 'hub')
+      expect(h.out).toContain(`Agent records: ${dir}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
   it('prints one line per ticket from the run summary', async () => {
     const summary: RunSummary = { rumba: 'hub', advanced: [{ ticket: '12', from: 'queued', to: 'pr_open' }], left: [{ ticket: '13', why: 'awaiting criteria' }] }
     const h = harness({ runRumba: async () => summary })

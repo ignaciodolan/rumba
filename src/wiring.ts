@@ -4,12 +4,16 @@ import { Octokit } from '@octokit/rest'
 import { ClaudeCodeAgent } from './adapters/agent/claudeCode.js'
 import { GeminiCliAgent } from './adapters/agent/geminiCli.js'
 import { GitHubCodeHost } from './adapters/codeHost/github.js'
+import path from 'node:path'
 import { DockerEnvironment } from './adapters/environment/docker.js'
+import { dockerDisk, dockerProbe } from './adapters/environment/dockerProbe.js'
+import { HostLock } from './adapters/environment/hostLock.js'
+import { FileRunRecords, recordingAgent, recordsDirFor, rumbaHome } from './adapters/records.js'
 import { HttpVercelClient, VercelPreviewEnvironment } from './adapters/environment/vercelPreview.js'
 import { DockerSandbox } from './adapters/sandbox/docker.js'
 import { GitHubTracker } from './adapters/tracker/github.js'
 import { LinearTracker, SdkLinearGateway } from './adapters/tracker/linear.js'
-import { GitWorkspace } from './adapters/workspace/git.js'
+import { GitWorkspace, RUMBA_IDENTITY } from './adapters/workspace/git.js'
 import type { RumbaConfig } from './config/load.js'
 import { redact, redactDeep } from './core/redact.js'
 import { STATE_NAMES } from './core/states.js'
@@ -110,7 +114,13 @@ function environmentFor(rumba: RumbaConfig, env: Env, codeHost: CodeHost, sandbo
   const e = rumba.environment
   // Host-side commands run in checkouts of the default branch that the workspace hands out.
   if (e.kind === 'docker') {
-    return new DockerEnvironment({ up: e.up, exec: e.exec, down: e.down, trusted: workspace, timeoutMs: e.commandTimeoutMinutes * 60_000 })
+    return new DockerEnvironment({
+      up: e.up, exec: e.exec, down: e.down, trusted: workspace, timeoutMs: e.commandTimeoutMinutes * 60_000,
+      // One docker environment at a time on this machine, across Rumba processes.
+      lock: new HostLock({ file: path.join(rumbaHome(env), 'environment.lock') }),
+      docker: dockerProbe,
+      ...(e.minFreeDiskGb > 0 ? { disk: dockerDisk, minFreeBytes: e.minFreeDiskGb * 2 ** 30 } : {}),
+    })
   }
   const why = `Rumba "${rumba.name}" uses the vercel-preview environment`
   const token = required(env, 'VERCEL_TOKEN', `${why}.`)
@@ -162,15 +172,24 @@ export function buildDeps(
   repo: { root: string; owner: string; name: string; defaultBranch: string },
 ): Deps {
   const token = githubToken(rumba, env)
+  // A commit author set half way is a mistake to report now, not to fall back from later.
+  if ((value(env, 'RUMBA_COMMIT_AUTHOR_NAME') === undefined) !== (value(env, 'RUMBA_COMMIT_AUTHOR_EMAIL') === undefined)) {
+    throw new MissingKeyError('RUMBA_COMMIT_AUTHOR_NAME and RUMBA_COMMIT_AUTHOR_EMAIL must be set together.')
+  }
   const octokit = new Octokit({ auth: token })
   const tracker = trackerFor(rumba, env, repo, () => octokit)
   // Always Rumba's own Dockerfile; the rumba chooses only the Node major version.
   const sandbox = new DockerSandbox({ dockerfileDir: SANDBOX_DIR, nodeVersion: rumba.sandbox.nodeVersion })
-  const agent = agentFor(rumba, env, sandbox)
-  const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
-  const workspace = new GitWorkspace({ repoRoot: repo.root, defaultBranch: repo.defaultBranch })
-  const environment = environmentFor(rumba, env, codeHost, sandbox, workspace)
   const secrets = secretValues(env)
+  const runId = randomUUID()
+  // Every agent call leaves a record under the run's folder, which `rumba run` prints at the end.
+  const agent = recordingAgent(agentFor(rumba, env, sandbox), new FileRunRecords(recordsDirFor(runId, env)), secrets)
+  const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
+  const workspace = new GitWorkspace({
+    repoRoot: repo.root, defaultBranch: repo.defaultBranch,
+    author: () => resolveCommitAuthor(env, rumba.commitAuthor, () => githubAccount(octokit)),
+  })
+  const environment = environmentFor(rumba, env, codeHost, sandbox, workspace)
   return {
     tracker: redactingTracker(tracker, secrets),
     agent,
@@ -178,7 +197,46 @@ export function buildDeps(
     codeHost: redactingCodeHost(codeHost, secrets),
     workspace,
     clock: () => new Date(),
-    runId: randomUUID(),
+    runId,
     secrets,
   }
+}
+
+/** The GitHub account a token belongs to: GraphQL viewer, then REST GET /user. Null when neither answers. */
+export async function githubAccount(octokit: Octokit): Promise<{ login: string; id: number } | null> {
+  try {
+    const r = await octokit.graphql<{ viewer: { login: string; databaseId: number } }>('query { viewer { login databaseId } }')
+    if (r.viewer.login && Number.isInteger(r.viewer.databaseId)) return { login: r.viewer.login, id: r.viewer.databaseId }
+  } catch {
+    // Some tokens cannot ask for the viewer; try the REST endpoint.
+  }
+  try {
+    const { data } = await octokit.rest.users.getAuthenticated()
+    return { login: data.login, id: data.id }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Who Rumba's commits are made as, in this order: RUMBA_COMMIT_AUTHOR_NAME and
+ * RUMBA_COMMIT_AUTHOR_EMAIL; `commit_author` in rumba.yml; the GitHub account Rumba runs as,
+ * with its noreply address, so integrations that check the author (a deployment that needs
+ * the author to be a member, say) recognise it; and last, Rumba's own identity.
+ */
+export async function resolveCommitAuthor(
+  env: Env, fromConfig: { name: string; email: string } | undefined, lookup: () => Promise<{ login: string; id: number } | null>,
+): Promise<{ name: string; email: string }> {
+  const name = value(env, 'RUMBA_COMMIT_AUTHOR_NAME')
+  const email = value(env, 'RUMBA_COMMIT_AUTHOR_EMAIL')
+  if (name !== undefined || email !== undefined) {
+    if (name === undefined || email === undefined) {
+      throw new MissingKeyError('RUMBA_COMMIT_AUTHOR_NAME and RUMBA_COMMIT_AUTHOR_EMAIL must be set together.')
+    }
+    return { name, email }
+  }
+  if (fromConfig !== undefined) return fromConfig
+  const account = await lookup().catch(() => null)
+  if (account !== null) return { name: account.login, email: `${account.id}+${account.login}@users.noreply.github.com` }
+  return RUMBA_IDENTITY
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { Command, CommanderError } from 'commander'
 import { execa } from 'execa'
@@ -9,6 +9,7 @@ import { runRumba, type RunSummary } from './core/runner.js'
 import { initRumba } from './init/init.js'
 import type { Deps } from './ports/deps.js'
 import type { Tracker } from './ports/tracker.js'
+import { recordsDirFor } from './adapters/records.js'
 import { buildDeps, buildTracker, parseRemote, secretValues } from './wiring.js'
 
 export interface Io {
@@ -33,6 +34,8 @@ export interface CliOverrides {
   buildTracker?: (rumba: RumbaConfig, env: Env, repo: { owner: string; name: string }) => Tracker
   runRumba?: (deps: Deps, rumba: RumbaConfig, opts: { ticketId?: string }) => Promise<RunSummary>
   listStatus?: (tracker: Tracker, rumba: RumbaConfig) => Promise<StatusLine[]>
+  /** The folder where a run keeps its records of agent calls. */
+  recordsDir?: (runId: string) => string
 }
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {
@@ -89,6 +92,7 @@ export function buildProgram(io: Io, overrides: CliOverrides = {}): Command {
     buildTracker,
     runRumba,
     listStatus: trackerStatus,
+    recordsDir: (runId: string) => recordsDirFor(runId, overrides.env ?? process.env),
     ...overrides,
   }
   const secrets = secretValues(o.env)
@@ -140,6 +144,8 @@ export function buildProgram(io: Io, overrides: CliOverrides = {}): Command {
           const summary = await o.runRumba(deps, rumba, opts.ticket === undefined ? {} : { ticketId: opts.ticket })
           for (const a of summary.advanced) io.out(`${summary.rumba} ${a.ticket} ${a.from} → ${a.to}`)
           for (const l of summary.left) io.out(`${summary.rumba} ${l.ticket} left: ${l.why}`)
+          const records = o.recordsDir(deps.runId)
+          if (existsSync(records)) io.out(`Agent records: ${records}`)
         } catch (e) {
           fail(`${rumba.name}: ${messageOf(e)}`)
         }

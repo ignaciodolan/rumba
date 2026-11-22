@@ -1,4 +1,4 @@
-import type { Check, Criterion, Kind, LinkedDocument, Ticket } from '../core/types.js'
+import type { Check, Criterion, Kind, LinkedDocument, ProjectTestsResult, Ticket } from '../core/types.js'
 
 export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix'
 
@@ -18,9 +18,20 @@ export interface AgentTask {
   execPrefix?: string
   /** The time the ticket has left; the call is stopped once it is spent. */
   timeoutMs?: number
+  /** Fix tasks: which attempt this is, from 1. */
+  attempt?: number
+  /** Fix tasks: how each check did in the last run. */
+  checkStatus?: { criterionId: string; passed: boolean }[]
+  /** Fix tasks: how the project's own tests did in the last run. */
+  projectTests?: ProjectTestsResult
 }
 
-export type AgentResult =
+export type AgentResult = AgentResultBody & {
+  /** The last part of what the agent printed, for the run's records. Never stored on the ticket. */
+  transcript?: string
+}
+
+export type AgentResultBody =
   | {
     kind: 'triage'; workable: boolean; reason: string; ticketKind: Kind; criteria: Criterion[] | null
     /** 'written': copied from the ticket, a file it names or a document. 'derived': the agent's own wording. */
@@ -30,7 +41,11 @@ export type AgentResult =
   }
   | { kind: 'draft-criteria'; criteria: Criterion[] }
   | { kind: 'write-checks'; checks: Check[] }
-  | { kind: 'fix'; summary: string }
+  | {
+    kind: 'fix'; summary: string
+    /** Set when the agent found no change was needed; the reason. */
+    noChangeNeeded?: string
+  }
 
 export interface Agent {
   run(task: AgentTask, workdir: string): Promise<AgentResult>

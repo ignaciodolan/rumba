@@ -7,6 +7,8 @@ export interface Workspace {
   /** Null when there is nothing to commit, unless `allowEmpty` asks for a commit anyway. */
   commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null>
   reset(workdir: string, sha: string): Promise<void>
+  /** The commit the workdir's branch points at. */
+  head(workdir: string): Promise<string>
   changedFiles(workdir: string, sinceSha: string): Promise<string[]>
   hashFiles(workdir: string, files: string[]): Promise<Record<string, string>>
   /** Never throws: a workdir that cannot be removed is left behind, and its branch is freed. */

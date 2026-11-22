@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { execa } from 'execa'
-import type { Environment, EnvHandle, EnvRef } from '../../ports/environment.js'
+import { type Environment, type EnvHandle, type EnvRef, InfrastructureError } from '../../ports/environment.js'
+import type { DiskProbe, DockerProbe } from './dockerProbe.js'
+import { classifyInfrastructure } from './infrastructure.js'
 import type { Check, CheckResult } from '../../core/types.js'
 
 /** Runs one host-side command. `env` is added to the command's environment. */
@@ -102,19 +104,49 @@ export class DockerEnvironment implements Environment {
   private readonly run: Exec
   private readonly timeoutMs: number
 
-  constructor(private readonly o: { up: string; exec: string; down: string; trusted: TrustedCheckouts; run?: Exec; timeoutMs?: number }) {
+  constructor(private readonly o: {
+    up: string; exec: string; down: string; trusted: TrustedCheckouts; run?: Exec; timeoutMs?: number
+    /** Held from before `up` until after `down`, so that one environment runs at a time on the machine. */
+    lock?: { acquire(timeoutMs: number): Promise<void>; release(): Promise<void> }
+    /** Asked after a failed command whether Docker saw an out-of-memory kill. */
+    docker?: DockerProbe
+    /** Asked before `up` how much disk Docker has left. */
+    disk?: DiskProbe
+    minFreeBytes?: number
+  }) {
     this.run = o.run ?? shellRunner
     this.timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS
   }
 
   async up(ref: EnvRef, workdir: string): Promise<EnvHandle> {
-    const upDir = await this.o.trusted.trustedCheckout(ref.branch)
+    // The ticket's deadline is fixed now, so waiting for another Rumba process's environment
+    // counts toward this ticket's time and leaves less for the commands.
     const deadline = ref.timeoutMs === undefined ? undefined : Date.now() + ref.timeoutMs
+    try {
+      await this.o.lock?.acquire(ref.timeoutMs ?? this.timeoutMs)
+    } catch (e) {
+      // Another Rumba process held the machine's environment for too long: the machine, not the change.
+      throw new InfrastructureError(e instanceof Error ? e.message : String(e))
+    }
+    try {
+      await this.checkDisk()
+    } catch (e) {
+      await this.o.lock?.release()
+      throw e
+    }
+    let upDir: string
+    try {
+      upDir = await this.o.trusted.trustedCheckout(ref.branch)
+    } catch (e) {
+      await this.o.lock?.release()
+      throw e
+    }
     const host = { branch: ref.branch, project: `rumba-${randomUUID().replaceAll('-', '').slice(0, 16)}`, upDir, deadline }
     const handle: EnvHandle = { workdir, host }
-    let result: { exitCode: number; output: string }
+    let result: { exitCode: number; output: string; infrastructure?: string }
     try {
-      result = await this.start(handle, upDir, this.o.up)
+      const started = Date.now()
+      result = await this.withDiagnosis(handle, started, await this.start(handle, upDir, this.o.up))
       // A container that `up` started may have written into the folder while `up` was still
       // reading from it. That cannot be undone, so the run stops here.
       await this.o.trusted.verifyTrusted(upDir)
@@ -124,18 +156,39 @@ export class DockerEnvironment implements Environment {
     }
     if (result.exitCode !== 0) {
       await this.down(handle)
-      throw new Error(`environment up failed (exit ${result.exitCode}): ${result.output}`)
+      const message = `environment up failed (exit ${result.exitCode}): ${result.output}`
+      if (result.infrastructure !== undefined) throw new InfrastructureError(`The environment did not come up because ${result.infrastructure}. ${message}`)
+      throw new Error(message)
     }
     return handle
   }
 
   async runCheck(h: EnvHandle, check: Check): Promise<CheckResult> {
     const r = await this.runInside(h, check.command)
-    return { criterionId: check.criterionId, passed: r.exitCode === 0, exitCode: r.exitCode, output: r.output }
+    return { criterionId: check.criterionId, passed: r.exitCode === 0, exitCode: r.exitCode, output: r.output, ...(r.infrastructure ? { infrastructure: r.infrastructure } : {}) }
   }
 
-  async runCommand(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
+  async runCommand(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string; infrastructure?: string }> {
     return this.runInside(h, command)
+  }
+
+  /** Fails before `up` when Docker has too little disk left, instead of failing later as broken tests. */
+  private async checkDisk(): Promise<void> {
+    if (this.o.disk === undefined || this.o.minFreeBytes === undefined) return
+    const free = await this.o.disk.freeBytes().catch(() => null)
+    if (free === null || free >= this.o.minFreeBytes) return
+    const gb = (n: number) => (n / 2 ** 30).toFixed(1)
+    throw new InfrastructureError(`Not enough disk space for Docker: ${gb(free)} GB free, at least ${gb(this.o.minFreeBytes)} GB needed. Free some with \`docker system prune\`, or give Docker a larger disk.`)
+  }
+
+  /** Adds, to a failed command's result, whether it died of the machine, asking Docker first. */
+  private async withDiagnosis(
+    h: EnvHandle, started: number, r: { exitCode: number; output: string },
+  ): Promise<{ exitCode: number; output: string; infrastructure?: string }> {
+    if (r.exitCode === 0) return r
+    const dockerOom = h.host === undefined || this.o.docker === undefined ? false : await this.o.docker.outOfMemorySince(h.host.project, started).catch(() => false)
+    const infrastructure = classifyInfrastructure({ exitCode: r.exitCode, output: r.output, dockerOom })
+    return infrastructure === undefined ? r : { ...r, infrastructure }
   }
 
   /**
@@ -155,10 +208,12 @@ export class DockerEnvironment implements Environment {
     } catch {
       // A checkout left behind is pruned by a later run.
     }
+    await this.o.lock?.release().catch(() => undefined)
   }
 
-  private runInside(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string }> {
-    return this.inNewCheckout(h, `${this.o.exec} sh -c ${shellQuote(command)}`)
+  private async runInside(h: EnvHandle, command: string): Promise<{ exitCode: number; output: string; infrastructure?: string }> {
+    const started = Date.now()
+    return this.withDiagnosis(h, started, await this.inNewCheckout(h, `${this.o.exec} sh -c ${shellQuote(command)}`))
   }
 
   /** Runs one command in a trusted checkout made for it and removed after it. */

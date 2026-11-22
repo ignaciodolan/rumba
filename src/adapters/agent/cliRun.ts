@@ -3,6 +3,8 @@ import type { Sandbox } from '../../ports/sandbox.js'
 import { clearAgentResult, readAgentResult } from './result.js'
 
 const OUTPUT_TAIL = 2000
+/** How much of what the CLI printed is kept with the result, for the run's records. */
+const TRANSCRIPT_TAIL = 20_000
 
 /** Shared by the CLI agents: clear the old result, run the CLI in the sandbox, read the new result. */
 export async function runCliAgent(o: {
@@ -22,5 +24,6 @@ export async function runCliAgent(o: {
     const reason = exitCode === 124 ? `timed out after ${timeoutMs} ms` : `exited with code ${exitCode}`
     throw new AgentError(`${o.name} ${reason}:\n${output === '' ? '(no output)' : output.slice(-OUTPUT_TAIL)}`)
   }
-  return readAgentResult(o.workdir, o.task.kind)
+  const result = await readAgentResult(o.workdir, o.task.kind)
+  return output === '' ? result : { ...result, transcript: output.slice(-TRANSCRIPT_TAIL) }
 }

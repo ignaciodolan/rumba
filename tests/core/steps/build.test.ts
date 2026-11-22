@@ -120,13 +120,14 @@ describe('build', () => {
   it('runs each attempt in a new agent worktree and the environment in a new checkout after it', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.environment.passes = () => false; trace(d)
     await build(d, makeRumba(), makeTicket(), failing(d))
-    const [a1, a2] = d.agent.workdirs; const [e1, e2] = d.environment.upWorkdirs
-    expect(new Set([a1, a2, e1, e2]).size).toBe(4)
-    const attempt = (a: string | undefined, e: string | undefined) => [
-      `prepare rumba/hub/123 existing ${a}`, `commit ${a}`, `cleanup ${a}`,
-      `prepare rumba/hub/123 existing ${e}`, `hash ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`,
+    // A failed verification runs once more in a fresh checkout and environment before it counts.
+    const [a1, a2] = d.agent.workdirs; const [e1, f1, e2, f2] = d.environment.upWorkdirs
+    expect(new Set([a1, a2, e1, f1, e2, f2]).size).toBe(6)
+    const env = (e: string | undefined) => [`prepare rumba/hub/123 existing ${e}`, `hash ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`]
+    const attempt = (a: string | undefined, e: string | undefined, f: string | undefined) => [
+      `prepare rumba/hub/123 existing ${a}`, `commit ${a}`, `cleanup ${a}`, ...env(e), ...env(f),
     ]
-    expect(d.workspace.log).toEqual([...attempt(a1, e1), ...attempt(a2, e2)])
+    expect(d.workspace.log).toEqual([...attempt(a1, e1, f1), ...attempt(a2, e2, f2)])
   })
   it('resets and cleans up the agent worktree on a guard violation, and prepares no environment', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.workspace.changed = ['.github/workflows/ci.yml']; trace(d)

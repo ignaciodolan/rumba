@@ -1,5 +1,6 @@
 import type { RumbaConfig } from '../../config/load.js'
 import { AgentError } from '../../ports/agent.js'
+import { InfrastructureError } from '../../ports/environment.js'
 import type { Deps } from '../../ports/deps.js'
 import { timeLeft } from '../budget.js'
 import { protectedViolations } from '../guards.js'
@@ -57,7 +58,11 @@ export async function reproduce(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
       const before: CheckResult[] = []
       const max = checkOutputMax(checks.length)
       for (const check of checks) {
-        const r = await deps.environment.runCheck(handle, check)
+        let r = await deps.environment.runCheck(handle, check)
+        // A check that died of the machine says nothing about the code: run it once more, and
+        // if it dies again, stop with an error rather than take it as a failure on the base.
+        if (r.infrastructure) r = await deps.environment.runCheck(handle, check)
+        if (r.infrastructure) throw new InfrastructureError(`The check for ${check.criterionId} failed twice on the base commit because ${r.infrastructure}.`)
         before.push({ ...r, output: cleanOutput(r.output, deps.secrets, max) })
       }
       current = { ...current, before }
