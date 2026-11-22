@@ -96,13 +96,15 @@ export function judgeRelocation(i: RelocationInput): string | null {
     }
   }
 
+  // A check that imports another moved file (a shared fixture, say) now imports it from its new place.
+  const renames = new Map(i.moves.flatMap((m) => moduleNames(m.from).map((name, n) => [name, moduleNames(m.to)[n]!] as [string, string])))
   for (const move of i.moves) {
     const original = i.original.find((c) => c.files.includes(move.from))!
     const text = i.before[move.from] ?? ''
     // A command that picks tests by title would run fewer of them once a title changed.
     const bare = original.files.reduce((c, f) => c.split(f).join(' '), original.command)
     const keepTitles = NAME_FILTER.test(bare) || titlesIn(text).some((t) => t.length > 0 && bare.includes(t))
-    const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles)
+    const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles, renames)
     if (reason !== null) return reason
   }
   return null
@@ -128,11 +130,22 @@ const TEST_TOP = /^(?:(?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(|
 /** Lines that set up or mock what every test in a file sees. */
 const HOOKS = /\b(?:before(?:Each|All)|after(?:Each|All)|setUp|tearDown|setup_method|setup_function|setup_module|setup_class|teardown_\w+|autouse|usefixtures|vi\.(?:mock|doMock|spyOn|stubGlobal|stubEnv|useFakeTimers)|jest\.(?:mock|doMock|spyOn|useFakeTimers)|mock\.patch|monkeypatch|TestMain)\b/
 
+/** Words of a file name that mark a file which sets up or configures tests, or helps them, rather than holding them. */
+const NOT_A_TEST = new Set(['config', 'setup', 'setupfiles', 'globalsetup', 'teardown', 'globalteardown', 'helper', 'helpers', 'conftest', 'support'])
+/** Folders whose files are loaded by the test runner on its own: mocks, fixtures, and Cypress-style support files. */
+const NOT_A_TEST_FOLDER = new Set(['__mocks__', '__fixtures__', 'support'])
+
+/** The lower-case words of a file name: split at dots, dashes, underscores and camelCase. */
+export function wordsOf(name: string): string[] {
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter((w) => w !== '').map((w) => w.toLowerCase())
+}
+
 /** A path a test runner would pick up, or a file in a test folder, and never a file that configures the tests. */
 export function isTestPath(file: string): boolean {
   const name = path.posix.basename(file)
   if (name.startsWith('.') || /^(?:conftest\.py|__init__\.py|setup\.(?:py|cfg)|pytest\.ini|tox\.ini|package\.json|Makefile)$/i.test(name)) return false
-  if (/config|setup|teardown|helper|conftest|support/i.test(name) || file.split('/').some((part) => part === '__mocks__' || part === '__fixtures__')) return false
+  // By whole words of the name, so that `unsupported-blocks.test.ts` is not taken for a support file.
+  if (wordsOf(name).some((w) => NOT_A_TEST.has(w)) || file.split('/').slice(0, -1).some((part) => NOT_A_TEST_FOLDER.has(part.toLowerCase()))) return false
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name) || /^test_\w+\.py$/.test(name) || /_test\.(?:py|go)$/.test(name) || /Tests?\.(?:java|kt|cs)$/.test(name)) return true
   return path.posix.dirname(file).split('/').some((part) => /^(?:tests?|__tests__|specs?|e2e)$/.test(part))
 }
@@ -152,10 +165,15 @@ interface Parsed {
 }
 
 /** Whether `after` is `before` plus the moved checks, as described above. */
-function sameFile(to: string, before: string | null, after: string, sources: { file: string; text: string }[], keepTitles: boolean): string | null {
+function sameFile(
+  to: string, before: string | null, after: string, sources: { file: string; text: string }[], keepTitles: boolean, renames: Map<string, string>,
+): string | null {
   const now = parse(to, after, keepTitles)
   const was = parse(to, before ?? '', keepTitles)
-  const moved = sources.map((s) => ({ file: s.file, ...parse(s.file, s.text, keepTitles) }))
+  const moved = sources.map((s) => {
+    const p = parse(s.file, s.text, keepTitles)
+    return { file: s.file, ...p, bindings: new Map([...p.bindings].map(([name, t]) => [name, renamed(t, renames)])), effects: new Set([...p.effects].map((t) => renamed(t, renames))) }
+  })
   // A file's hooks and mocks apply to every test in it, the moved check too.
   const hook = (before ?? '').split(/\r?\n/).find((l) => HOOKS.test(l))
   if (hook !== undefined) return `${code(to)} has hooks or mocks that would apply to the check, so it cannot take one: ${code(hook.trim())}.`
@@ -411,7 +429,26 @@ function readImport(file: string, line: string, bind: (name: string, target: str
 
 /** A relative module, as the repository path it names; any other module as written. */
 function jsModule(file: string, spec: string): string {
-  return spec.startsWith('./') || spec.startsWith('../') ? `js:${path.posix.normalize(path.posix.join(path.posix.dirname(file), spec))}` : `js:${spec}`
+  return spec.startsWith('./') || spec.startsWith('../') ? `js:${withoutExtension(path.posix.normalize(path.posix.join(path.posix.dirname(file), spec)))}` : `js:${spec}`
+}
+
+/** `./x.js` names the TypeScript file `x.ts` too, so a relative module is compared without its extension. */
+function withoutExtension(p: string): string {
+  return p.replace(/\.(?:[cm]?[jt]sx?)$/, '')
+}
+
+/** The module names a repository file is imported by: as a JavaScript module and as a Python one. */
+function moduleNames(file: string): string[] {
+  const bare = file.replace(/\.py$/, '')
+  return [`js:${withoutExtension(file)}`, `py:${bare}`, `py:${bare.replace(/\//g, '.')}`]
+}
+
+/** A binding's target with its module replaced by the module's new place, when it moved. */
+function renamed(target: string, renames: Map<string, string>): string {
+  const hash = target.indexOf('#')
+  const mod = hash < 0 ? target : target.slice(0, hash)
+  const to = renames.get(mod)
+  return to === undefined ? target : `${to}${hash < 0 ? '' : target.slice(hash)}`
 }
 
 function pyModule(file: string, spec: string): string {

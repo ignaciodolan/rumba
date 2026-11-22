@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { Octokit } from '@octokit/rest'
+import { execa } from 'execa'
 import { ClaudeCodeAgent } from './adapters/agent/claudeCode.js'
 import { GeminiCliAgent } from './adapters/agent/geminiCli.js'
 import { GitHubCodeHost } from './adapters/codeHost/github.js'
@@ -187,7 +188,7 @@ export function buildDeps(
   const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
   const workspace = new GitWorkspace({
     repoRoot: repo.root, defaultBranch: repo.defaultBranch,
-    author: () => resolveCommitAuthor(env, rumba.commitAuthor, () => githubAccount(octokit)),
+    author: () => resolveCommitAuthor(env, rumba.commitAuthor, () => githubAccount(octokit), () => cloneIdentity(repo.root)),
   })
   const environment = environmentFor(rumba, env, codeHost, sandbox, workspace)
   return {
@@ -219,13 +220,32 @@ export async function githubAccount(octokit: Octokit): Promise<{ login: string; 
 }
 
 /**
+ * The `user.name` and `user.email` git uses in the clone Rumba runs from, wherever they are
+ * set (the clone, the user's global config), or null unless both are. Read from the clone, a
+ * checkout a person made, never from a folder an agent wrote in.
+ */
+export async function cloneIdentity(root: string, env: NodeJS.ProcessEnv = process.env): Promise<{ name: string; email: string } | null> {
+  const get = async (key: string) => {
+    // Without variables that would point git at another repository than the clone.
+    const own = Object.fromEntries(Object.entries(env).filter(([k]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR'].includes(k)))
+    const r = await execa('git', ['config', '--get', key], { cwd: root, env: own, extendEnv: false, stdin: 'ignore', reject: false })
+    return r.exitCode === 0 ? r.stdout.trim() : ''
+  }
+  const name = await get('user.name')
+  const email = await get('user.email')
+  return name !== '' && email !== '' ? { name, email } : null
+}
+
+/**
  * Who Rumba's commits are made as, in this order: RUMBA_COMMIT_AUTHOR_NAME and
- * RUMBA_COMMIT_AUTHOR_EMAIL; `commit_author` in rumba.yml; the GitHub account Rumba runs as,
- * with its noreply address, so integrations that check the author (a deployment that needs
- * the author to be a member, say) recognise it; and last, Rumba's own identity.
+ * RUMBA_COMMIT_AUTHOR_EMAIL; `commit_author` in rumba.yml; the git identity of the clone
+ * Rumba runs from, which integrations that check the author (a Vercel project that only
+ * deploys commits by its members, say) match to the person who set the clone up; the GitHub
+ * account Rumba runs as, with its noreply address; and last, Rumba's own identity.
  */
 export async function resolveCommitAuthor(
   env: Env, fromConfig: { name: string; email: string } | undefined, lookup: () => Promise<{ login: string; id: number } | null>,
+  fromClone: () => Promise<{ name: string; email: string } | null> = async () => null,
 ): Promise<{ name: string; email: string }> {
   const name = value(env, 'RUMBA_COMMIT_AUTHOR_NAME')
   const email = value(env, 'RUMBA_COMMIT_AUTHOR_EMAIL')
@@ -236,6 +256,8 @@ export async function resolveCommitAuthor(
     return { name, email }
   }
   if (fromConfig !== undefined) return fromConfig
+  const clone = await fromClone().catch(() => null)
+  if (clone !== null) return clone
   const account = await lookup().catch(() => null)
   if (account !== null) return { name: account.login, email: `${account.id}+${account.login}@users.noreply.github.com` }
   return RUMBA_IDENTITY

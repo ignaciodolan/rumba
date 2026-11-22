@@ -11,7 +11,9 @@ import path from 'node:path'
 import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { isTestPath, judgeRelocation } from '../../src/core/relocation.js'
-import { cloneIdentity, resolveCommitAuthor } from '../../src/wiring.js'
+import { writeFile } from 'node:fs/promises'
+import { makeRumba } from '../../src/testing/fakes.js'
+import { buildDeps, cloneIdentity, resolveCommitAuthor } from '../../src/wiring.js'
 
 describe('a destination named like an ordinary test', () => {
   it('is a test file, whatever words its name holds', () => {
@@ -147,5 +149,27 @@ describe('cloneIdentity', () => {
     expect(await cloneIdentity(root, isolated)).toBeNull()
     await git('config', 'user.name', 'Repo Owner')
     expect(await cloneIdentity(root, isolated)).toBeNull()
+  })
+})
+
+describe('the wiring', () => {
+  let root: string
+  beforeEach(async () => { root = await realpath(await mkdtemp(path.join(tmpdir(), 'rumba-wired-author-'))) })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  it("commits as the clone's git identity when rumba.yml names no author", async () => {
+    const git = (cwd: string, ...args: string[]) => execa('git', ['-c', 'init.defaultBranch=main', '-c', 'commit.gpgsign=false', ...args], { cwd, stdin: 'ignore' })
+    const remote = path.join(root, 'remote.git'); await mkdir(remote); await git(remote, 'init', '-q', '--bare')
+    await git(root, 'clone', '-q', remote, 'clone'); const clone = path.join(root, 'clone')
+    // A local identity wins over any global one on the machine running the tests.
+    await git(clone, 'config', 'user.name', 'Repo Owner'); await git(clone, 'config', 'user.email', 'owner@example.test')
+    await writeFile(path.join(clone, 'a'), 'x'); await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'i'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+
+    const deps = buildDeps(makeRumba(), { GITHUB_TOKEN: 'g', ANTHROPIC_API_KEY: 'a' }, { root: clone, owner: 'acme', name: 'shop', defaultBranch: 'main' })
+    const { workdir } = await deps.workspace.prepare('rumba/hub/1', { fresh: true })
+    await writeFile(path.join(workdir, 'b'), 'y')
+    await deps.workspace.commit(workdir, 'fix: b')
+    expect((await git(clone, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', 'rumba/hub/1')).stdout).toBe('Repo Owner <owner@example.test> / Repo Owner <owner@example.test>')
+    await deps.workspace.cleanupAll()
   })
 })
