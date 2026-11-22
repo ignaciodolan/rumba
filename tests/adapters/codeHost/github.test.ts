@@ -19,7 +19,7 @@ function makeHost(o: { html_url?: string; existing?: Pull[]; remoteUrl?: string;
     route('GET', /^\/repos\/o\/r$/, () => ({ default_branch: 'trunk' })),
     route('POST', /^\/repos\/o\/r\/pulls$/, (req) => {
       requests.push(req.body)
-      if (pulls.some((p) => p.head === req.body.head)) throw httpError(422, 'A pull request already exists for o:rumba/hub/1.')
+      if (pulls.some((p) => p.head === req.body.head)) throw httpError(422, 'A pull request already exists for o:rumba/shop/1.')
       return { number: 7, html_url: o.html_url ?? 'https://github.com/o/r/pull/7' }
     }),
     route('GET', /^\/repos\/o\/r\/pulls$/, (req) =>
@@ -41,14 +41,14 @@ function makeHost(o: { html_url?: string; existing?: Pull[]; remoteUrl?: string;
 describe('GitHubCodeHost API calls', () => {
   it('opens a pull request and returns its URL', async () => {
     const { host, requests } = makeHost({ html_url: 'https://github.com/o/r/pull/7' })
-    expect(await host.openPullRequest({ title: 'T', body: 'B', head: 'rumba/hub/1', base: 'main', draft: true })).toBe('https://github.com/o/r/pull/7')
-    expect(requests[0]).toMatchObject({ title: 'T', head: 'rumba/hub/1', base: 'main', draft: true })
+    expect(await host.openPullRequest({ title: 'T', body: 'B', head: 'rumba/shop/1', base: 'main', draft: true })).toBe('https://github.com/o/r/pull/7')
+    expect(requests[0]).toMatchObject({ title: 'T', head: 'rumba/shop/1', base: 'main', draft: true })
   })
 
   it('updates and returns the open pull request when one already exists for the head', async () => {
-    const existing = { number: 3, html_url: 'https://github.com/o/r/pull/3', head: 'rumba/hub/1', title: 'Old', body: 'Old body' }
+    const existing = { number: 3, html_url: 'https://github.com/o/r/pull/3', head: 'rumba/shop/1', title: 'Old', body: 'Old body' }
     const { host, pulls } = makeHost({ existing: [existing] })
-    expect(await host.openPullRequest({ title: 'T', body: 'B', head: 'rumba/hub/1', base: 'main', draft: true })).toBe('https://github.com/o/r/pull/3')
+    expect(await host.openPullRequest({ title: 'T', body: 'B', head: 'rumba/shop/1', base: 'main', draft: true })).toBe('https://github.com/o/r/pull/3')
     expect(pulls[0]).toMatchObject({ title: 'T', body: 'B' })
   })
 
@@ -58,16 +58,16 @@ describe('GitHubCodeHost API calls', () => {
 
   it('deletes a branch by its ref', async () => {
     const { host, calls } = makeHost()
-    await host.deleteBranch('rumba/hub/1')
-    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/repos/o/r/git/refs/heads/rumba/hub/1' })
+    await host.deleteBranch('rumba/shop/1')
+    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/repos/o/r/git/refs/heads/rumba/shop/1' })
   })
 
   it.each([404, 422])('treats a %i for a branch that is already gone as success', async (status) => {
-    await expect(makeHost({ deleteStatus: status }).host.deleteBranch('rumba/hub/1')).resolves.toBeUndefined()
+    await expect(makeHost({ deleteStatus: status }).host.deleteBranch('rumba/shop/1')).resolves.toBeUndefined()
   })
 
   it('does not hide other delete failures', async () => {
-    await expect(makeHost({ deleteStatus: 500 }).host.deleteBranch('rumba/hub/1')).rejects.toThrow()
+    await expect(makeHost({ deleteStatus: 500 }).host.deleteBranch('rumba/shop/1')).rejects.toThrow()
   })
 })
 
@@ -134,28 +134,28 @@ describe('GitHubCodeHost.pushBranch', () => {
 
   it('creates the branch on the first push', async () => {
     const work = await workdirWith('a.txt')
-    await host().pushBranch(work, 'rumba/hub/1')
-    expect(await remoteSha('rumba/hub/1')).toBe(await headSha(work))
+    await host().pushBranch(work, 'rumba/shop/1')
+    expect(await remoteSha('rumba/shop/1')).toBe(await headSha(work))
   })
 
   it('replaces a branch left by an earlier attempt when forced', async () => {
     const h = host()
-    await h.pushBranch(await workdirWith('a.txt'), 'rumba/hub/1')
+    await h.pushBranch(await workdirWith('a.txt'), 'rumba/shop/1')
     const again = await workdirWith('b.txt')
-    await h.pushBranch(again, 'rumba/hub/1', { force: true })
-    expect(await remoteSha('rumba/hub/1')).toBe(await headSha(again))
+    await h.pushBranch(again, 'rumba/shop/1', { force: true })
+    expect(await remoteSha('rumba/shop/1')).toBe(await headSha(again))
   })
 
   it('creates the branch when forced and the branch does not exist yet', async () => {
     const work = await workdirWith('a.txt')
-    await host().pushBranch(work, 'rumba/hub/1', { force: true })
-    expect(await remoteSha('rumba/hub/1')).toBe(await headSha(work))
+    await host().pushBranch(work, 'rumba/shop/1', { force: true })
+    expect(await remoteSha('rumba/shop/1')).toBe(await headSha(work))
   })
 
   it('rejects an unrelated history without force, with no token in the error', async () => {
     const h = host()
-    await h.pushBranch(await workdirWith('a.txt'), 'rumba/hub/1')
-    const error = await h.pushBranch(await workdirWith('b.txt'), 'rumba/hub/1').then(() => null, (e: unknown) => e as Error)
+    await h.pushBranch(await workdirWith('a.txt'), 'rumba/shop/1')
+    const error = await h.pushBranch(await workdirWith('b.txt'), 'rumba/shop/1').then(() => null, (e: unknown) => e as Error)
     expect(error).toBeInstanceOf(Error)
     expect(error!.message).toMatch(/rejected/)
     expect(error!.message).not.toContain(TOKEN)
@@ -169,14 +169,14 @@ describe('GitHubCodeHost.pushBranch', () => {
     const hook = path.join(repo, '.git', 'hooks', 'pre-push')
     await writeFile(hook, `#!/bin/sh\ntouch '${marker}'\n`)
     await chmod(hook, 0o755)
-    await host().pushBranch(work, 'rumba/hub/1')
+    await host().pushBranch(work, 'rumba/shop/1')
     expect(existsSync(marker)).toBe(false)
   })
 
   it('ignores git metadata the agent planted in the workdir', async () => {
     const work = await workdirWith('a.txt')
     const h = host()
-    await h.pushBranch(work, 'rumba/hub/1')
+    await h.pushBranch(work, 'rumba/shop/1')
     await commitFile(work, 'b.txt')
     const want = await headSha(work)
     // The agent swaps the worktree's .git pointer file for a directory with its own config and hooks.
@@ -188,8 +188,8 @@ describe('GitHubCodeHost.pushBranch', () => {
     await writeFile(path.join(planted, 'hooks', 'pre-push'), `#!/bin/sh\ntouch '${marker}'\n`)
     await chmod(path.join(planted, 'hooks', 'pre-push'), 0o755)
     await writeFile(path.join(planted, 'HEAD'), 'ref: refs/heads/main\n')
-    await h.pushBranch(work, 'rumba/hub/1')
-    expect(await remoteSha('rumba/hub/1')).toBe(want)
+    await h.pushBranch(work, 'rumba/shop/1')
+    expect(await remoteSha('rumba/shop/1')).toBe(want)
     expect(existsSync(marker)).toBe(false)
   })
 
@@ -198,6 +198,6 @@ describe('GitHubCodeHost.pushBranch', () => {
     await mkdir(stray)
     await git(stray, 'init', '-q')
     await commitFile(stray, 'a.txt')
-    await expect(host().pushBranch(stray, 'rumba/hub/1')).rejects.toThrow(/not a worktree/)
+    await expect(host().pushBranch(stray, 'rumba/shop/1')).rejects.toThrow(/not a worktree/)
   })
 })

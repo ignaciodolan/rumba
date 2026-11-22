@@ -1,5 +1,5 @@
 // Two failures from a live run, after relocation shipped:
-// 1. A relocation into `tests/connectors/notion-proposals-unsupported-blocks.test.ts` was
+// 1. A relocation into `tests/importers/widgets-unsupported-fields.test.ts` was
 //    rejected as "not a test file": the name rule matched `support` inside `unsupported`.
 //    Behind it, the shared fixture the checks import had moved too, which the import check
 //    did not follow.
@@ -17,8 +17,8 @@ import { buildDeps, cloneIdentity, resolveCommitAuthor } from '../../src/wiring.
 
 describe('a destination named like an ordinary test', () => {
   it('is a test file, whatever words its name holds', () => {
-    expect(isTestPath('tests/connectors/notion-proposals-unsupported-blocks.test.ts')).toBe(true)
-    for (const ok of ['tests/services/deals.test.ts', 'tests/services/configure-pipeline.test.ts', 'tests/helpers-free/x.test.ts', 'tests/services/setupless-flow.test.ts']) expect(isTestPath(ok), ok).toBe(true)
+    expect(isTestPath('tests/importers/widgets-unsupported-fields.test.ts')).toBe(true)
+    for (const ok of ['tests/shop/orders.test.ts', 'tests/shop/configure-shipping.test.ts', 'tests/helpers-free/x.test.ts', 'tests/shop/setupless-flow.test.ts']) expect(isTestPath(ok), ok).toBe(true)
   })
 
   it('still refuses files that set up, configure or help the tests', () => {
@@ -27,37 +27,37 @@ describe('a destination named like an ordinary test', () => {
 })
 
 // A project whose tests live under tests/ (vitest `include: ['tests/**/*.test.{ts,tsx}']`),
-// with `@/` imports and shared helpers in tests/helpers/.
+// with `@/` imports and shared helpers in tests/common/.
 describe('the relocation from the live run', () => {
-  const FIXTURE_FROM = 'tests/rumba/proposals-fixture.ts'
-  const FIXTURE_TO = 'tests/helpers/proposals-fixture.ts'
+  const FIXTURE_FROM = 'tests/rumba/widgets-fixture.ts'
+  const FIXTURE_TO = 'tests/common/widgets-fixture.ts'
   const fixture = (db: string) => [
     `import { resetDb } from '${db}'`,
-    "import { createProposal } from '@/lib/proposals'",
+    "import { createWidget } from '@/lib/widgets'",
     '',
-    'export const fakeNotion = { pages: [] as unknown[] }',
+    'export const fakeSupplier = { pages: [] as unknown[] }',
     'export async function seed() {',
     '  await resetDb()',
-    "  return createProposal({ title: 'Seeded' })",
+    "  return createWidget({ title: 'Seeded' })",
     '}',
     '',
   ].join('\n')
   const check = (fixtureModule: string, title: string) => [
     "import { describe, expect, it } from 'vitest'",
-    `import { fakeNotion, seed } from '${fixtureModule}'`,
-    "import { importFromNotion } from '@/lib/connectors/notion'",
+    `import { fakeSupplier, seed } from '${fixtureModule}'`,
+    "import { importFromSupplier } from '@/lib/importers/supplier'",
     '',
     `describe('${title}', () => {`,
-    "  it('skips blocks it cannot read', async () => {",
+    "  it('skips fields it cannot read', async () => {",
     '    await seed()',
-    "    fakeNotion.pages.push({ type: 'unsupported' })",
-    '    expect((await importFromNotion(fakeNotion)).skipped).toBe(1)',
+    "    fakeSupplier.pages.push({ type: 'unsupported' })",
+    '    expect((await importFromSupplier(fakeSupplier)).skipped).toBe(1)',
     '  })',
     '})',
     '',
   ].join('\n')
-  const C1_TO = 'tests/connectors/notion-proposals-import.test.ts'
-  const C2_TO = 'tests/connectors/notion-proposals-unsupported-blocks.test.ts'
+  const C1_TO = 'tests/importers/widgets-import.test.ts'
+  const C2_TO = 'tests/importers/widgets-unsupported-fields.test.ts'
 
   function relocation() {
     return {
@@ -69,17 +69,17 @@ describe('the relocation from the live run', () => {
       ],
       changed: ['tests/rumba/c1.test.ts', 'tests/rumba/c2.test.ts', FIXTURE_FROM, C1_TO, C2_TO, FIXTURE_TO],
       before: {
-        'tests/rumba/c1.test.ts': check('./proposals-fixture', 'c1'), 'tests/rumba/c2.test.ts': check('./proposals-fixture', 'c2'),
-        [FIXTURE_FROM]: fixture('../helpers/db'), [C1_TO]: null, [C2_TO]: null, [FIXTURE_TO]: null,
+        'tests/rumba/c1.test.ts': check('./widgets-fixture', 'c1'), 'tests/rumba/c2.test.ts': check('./widgets-fixture', 'c2'),
+        [FIXTURE_FROM]: fixture('../common/db'), [C1_TO]: null, [C2_TO]: null, [FIXTURE_TO]: null,
       },
       after: {
         'tests/rumba/c1.test.ts': null, 'tests/rumba/c2.test.ts': null, [FIXTURE_FROM]: null,
-        [C1_TO]: check('../helpers/proposals-fixture', 'importing proposals from Notion'),
-        [C2_TO]: check('../helpers/proposals-fixture', 'blocks Notion proposals cannot hold'),
+        [C1_TO]: check('../common/widgets-fixture', 'importing widgets from a supplier'),
+        [C2_TO]: check('../common/widgets-fixture', 'fields a widget cannot hold'),
         [FIXTURE_TO]: fixture('./db'),
       },
       protectedGlobs: [],
-      changedByFix: ['tests/rumba/c1.test.ts', 'tests/rumba/c2.test.ts', FIXTURE_FROM, 'lib/connectors/notion.ts'],
+      changedByFix: ['tests/rumba/c1.test.ts', 'tests/rumba/c2.test.ts', FIXTURE_FROM, 'lib/importers/supplier.ts'],
     }
   }
 
@@ -89,14 +89,14 @@ describe('the relocation from the live run', () => {
 
   it('still refuses a check that imports the fixture from somewhere else', () => {
     const r = relocation()
-    r.after[C2_TO] = check('../helpers/other-fixture', 'blocks Notion proposals cannot hold')
-    expect(judgeRelocation(r)).toMatch(/fakeNotion/)
+    r.after[C2_TO] = check('../common/other-fixture', 'fields a widget cannot hold')
+    expect(judgeRelocation(r)).toMatch(/fakeSupplier/)
   })
 
   it('follows a moved module imported with a .js extension, as TypeScript ESM writes it', () => {
     const r = relocation()
-    r.before['tests/rumba/c1.test.ts'] = check('./proposals-fixture.js', 'c1')
-    r.after[C1_TO] = check('../helpers/proposals-fixture.js', 'importing proposals from Notion')
+    r.before['tests/rumba/c1.test.ts'] = check('./widgets-fixture.js', 'c1')
+    r.after[C1_TO] = check('../common/widgets-fixture.js', 'importing widgets from a supplier')
     expect(judgeRelocation(r)).toBeNull()
   })
 })
@@ -166,10 +166,10 @@ describe('the wiring', () => {
     await writeFile(path.join(clone, 'a'), 'x'); await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'i'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
 
     const deps = buildDeps(makeRumba(), { GITHUB_TOKEN: 'g', ANTHROPIC_API_KEY: 'a' }, { root: clone, owner: 'acme', name: 'shop', defaultBranch: 'main' })
-    const { workdir } = await deps.workspace.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await deps.workspace.prepare('rumba/shop/1', { fresh: true })
     await writeFile(path.join(workdir, 'b'), 'y')
     await deps.workspace.commit(workdir, 'fix: b')
-    expect((await git(clone, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', 'rumba/hub/1')).stdout).toBe('Repo Owner <owner@example.test> / Repo Owner <owner@example.test>')
+    expect((await git(clone, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', 'rumba/shop/1')).stdout).toBe('Repo Owner <owner@example.test> / Repo Owner <owner@example.test>')
     await deps.workspace.cleanupAll()
   })
 })
@@ -179,11 +179,11 @@ describe('after review: following a moved file cannot be abused', () => {
     const check = (fixture: string, helper: string) => `import { expect, it } from 'vitest'\nimport { seed } from '${fixture}'\nimport { makeUser } from '${helper}'\n\nit('c1', () => {\n  expect(seed(makeUser())).toBe(1)\n})\n`
     return {
       original: [{ criterionId: 'c1', command: 'npx vitest run tests/rumba/c1.test.ts', files: ['tests/rumba/c1.test.ts', 'tests/rumba/fixture.ts'] }],
-      moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/users/c1-seed.test.ts' }, { from: 'tests/rumba/fixture.ts', to: 'tests/helpers/factory.js' }],
-      relocated: [{ criterionId: 'c1', command: 'npx vitest run tests/users/c1-seed.test.ts', files: ['tests/users/c1-seed.test.ts', 'tests/helpers/factory.js'] }],
-      changed: ['tests/rumba/c1.test.ts', 'tests/rumba/fixture.ts', 'tests/users/c1-seed.test.ts', 'tests/helpers/factory.js'],
-      before: { 'tests/rumba/c1.test.ts': check('./fixture', '../helpers/factory'), 'tests/rumba/fixture.ts': 'export const seed = (u: unknown) => 1\n', 'tests/helpers/factory.ts': 'export const makeUser = () => ({})\n' } as Record<string, string | null>,
-      after: { 'tests/rumba/c1.test.ts': null, 'tests/rumba/fixture.ts': null, 'tests/users/c1-seed.test.ts': check('../helpers/factory', '../helpers/factory'), 'tests/helpers/factory.js': 'export const seed = (u: unknown) => 1\n' } as Record<string, string | null>,
+      moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/users/c1-seed.test.ts' }, { from: 'tests/rumba/fixture.ts', to: 'tests/common/factory.js' }],
+      relocated: [{ criterionId: 'c1', command: 'npx vitest run tests/users/c1-seed.test.ts', files: ['tests/users/c1-seed.test.ts', 'tests/common/factory.js'] }],
+      changed: ['tests/rumba/c1.test.ts', 'tests/rumba/fixture.ts', 'tests/users/c1-seed.test.ts', 'tests/common/factory.js'],
+      before: { 'tests/rumba/c1.test.ts': check('./fixture', '../common/factory'), 'tests/rumba/fixture.ts': 'export const seed = (u: unknown) => 1\n', 'tests/common/factory.ts': 'export const makeUser = () => ({})\n' } as Record<string, string | null>,
+      after: { 'tests/rumba/c1.test.ts': null, 'tests/rumba/fixture.ts': null, 'tests/users/c1-seed.test.ts': check('../common/factory', '../common/factory'), 'tests/common/factory.js': 'export const seed = (u: unknown) => 1\n' } as Record<string, string | null>,
       protectedGlobs: [], ...over,
     }
   }
@@ -202,9 +202,9 @@ describe('after review: following a moved file cannot be abused', () => {
   })
 
   it('keeps .mjs and .cjs apart from .js', () => {
-    const r = relocate('./fixture.mjs', '../helpers/fixture.js', 'tests/rumba/fixture.mjs', 'tests/helpers/fixture.mjs')
+    const r = relocate('./fixture.mjs', '../common/fixture.js', 'tests/rumba/fixture.mjs', 'tests/common/fixture.mjs')
     expect(judgeRelocation(r)).not.toBeNull()
-    expect(judgeRelocation(relocate('./fixture.mjs', '../helpers/fixture.mjs', 'tests/rumba/fixture.mjs', 'tests/helpers/fixture.mjs'))).toBeNull()
+    expect(judgeRelocation(relocate('./fixture.mjs', '../common/fixture.mjs', 'tests/rumba/fixture.mjs', 'tests/common/fixture.mjs'))).toBeNull()
   })
 
   it('follows a moved Python module, by relative and by dotted import', () => {
@@ -225,7 +225,7 @@ describe('after review: following a moved file cannot be abused', () => {
 
   it('accepts ordinary test names with setup-like words, and still refuses setup-like helpers', () => {
     for (const ok of ['tests/user-setup.test.ts', 'tests/api-config.test.ts', 'tests/helper.test.ts']) expect(isTestPath(ok), ok).toBe(true)
-    for (const no of ['tests/vitestsetup.ts', 'tests/setupenv.ts', 'tests/HTTPSetup.ts', 'tests/setup2.ts', 'tests/conftest2.py', 'tests/helpers/unsupported-blocks.ts']) expect(isTestPath(no), no).toBe(false)
+    for (const no of ['tests/vitestsetup.ts', 'tests/setupenv.ts', 'tests/HTTPSetup.ts', 'tests/setup2.ts', 'tests/conftest2.py', 'tests/common/unsupported-blocks.ts']) expect(isTestPath(no), no).toBe(false)
   })
 })
 
@@ -256,7 +256,7 @@ describe('cloneIdentity, isolated from the environment', () => {
 
 describe('moduleVariants', () => {
   it('covers what a resolver tries for a module name', () => {
-    const v = moduleVariants('tests/helpers/factory.js')
-    for (const p of ['tests/helpers/factory.ts', 'tests/helpers/factory.json', 'tests/helpers/factory.d.ts', 'tests/helpers/factory/index.mts', 'tests/helpers/factory/index.cjs', 'tests/helpers/factory/package.json', 'tests/helpers/factory/__init__.py']) expect(v, p).toContain(p)
+    const v = moduleVariants('tests/common/factory.js')
+    for (const p of ['tests/common/factory.ts', 'tests/common/factory.json', 'tests/common/factory.d.ts', 'tests/common/factory/index.mts', 'tests/common/factory/index.cjs', 'tests/common/factory/package.json', 'tests/common/factory/__init__.py']) expect(v, p).toContain(p)
   })
 })

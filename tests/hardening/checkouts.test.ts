@@ -25,11 +25,11 @@ describe('checkouts are readable by a project image built as a non-root user', (
   afterEach(async () => { process.umask(saved); await ws.cleanupAll(); await rm(root, { recursive: true, force: true }) })
 
   it('creates the files with mode 644 and folders with 755 under a caller umask of 077, and keeps the parent private', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     expect((await stat(path.join(workdir, 'src/a.js'))).mode & 0o777).toBe(0o644)
     expect((await stat(path.join(workdir, 'src'))).mode & 0o777).toBe(0o755)
     expect((await stat(path.dirname(workdir))).mode & 0o777).toBe(0o700)
-    const trusted = await ws.trustedCheckout('rumba/hub/1')
+    const trusted = await ws.trustedCheckout('rumba/shop/1')
     expect((await stat(path.join(trusted, 'src/a.js'))).mode & 0o777).toBe(0o644)
   })
 })

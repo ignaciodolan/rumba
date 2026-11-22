@@ -44,45 +44,45 @@ describe('GitWorkspace', () => {
   })
 
   it('prepares a fresh worktree on a new branch at the default branch head', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
-    expect(await git(workdir, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('rumba/hub/1'); expect(baseSha).toBe(await git(clone, 'rev-parse', 'origin/main'))
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    expect(await git(workdir, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('rumba/shop/1'); expect(baseSha).toBe(await git(clone, 'rev-parse', 'origin/main'))
   })
 
   it('commits changes but never .rumba-out', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, 'a.txt', 'x'); await write(workdir, '.rumba-out/result.json', '{}')
     const sha = await ws.commit(workdir, 'fix: a'); expect(sha).toMatch(/^[0-9a-f]{40}$/)
     expect(await ws.changedFiles(workdir, baseSha)).toEqual(['a.txt']); expect(await ws.commit(workdir, 'again')).toBeNull()
   })
 
   it('starts again from the base when the branch already exists', async () => {
-    const first = await ws.prepare('rumba/hub/1', { fresh: true }); await write(first.workdir, 'old.txt', 'x'); await ws.commit(first.workdir, 'old attempt')
-    const second = await ws.prepare('rumba/hub/1', { fresh: true })
+    const first = await ws.prepare('rumba/shop/1', { fresh: true }); await write(first.workdir, 'old.txt', 'x'); await ws.commit(first.workdir, 'old attempt')
+    const second = await ws.prepare('rumba/shop/1', { fresh: true })
     expect(await ws.changedFiles(second.workdir, second.baseSha)).toEqual([])
   })
 
   it('reuses the branch when not fresh', async () => {
-    const first = await ws.prepare('rumba/hub/1', { fresh: true }); await write(first.workdir, 'kept.txt', 'x'); await ws.commit(first.workdir, 'work')
-    await ws.cleanup(first.workdir); const again = await ws.prepare('rumba/hub/1', { fresh: false })
+    const first = await ws.prepare('rumba/shop/1', { fresh: true }); await write(first.workdir, 'kept.txt', 'x'); await ws.commit(first.workdir, 'work')
+    await ws.cleanup(first.workdir); const again = await ws.prepare('rumba/shop/1', { fresh: false })
     expect(await ws.changedFiles(again.workdir, first.baseSha)).toEqual(['kept.txt'])
   })
 
   it('resets to a commit and hashes files', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true }); await write(workdir, 'a.txt', 'x'); await ws.commit(workdir, 'c')
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true }); await write(workdir, 'a.txt', 'x'); await ws.commit(workdir, 'c')
     const h = await ws.hashFiles(workdir, ['a.txt', 'missing.txt']); expect(Object.keys(h)).toEqual(['a.txt'])
     await ws.reset(workdir, baseSha); expect(await ws.changedFiles(workdir, baseSha)).toEqual([])
   })
 
   it('reports unusual file names exactly', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
-    const names = ['.rumba/hub/é.md', `a b"c'.txt`, 'tab\there.txt', 'new\nline.txt']
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    const names = ['.rumba/shop/é.md', `a b"c'.txt`, 'tab\there.txt', 'new\nline.txt']
     for (const name of names) await write(workdir, name, 'x')
     await ws.commit(workdir, 'unusual names')
     expect((await ws.changedFiles(workdir, baseSha)).sort()).toEqual([...names].sort())
   })
 
   it('cleanupAll never throws and removes the worktrees it can', async () => {
-    const a = await ws.prepare('rumba/hub/1', { fresh: true }); const b = await ws.prepare('rumba/hub/2', { fresh: true })
+    const a = await ws.prepare('rumba/shop/1', { fresh: true }); const b = await ws.prepare('rumba/shop/2', { fresh: true })
     // Unregister a's worktree behind the workspace's back, so removing it fails.
     const gitDir = (await readFile(path.join(a.workdir, '.git'), 'utf8')).replace(/^gitdir: /, '').trim()
     await rm(gitDir, { recursive: true, force: true })
@@ -96,12 +96,12 @@ describe('GitWorkspace', () => {
   })
 
   it('cleanupAll removes every worktree it made', async () => {
-    const a = await ws.prepare('rumba/hub/1', { fresh: true }); const b = await ws.prepare('rumba/hub/2', { fresh: true })
+    const a = await ws.prepare('rumba/shop/1', { fresh: true }); const b = await ws.prepare('rumba/shop/2', { fresh: true })
     await ws.cleanupAll(); expect(existsSync(a.workdir)).toBe(false); expect(existsSync(b.workdir)).toBe(false)
   })
 
   it('places the worktree in a rumba- temp dir and returns its real path', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     expect(workdir).toBe(await realpath(workdir))
     expect(path.basename(workdir)).toMatch(/^rumba-/)
     // Each checkout sits alone in a temp folder of its own, named like it.
@@ -110,45 +110,45 @@ describe('GitWorkspace', () => {
   })
 
   it('commits as the Rumba bot and returns the new HEAD', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, 'a.txt', 'x')
     const sha = await ws.commit(workdir, 'fix: a')
-    expect(await git(clone, 'log', '-1', '--format=%H %an <%ae> %cn <%ce> %s', 'rumba/hub/1'))
+    expect(await git(clone, 'log', '-1', '--format=%H %an <%ae> %cn <%ce> %s', 'rumba/shop/1'))
       .toBe(`${sha} Rumba <rumba@users.noreply.github.com> Rumba <rumba@users.noreply.github.com> fix: a`)
   })
 
   it('leaves .rumba-out out of the commit when the project ignores nothing', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, '.rumba-out/result.json', '{}')
     expect(await ws.commit(workdir, 'only output')).toBeNull()
   })
 
   it('reset also removes untracked files', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, 'a.txt', 'x'); await ws.commit(workdir, 'c')
     await write(workdir, 'stray/file.txt', 'y')
     await ws.reset(workdir, baseSha)
     expect(existsSync(path.join(workdir, 'a.txt'))).toBe(false)
     expect(existsSync(path.join(workdir, 'stray'))).toBe(false)
-    expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(baseSha)
+    expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(baseSha)
   })
 
   it('keeps the branch when it cleans up a worktree', async () => {
-    const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
     await ws.cleanup(workdir)
     expect(existsSync(workdir)).toBe(false)
-    expect(await git(clone, 'branch', '--list', 'rumba/hub/1')).toContain('rumba/hub/1')
+    expect(await git(clone, 'branch', '--list', 'rumba/shop/1')).toContain('rumba/shop/1')
     await expect(ws.cleanup(workdir)).resolves.toBeUndefined()
   })
 
   it('reuses its own worktree when not fresh', async () => {
-    const first = await ws.prepare('rumba/hub/1', { fresh: true })
-    const again = await ws.prepare('rumba/hub/1', { fresh: false })
+    const first = await ws.prepare('rumba/shop/1', { fresh: true })
+    const again = await ws.prepare('rumba/shop/1', { fresh: false })
     expect(again).toEqual(first)
   })
 
   it('refuses to reuse a branch that does not exist', async () => {
-    await expect(ws.prepare('rumba/hub/9', { fresh: false })).rejects.toThrow(/rumba\/hub\/9/)
+    await expect(ws.prepare('rumba/shop/9', { fresh: false })).rejects.toThrow(/rumba\/shop\/9/)
   })
 
   it('refuses a workdir that is not one of its worktrees', async () => {
@@ -164,23 +164,23 @@ describe('GitWorkspace', () => {
   })
 
   it('never removes the main checkout, even when it has the branch checked out', async () => {
-    await git(clone, 'checkout', '-q', '-b', 'rumba/hub/1')
-    await expect(ws.prepare('rumba/hub/1', { fresh: true })).rejects.toThrow(/not a worktree/)
+    await git(clone, 'checkout', '-q', '-b', 'rumba/shop/1')
+    await expect(ws.prepare('rumba/shop/1', { fresh: true })).rejects.toThrow(/not a worktree/)
     // cleanup never throws, so refusing the main checkout means leaving it alone.
     await expect(ws.cleanup(clone)).resolves.toBeUndefined()
     expect(existsSync(path.join(clone, 'README.md'))).toBe(true)
-    expect(await git(clone, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('rumba/hub/1')
+    expect(await git(clone, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('rumba/shop/1')
   })
 
   it('gives a checkout of only the committed tree after a cleanup', async () => {
-    const first = await ws.prepare('rumba/hub/1', { fresh: true })
+    const first = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(first.workdir, '.gitignore', '.env\n')
     await write(first.workdir, 'kept.txt', 'committed')
     await write(first.workdir, '.env', 'COMPOSE_FILE=evil.yml')
     await ws.commit(first.workdir, 'work')
     await write(first.workdir, 'untracked.txt', 'later')
     await ws.cleanup(first.workdir)
-    const again = await ws.prepare('rumba/hub/1', { fresh: false })
+    const again = await ws.prepare('rumba/shop/1', { fresh: false })
     expect(again.workdir).not.toBe(first.workdir)
     expect(existsSync(path.join(again.workdir, 'kept.txt'))).toBe(true)
     expect(existsSync(path.join(again.workdir, '.env'))).toBe(false)
@@ -188,11 +188,11 @@ describe('GitWorkspace', () => {
   })
 
   it('commits with nothing staged when allowEmpty is set', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     expect(await ws.commit(workdir, 'nothing')).toBeNull()
     const sha = await ws.commit(workdir, 'test: empty', { allowEmpty: true })
     expect(sha).toMatch(/^[0-9a-f]{40}$/); expect(sha).not.toBe(baseSha)
-    expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(sha)
+    expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(sha)
     expect(await ws.changedFiles(workdir, baseSha)).toEqual([])
   })
 
@@ -204,14 +204,14 @@ describe('GitWorkspace', () => {
     })
 
     it('cleanup resolves, frees the branch, and a later prepare gets a new directory', async () => {
-      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      const first = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(first.workdir, 'locked/file.txt', 'x')
       await ws.commit(first.workdir, 'work')
       locked = path.join(first.workdir, 'locked')
       await chmod(locked, 0o555)
       await expect(ws.cleanup(first.workdir)).resolves.toBeUndefined()
-      expect(await git(clone, 'worktree', 'list', '--porcelain')).not.toContain('branch refs/heads/rumba/hub/1')
-      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      expect(await git(clone, 'worktree', 'list', '--porcelain')).not.toContain('branch refs/heads/rumba/shop/1')
+      const again = await ws.prepare('rumba/shop/1', { fresh: false })
       expect(again.workdir).not.toBe(first.workdir)
       expect(existsSync(path.join(again.workdir, 'locked', 'file.txt'))).toBe(true)
       await chmod(locked, 0o755); locked = undefined
@@ -220,15 +220,15 @@ describe('GitWorkspace', () => {
   })
 
   it('finds a worktree another instance made', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     await write(workdir, 'a.txt', 'x')
     const other = new GitWorkspace({ repoRoot: clone, defaultBranch: 'main' })
     expect(await other.commit(workdir, 'c')).toMatch(/^[0-9a-f]{40}$/)
-    expect(await other.prepare('rumba/hub/1', { fresh: false })).toEqual({ workdir, baseSha })
+    expect(await other.prepare('rumba/shop/1', { fresh: false })).toEqual({ workdir, baseSha })
   })
 
   it('ignores git metadata and hooks the agent planted in the workdir', async () => {
-    const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     const fsmonitorMarker = path.join(root, 'fsmonitor-ran')
     const hookMarker = path.join(root, 'hook-ran')
     const planted = path.join(workdir, '.git')
@@ -245,10 +245,10 @@ describe('GitWorkspace', () => {
 
     await write(workdir, 'a.txt', 'x')
     const sha = await ws.commit(workdir, 'fix: a')
-    expect(await git(clone, 'log', '-1', '--format=%H', 'rumba/hub/1')).toBe(sha)
+    expect(await git(clone, 'log', '-1', '--format=%H', 'rumba/shop/1')).toBe(sha)
     expect(await ws.changedFiles(workdir, baseSha)).toEqual(['a.txt'])
     await ws.reset(workdir, baseSha)
-    expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(baseSha)
+    expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(baseSha)
     await ws.cleanup(workdir)
     expect(existsSync(workdir)).toBe(false)
     expect(existsSync(fsmonitorMarker)).toBe(false)
@@ -259,11 +259,11 @@ describe('GitWorkspace', () => {
     it('gives a checkout of the commit the branch started from, whatever the branch changed', async () => {
       await write(clone, 'scripts/up.sh', 'echo trusted\n')
       await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'add script'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
-      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'scripts/up.sh', 'echo agent\n'); await write(workdir, 'new.txt', 'x')
       await ws.commit(workdir, 'agent change')
 
-      const trusted = await ws.trustedCheckout('rumba/hub/1')
+      const trusted = await ws.trustedCheckout('rumba/shop/1')
       expect(trusted).not.toBe(workdir)
       expect(trusted).toBe(await realpath(trusted))
       expect(await readFile(path.join(trusted, 'scripts/up.sh'), 'utf8')).toBe('echo trusted\n')
@@ -274,55 +274,55 @@ describe('GitWorkspace', () => {
     })
 
     it('stays at the commit the branch started from when the default branch moves on', async () => {
-      const { baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(clone, 'later.txt', 'x')
       await git(clone, 'add', '-A'); await git(clone, 'commit', '-q', '-m', 'later'); await git(clone, 'push', '-q', 'origin', 'HEAD:refs/heads/main'); await git(clone, 'fetch', '-q', 'origin')
-      const trusted = await ws.trustedCheckout('rumba/hub/1')
+      const trusted = await ws.trustedCheckout('rumba/shop/1')
       expect(await git(trusted, 'rev-parse', 'HEAD')).toBe(baseSha)
       expect(existsSync(path.join(trusted, 'later.txt'))).toBe(false)
     })
 
     it('is never handed out as the checkout of the branch', async () => {
-      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      const first = await ws.prepare('rumba/shop/1', { fresh: true })
       await ws.cleanup(first.workdir)
-      const trusted = await ws.trustedCheckout('rumba/hub/1')
-      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      const trusted = await ws.trustedCheckout('rumba/shop/1')
+      const again = await ws.prepare('rumba/shop/1', { fresh: false })
       expect(again.workdir).not.toBe(trusted)
-      const second = await ws.trustedCheckout('rumba/hub/1')
+      const second = await ws.trustedCheckout('rumba/shop/1')
       expect(second).not.toBe(trusted)
     })
 
     it('is removed by cleanup and by cleanupAll', async () => {
-      await ws.prepare('rumba/hub/1', { fresh: true })
-      const a = await ws.trustedCheckout('rumba/hub/1'); const b = await ws.trustedCheckout('rumba/hub/1')
+      await ws.prepare('rumba/shop/1', { fresh: true })
+      const a = await ws.trustedCheckout('rumba/shop/1'); const b = await ws.trustedCheckout('rumba/shop/1')
       await ws.cleanup(a); expect(existsSync(a)).toBe(false); expect(existsSync(b)).toBe(true)
       await ws.cleanupAll(); expect(existsSync(b)).toBe(false)
       expect((await git(clone, 'worktree', 'list', '--porcelain')).split('\n').filter((l) => l.startsWith('worktree '))).toHaveLength(1)
     })
 
     it('finds the starting commit of a branch another instance prepared', async () => {
-      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'a.txt', 'x'); await ws.commit(workdir, 'c')
       const other = new GitWorkspace({ repoRoot: clone, defaultBranch: 'main' })
-      const trusted = await other.trustedCheckout('rumba/hub/1')
+      const trusted = await other.trustedCheckout('rumba/shop/1')
       expect(await git(trusted, 'rev-parse', 'HEAD')).toBe(baseSha)
       await other.cleanupAll()
     })
 
     it('refuses a branch that does not exist', async () => {
-      await expect(ws.trustedCheckout('rumba/hub/404')).rejects.toThrow(/rumba\/hub\/404/)
+      await expect(ws.trustedCheckout('rumba/shop/404')).rejects.toThrow(/rumba\/shop\/404/)
     })
   })
 
   describe('hashFiles', () => {
     it('hashes file contents with SHA-256', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'dir/a.txt', 'x')
       expect(await ws.hashFiles(workdir, ['dir/a.txt'])).toEqual({ 'dir/a.txt': createHash('sha256').update('x').digest('hex') })
     })
 
     it('hashes a symbolic link by its target instead of following it', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       const outside = path.join(root, 'secret.txt')
       await writeFile(outside, 'secret')
       await symlink(outside, path.join(workdir, 'link'))
@@ -330,19 +330,19 @@ describe('GitWorkspace', () => {
     })
 
     it('refuses a directory', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await mkdir(path.join(workdir, 'dir'))
       await expect(ws.hashFiles(workdir, ['dir'])).rejects.toThrow(/dir is not a regular file/)
     })
 
     it.skipIf(process.platform === 'win32')('refuses a FIFO without blocking on it', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await execa('mkfifo', [path.join(workdir, 'pipe')])
       await expect(ws.hashFiles(workdir, ['pipe'])).rejects.toThrow(/pipe is not a regular file/)
     }, 3000)
 
     it('refuses a path that resolves outside the workdir', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await writeFile(path.join(root, 'secret.txt'), 'secret')
       await symlink(root, path.join(workdir, 'up'))
       await expect(ws.hashFiles(workdir, ['../secret.txt'])).rejects.toThrow(/outside/)

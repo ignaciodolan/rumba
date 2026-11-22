@@ -79,20 +79,20 @@ describe('GitWorkspace against hostile content', () => {
     }
 
     it('commit refuses before git can enter a nested repository, so its filter driver never runs', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       const gitDir = await git(workdir, 'rev-parse', '--absolute-git-dir')
       const explicit = ['--git-dir', gitDir, '--work-tree', workdir]
       // The state the old code could reach: the nested repository is already tracked as a gitlink.
       await nestedRepo(path.join(workdir, 'sub'))
       await git(workdir, ...explicit, 'add', '-A')
       await git(workdir, ...explicit, 'commit', '-q', '-m', 'gitlink')
-      const head = await git(clone, 'rev-parse', 'rumba/hub/1')
+      const head = await git(clone, 'rev-parse', 'rumba/shop/1')
       await arm(path.join(workdir, 'sub'))
       await write(workdir, 'fix.txt', 'fix')
 
       await expect(ws.commit(workdir, 'fix')).rejects.toThrow(/git repository inside.*sub\/\.git/s)
       expect(existsSync(marker)).toBe(false)
-      expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(head)
+      expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(head)
       await expect(ws.reset(workdir, head)).rejects.toThrow(/git repository inside/)
       expect(existsSync(marker)).toBe(false)
 
@@ -102,11 +102,11 @@ describe('GitWorkspace against hostile content', () => {
     })
 
     it('never commits a nested repository as a gitlink', async () => {
-      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await nestedRepo(path.join(workdir, 'vendor/lib'))
       await expect(ws.commit(workdir, 'checks')).rejects.toThrow(/git repository inside.*vendor\/lib\/\.git/s)
-      expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(baseSha)
-      expect(await git(clone, 'ls-tree', '-r', 'rumba/hub/1')).not.toContain('160000')
+      expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(baseSha)
+      expect(await git(clone, 'ls-tree', '-r', 'rumba/shop/1')).not.toContain('160000')
     })
 
     it('refuses a .git entry of any kind, at any depth, and in a folder git ignores', async () => {
@@ -116,7 +116,7 @@ describe('GitWorkspace against hostile content', () => {
         async (w: string) => { await mkdir(path.join(w, 'x'), { recursive: true }); await symlink('/tmp', path.join(w, 'x/.git')) },
         async (w: string) => { await mkdir(path.join(w, 'y/.GIT'), { recursive: true }) },
       ]) {
-        const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+        const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
         await write(workdir, 'ok.txt', 'x')
         await plant(workdir)
         await expect(ws.commit(workdir, 'c')).rejects.toThrow(/git repository inside/)
@@ -128,20 +128,20 @@ describe('GitWorkspace against hostile content', () => {
       await mkdir(other); await git(other, 'init', '-q', '-b', 'main', '.'); await write(other, 'x', 'x'); await git(other, 'add', '-A'); await git(other, 'commit', '-q', '-m', 'o')
       await git(clone, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', other, 'lib')
       await pushToMain('submodule')
-      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'a.txt', 'x')
       expect(await ws.commit(workdir, 'work')).toMatch(/^[0-9a-f]{40}$/)
       expect(await ws.changedFiles(workdir, baseSha)).toEqual(['a.txt'])
     })
 
     it('cleanup removes a worktree holding an armed nested repository without running its driver', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await nestedRepo(path.join(workdir, 'sub'))
       await arm(path.join(workdir, 'sub'))
       await ws.cleanup(workdir)
       expect(existsSync(workdir)).toBe(false)
       expect(existsSync(marker)).toBe(false)
-      expect(await git(clone, 'worktree', 'list', '--porcelain')).not.toContain('rumba/hub/1')
+      expect(await git(clone, 'worktree', 'list', '--porcelain')).not.toContain('rumba/shop/1')
     })
   })
 
@@ -164,7 +164,7 @@ describe('GitWorkspace against hostile content', () => {
       await git(clone, 'config', 'filter.evil.clean', leaveMarker())
       await git(clone, 'config', 'filter.evil.smudge', leaveMarker())
       await git(clone, 'config', 'filter.evil.required', 'true')
-      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      const first = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(first.workdir, '.gitattributes', '*.txt filter=evil\n')
       await write(first.workdir, 'a.txt', 'agent')
 
@@ -172,7 +172,7 @@ describe('GitWorkspace against hostile content', () => {
       expect(existsSync(marker)).toBe(false)
       // Checking the commit out again, and resetting to it, would run the smudge side.
       await ws.cleanup(first.workdir)
-      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      const again = await ws.prepare('rumba/shop/1', { fresh: false })
       expect(await readFile(path.join(again.workdir, 'a.txt'), 'utf8')).toBe('agent')
       await rm(path.join(again.workdir, 'a.txt'))
       await ws.reset(again.workdir, sha!)
@@ -186,13 +186,13 @@ describe('GitWorkspace against hostile content', () => {
       const globalConfig = path.join(root, 'global.gitconfig')
       await writeFile(globalConfig, `[filter "evil"]\n\tclean = "${leaveMarker()}"\n\tsmudge = "${leaveMarker()}"\n\trequired = true\n`)
       process.env.GIT_CONFIG_GLOBAL = globalConfig
-      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      const first = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(first.workdir, '.gitattributes', '*.txt filter=evil\n')
       await write(first.workdir, 'a.txt', 'agent')
 
       await ws.commit(first.workdir, 'agent change')
       await ws.cleanup(first.workdir)
-      await ws.prepare('rumba/hub/1', { fresh: false })
+      await ws.prepare('rumba/shop/1', { fresh: false })
       expect(existsSync(marker)).toBe(false)
 
       expect(await driverIsLive('*.txt filter=evil\n')).toBe(true)
@@ -204,7 +204,7 @@ describe('GitWorkspace against hostile content', () => {
       await writeFile(globalAttributes, '*.txt filter=evil\n')
       await writeFile(globalConfig, `[core]\n\tattributesFile = ${globalAttributes}\n[filter "evil"]\n\tclean = "${leaveMarker()}"\n`)
       process.env.GIT_CONFIG_GLOBAL = globalConfig
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'a.txt', 'agent')
 
       await ws.commit(workdir, 'agent change')
@@ -223,11 +223,11 @@ describe('GitWorkspace against hostile content', () => {
 
     /** Commits agent-written files, checks the commit out again and resets to it: the clean and the smudge side. */
     async function commitAndCheckOutAgain(files: string[]): Promise<void> {
-      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      const first = await ws.prepare('rumba/shop/1', { fresh: true })
       for (const f of files) await write(first.workdir, f, 'agent')
       const sha = await ws.commit(first.workdir, 'agent change')
       await ws.cleanup(first.workdir)
-      const again = await ws.prepare('rumba/hub/1', { fresh: false })
+      const again = await ws.prepare('rumba/shop/1', { fresh: false })
       for (const f of files) expect(await readFile(path.join(again.workdir, f), 'utf8')).toBe('agent')
       await rm(path.join(again.workdir, files[0]))
       await ws.reset(again.workdir, sha!)
@@ -288,7 +288,7 @@ describe('GitWorkspace against hostile content', () => {
         '}',
       ].join('\n')
       for (let round = 0; round < 3; round++) {
-        const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+        const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
         for (let i = 0; i < 150; i++) for (let j = 0; j < 10; j++) await write(workdir, `d${i}/f${j}`, 'x')
         const child = execa('node', ['-e', racer, workdir, victim, '150'], { stdin: 'ignore', reject: false })
         await new Promise((r) => setTimeout(r, 150))
@@ -304,16 +304,16 @@ describe('GitWorkspace against hostile content', () => {
 
   describe('symbolic links, judged by where they really lead', () => {
     it('refuses chained links whose texts each look harmless', async () => {
-      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await symlink('.', path.join(workdir, 'here'))
       await symlink('here/..', path.join(workdir, 'escape'))
       await symlink('here/../../../../../../../../etc', path.join(workdir, 'far'))
       await expect(ws.commit(workdir, 'links')).rejects.toThrow(/outside the repository: escape, far$/)
-      expect(await git(clone, 'rev-parse', 'rumba/hub/1')).toBe(baseSha)
+      expect(await git(clone, 'rev-parse', 'rumba/shop/1')).toBe(baseSha)
     })
 
     it('refuses a link that leaves through a linked directory', async () => {
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'a/b/file.txt', 'x')
       await symlink('a/b', path.join(workdir, 'shortcut'))
       await symlink('shortcut/../../..', path.join(workdir, 'out'))
@@ -321,12 +321,12 @@ describe('GitWorkspace against hostile content', () => {
     })
 
     it('refuses an absolute target, a loop, and a link added in an earlier commit that a later change redirects', async () => {
-      const first = await ws.prepare('rumba/hub/1', { fresh: true })
+      const first = await ws.prepare('rumba/shop/1', { fresh: true })
       await symlink('/etc', path.join(first.workdir, 'config'))
       await symlink('loop', path.join(first.workdir, 'loop'))
       await expect(ws.commit(first.workdir, 'links')).rejects.toThrow(/outside the repository: config, loop$/)
 
-      const second = await ws.prepare('rumba/hub/1', { fresh: true })
+      const second = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(second.workdir, 'deep/down/x', 'x')
       await symlink('deep/down', path.join(second.workdir, 'd'))
       await symlink('d/../..', path.join(second.workdir, 'up'))   // deep/down/../.. is the root: inside
@@ -338,7 +338,7 @@ describe('GitWorkspace against hostile content', () => {
     })
 
     it('commits links that stay inside, also through other links', async () => {
-      const { workdir, baseSha } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'docs/a.md', 'x')
       await symlink('docs', path.join(workdir, 'd'))
       await symlink('d/a.md', path.join(workdir, 'A.md'))
@@ -351,7 +351,7 @@ describe('GitWorkspace against hostile content', () => {
     it('leaves alone a link a person committed that points outside, but not a new link through it', async () => {
       await symlink('/usr/share', path.join(clone, 'shared'))
       await pushToMain('link')
-      const { workdir } = await ws.prepare('rumba/hub/1', { fresh: true })
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
       await write(workdir, 'a.txt', 'x')
       expect(await ws.commit(workdir, 'work')).toMatch(/^[0-9a-f]{40}$/)
       await symlink('shared/dict', path.join(workdir, 'mine'))
@@ -367,13 +367,13 @@ describe('GitWorkspace against hostile content', () => {
       await write(clone, '.gitignore', '.env\n')
       await symlink('scripts/up.sh', path.join(clone, 'up'))
       await pushToMain('script')
-      await ws.prepare('rumba/hub/1', { fresh: true })
-      trusted = await ws.trustedCheckout('rumba/hub/1')
+      await ws.prepare('rumba/shop/1', { fresh: true })
+      trusted = await ws.trustedCheckout('rumba/shop/1')
     })
 
     it('has a parent directory of its own, apart from every other checkout', async () => {
-      const candidate = (await ws.prepare('rumba/hub/1', { fresh: false })).workdir
-      const second = await ws.trustedCheckout('rumba/hub/1')
+      const candidate = (await ws.prepare('rumba/shop/1', { fresh: false })).workdir
+      const second = await ws.trustedCheckout('rumba/shop/1')
       const parents = [trusted, candidate, second].map((d) => path.dirname(d))
       expect(new Set(parents).size).toBe(3)
       for (const p of parents) expect(p).not.toBe(await realpath(tmpdir()))
@@ -407,7 +407,7 @@ describe('GitWorkspace against hostile content', () => {
     })
 
     it('refuses a directory that is not one of its trusted checkouts', async () => {
-      const candidate = (await ws.prepare('rumba/hub/1', { fresh: false })).workdir
+      const candidate = (await ws.prepare('rumba/shop/1', { fresh: false })).workdir
       await expect(ws.verifyTrusted(candidate)).rejects.toThrow(/not a trusted checkout/)
     })
 

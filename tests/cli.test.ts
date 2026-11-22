@@ -43,19 +43,19 @@ describe('rumba', () => {
     const { mkdtemp, rm } = await import('node:fs/promises'); const { tmpdir } = await import('node:os'); const path = await import('node:path')
     const dir = await mkdtemp(path.join(tmpdir(), 'rumba-cli-records-'))
     try {
-      const summary: RunSummary = { rumba: 'hub', advanced: [], left: [] }
+      const summary: RunSummary = { rumba: 'shop', advanced: [], left: [] }
       const h = harness({ runRumba: async () => summary, recordsDir: () => dir })
-      await h.parse('run', '--name', 'hub')
+      await h.parse('run', '--name', 'shop')
       expect(h.out).toContain(`Agent records: ${dir}`)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
   it('prints one line per ticket from the run summary', async () => {
-    const summary: RunSummary = { rumba: 'hub', advanced: [{ ticket: '12', from: 'queued', to: 'pr_open' }], left: [{ ticket: '13', why: 'awaiting criteria' }] }
+    const summary: RunSummary = { rumba: 'shop', advanced: [{ ticket: '12', from: 'queued', to: 'pr_open' }], left: [{ ticket: '13', why: 'awaiting criteria' }] }
     const h = harness({ runRumba: async () => summary })
     await h.parse('run')
-    expect(h.out).toEqual(['hub 12 queued → pr_open', 'hub 13 left: awaiting criteria'])
+    expect(h.out).toEqual(['shop 12 queued → pr_open', 'shop 13 left: awaiting criteria'])
     expect(process.exitCode ?? 0).toBe(0)
   })
 
@@ -73,13 +73,13 @@ describe('rumba', () => {
     const ran: string[] = []
     const h = harness({
       env: { ANTHROPIC_API_KEY: 'sk-secret' },
-      loadRumbas: async () => [makeRumba({ name: 'api' }), makeRumba({ name: 'hub' }), makeRumba({ name: 'web' })],
+      loadRumbas: async () => [makeRumba({ name: 'api' }), makeRumba({ name: 'shop' }), makeRumba({ name: 'web' })],
       buildDeps: (rumba) => {
         if (rumba.name === 'api') throw new MissingKeyError(`LINEAR_API_KEY is not set. Rumba "api" uses the linear tracker.`)
         return makeDeps()
       },
       runRumba: async (_d, rumba) => {
-        if (rumba.name === 'hub') throw new Error('boom with sk-secret inside')
+        if (rumba.name === 'shop') throw new Error('boom with sk-secret inside')
         ran.push(rumba.name); return { rumba: rumba.name, advanced: [], left: [] }
       },
     })
@@ -87,7 +87,7 @@ describe('rumba', () => {
     expect(ran).toEqual(['web'])
     expect(h.err).toHaveLength(2)
     expect(h.err[0]).toMatch(/^api: LINEAR_API_KEY is not set/)
-    expect(h.err[1]).toBe('hub: boom with [redacted] inside')
+    expect(h.err[1]).toBe('shop: boom with [redacted] inside')
     expect(process.exitCode).toBe(1)
   })
 
@@ -95,12 +95,12 @@ describe('rumba', () => {
   it('fails the whole command on a ConfigError', async () => {
     let ran = false
     const h = harness({
-      loadRumbas: async () => { throw new ConfigError('hub: paths: Required') },
-      runRumba: async () => { ran = true; return { rumba: 'hub', advanced: [], left: [] } },
+      loadRumbas: async () => { throw new ConfigError('shop: paths: Required') },
+      runRumba: async () => { ran = true; return { rumba: 'shop', advanced: [], left: [] } },
     })
     await h.parse('run')
     expect(ran).toBe(false)
-    expect(h.err.join('\n')).toContain('hub: paths: Required')
+    expect(h.err.join('\n')).toContain('shop: paths: Required')
     expect(process.exitCode).toBe(1)
   })
 
@@ -113,14 +113,14 @@ describe('rumba', () => {
       ],
     })
     await h.parse('status')
-    expect(h.out).toEqual(['hub #12 building Login fails', 'hub #13 queued Typo on home page'])
+    expect(h.out).toEqual(['shop #12 building Login fails', 'shop #13 queued Typo on home page'])
   })
 
   it('reads queued from a tracker that has no state for the ticket', async () => {
     const deps = makeDeps()
-    deps.tracker.tickets.push({ id: '13', ref: '#13', title: 'Typo', body: '', url: 'u', labels: ['rumba:hub'] })
+    deps.tracker.tickets.push({ id: '13', ref: '#13', title: 'Typo', body: '', url: 'u', labels: ['rumba:shop'] })
     const h = harness({ buildTracker: () => deps.tracker })
     await h.parse('status')
-    expect(h.out).toEqual(['hub #13 queued Typo'])
+    expect(h.out).toEqual(['shop #13 queued Typo'])
   })
 })

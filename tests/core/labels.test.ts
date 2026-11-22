@@ -3,15 +3,15 @@ import { baseBranch, baseBranchOf, defaultLabels, fixBranch, isValidRumbaName, s
 
 describe('labels', () => {
   it('builds default names', () => {
-    const l = defaultLabels('hub')
-    expect(l).toEqual({ optIn: 'rumba:hub', statePrefix: 'rumba-state:', approved: 'rumba-approved', retry: 'rumba-retry' })
+    const l = defaultLabels('shop')
+    expect(l).toEqual({ optIn: 'rumba:shop', statePrefix: 'rumba-state:', approved: 'rumba-approved', retry: 'rumba-retry' })
     expect(stateLabel(l, 'building')).toBe('rumba-state:building')
-    expect(fixBranch('hub', '123')).toBe('rumba/hub/123')
-    expect(baseBranch('hub', '123')).toBe('rumba/hub/base-123')
-    expect(baseBranchOf('rumba/hub/ENG-12')).toBe('rumba/hub/base-ENG-12')
+    expect(fixBranch('shop', '123')).toBe('rumba/shop/123')
+    expect(baseBranch('shop', '123')).toBe('rumba/shop/base-123')
+    expect(baseBranchOf('rumba/shop/ENG-12')).toBe('rumba/shop/base-ENG-12')
   })
   it('validates rumba names', () => {
-    for (const ok of ['hub', 'api-v2', 'a1']) expect(isValidRumbaName(ok)).toBe(true)
-    for (const bad of ['Hub', 'hub_', '-hub', 'hub-', 'a b', '']) expect(isValidRumbaName(bad)).toBe(false)
+    for (const ok of ['shop', 'api-v2', 'a1']) expect(isValidRumbaName(ok)).toBe(true)
+    for (const bad of ['Shop', 'hub_', '-shop', 'shop-', 'a b', '']) expect(isValidRumbaName(bad)).toBe(false)
   })
 })

@@ -165,7 +165,7 @@ export function isTestPath(file: string): boolean {
   if (name.startsWith('.') || /^(?:conftest\.py|__init__\.py|setup\.(?:py|cfg)|pytest\.ini|tox\.ini|package\.json|Makefile)$/i.test(name)) return false
   if (file.split('/').slice(0, -1).some((part) => NOT_A_TEST_FOLDER.has(part.toLowerCase()))) return false
   // A file named like a test is collected as one, whatever words its name holds
-  // (`notion-proposals-unsupported-blocks.test.ts`, `api-config.test.ts`).
+  // (`widgets-unsupported-fields.test.ts`, `api-config.test.ts`).
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name) || /^test_\w+\.py$/.test(name) || /_test\.(?:py|go)$/.test(name) || /Tests?\.(?:java|kt|cs)$/.test(name)) return true
   // Any other file is only a fixture or data in a test folder, and never one whose name holds,
   // anywhere, a word for setting up, configuring or helping tests (`vitestsetup.ts`, `HTTPSetup.ts`).

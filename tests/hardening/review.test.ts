@@ -59,8 +59,8 @@ describe('attempt numbers and records', () => {
     expect(s.attempts).toHaveLength(10); expect(s.attempts!.at(-1)!.n).toBe(13)
   })
   it('starts the attempts again on rumba-retry', async () => {
-    const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:hub', 'rumba-retry'] }); d.tracker.tickets.push(t)
-    d.tracker.states.set('1', { ...transition(newState('hub', d.clock()), 'needs_human', d.clock()), attempts: [{ n: 1, outcome: 'guard', checks: [], projectTests: 'not-run', tail: '' }], fixSummary: 'old' })
+    const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
+    d.tracker.states.set('1', { ...transition(newState('shop', d.clock()), 'needs_human', d.clock()), attempts: [{ n: 1, outcome: 'guard', checks: [], projectTests: 'not-run', tail: '' }], fixSummary: 'old' })
     await runRumba(d, makeRumba())
     const s = d.tracker.states.get('1')!
     expect(s.attempts?.map((a) => a.n)).toEqual([1]); expect(s.attempts?.[0]?.outcome).toBe('verified')
@@ -172,7 +172,7 @@ describe('no change needed on a later run, decided from the branch', () => {
     const st = { ...failing(d), attempts: [{ n: 1, outcome: 'infrastructure' as const, checks: [{ criterionId: 'c1', passed: true, exitCode: 0 }], projectTests: 'infrastructure' as const, tail: 'Killed' }] }
     const s = await build(d, withTests, makeTicket(), st)
     expect(s.state).toBe('verified')
-    expect(d.environment.ups).toEqual([{ branch: 'rumba/hub/123', sha: 'fix-from-run-3', role: 'after' }])
+    expect(d.environment.ups).toEqual([{ branch: 'rumba/shop/123', sha: 'fix-from-run-3', role: 'after' }])
   })
   it('keeps telling the agent the truth after it changed nothing, when the branch still holds a fix', async () => {
     const d = makeDeps(); d.workspace.hashes = H; d.environment.passes = () => true

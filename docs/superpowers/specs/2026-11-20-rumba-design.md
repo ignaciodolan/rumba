@@ -37,7 +37,7 @@ Non-goals for v1:
 - Rumba's own agent loop. It drives existing coding agents.
 - Routing tickets to a rumba automatically. A person picks the rumba with a label. **(call)**
 - Learning from pull requests that were merged without comment. **(call)**
-- Reading criteria from external services such as Notion or Google Docs.
+- Reading criteria from external services such as a wiki or a shared document service.
 - Tickets that span more than one repository. **(call)**
 - Starting from webhooks. v1 is scheduled or run by hand. **(call)**
 
@@ -110,7 +110,7 @@ Each rumba is a folder under `.rumba/` in the repository. The folder name is the
 
 ```
 .rumba/
-  hub/
+  shop/
     rumba.yml      # scope, tracker, agent, model, environment, limits
     context.md     # written by people: what to know about this area
     lessons.md     # appended by Rumba through pull requests
@@ -127,11 +127,11 @@ How names avoid collisions **(call)**:
 
 | Thing | Form | Example |
 |---|---|---|
-| Opt-in label, added by a person | `rumba:<name>` | `rumba:hub` |
+| Opt-in label, added by a person | `rumba:<name>` | `rumba:shop` |
 | State label, managed by Rumba | `rumba-state:<state>` | `rumba-state:building` |
 | Signals, added by a person | `rumba-approved`, `rumba-retry` | |
-| Fix branch | `rumba/<name>/<ticket-id>` | `rumba/hub/123` |
-| Lesson branch | `rumba/<name>/lesson-<ticket-id>` | `rumba/hub/lesson-123` |
+| Fix branch | `rumba/<name>/<ticket-id>` | `rumba/shop/123` |
+| Lesson branch | `rumba/<name>/lesson-<ticket-id>` | `rumba/shop/lesson-123` |
 
 State labels use a different prefix from opt-in labels, so a rumba can have any name without colliding with a state. This replaces the `rumba:approved` and `rumba:retry` names used in revision 1.
 
@@ -168,7 +168,7 @@ queued → triaged → criteria_ready → env_ready → checks_failing → build
 Where criteria come from:
 
 - **Bug**: Rumba derives the single criterion from the report and continues without approval. A failing check on the base commit is objective evidence, so there is no homework problem. **(call)**
-- **Feature with criteria**: Rumba uses them as written. It reads criteria from three places only: the ticket itself, files in the repository that the ticket names, and documents native to the tracker, such as Linear documents. It does not open external links such as Notion or Google Docs. (Decided by the owner.)
+- **Feature with criteria**: Rumba uses them as written. It reads criteria from three places only: the ticket itself, files in the repository that the ticket names, and documents native to the tracker, such as Linear documents. It does not open external links, such as a page in a wiki or a shared document. (Decided by the owner.)
 - **Feature without criteria**: Rumba drafts them, posts them as a comment and parks the ticket in `awaiting_criteria`. A person adds `rumba-approved` to accept the draft as posted. To change it, they write the final criteria in the ticket description under an "Acceptance criteria" heading and then add the label. On approval Rumba uses the description section if there is one, otherwise its own draft. Rumba never treats its own draft as approved without the label. **(call: the conversation said a person could edit Rumba's comment. Linear appears to let only the author edit a comment, so the description is used instead. Not verified against Linear.)**
 
 Exits, each of which posts a comment saying why:
@@ -334,7 +334,7 @@ One file per rumba, at `.rumba/<name>/rumba.yml`.
 
 ```yaml
 paths:
-  - apps/hub/**
+  - apps/shop/**
 tracker:
   kind: github            # github | linear
   # linear only: which tickets belong to this repository

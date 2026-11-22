@@ -14,8 +14,8 @@ ${extra}
 
 let root: string
 async function rumbaYml(text: string): Promise<void> {
-  await mkdir(path.join(root, '.rumba/hub'), { recursive: true })
-  await writeFile(path.join(root, '.rumba/hub/rumba.yml'), text)
+  await mkdir(path.join(root, '.rumba/shop'), { recursive: true })
+  await writeFile(path.join(root, '.rumba/shop/rumba.yml'), text)
 }
 
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), 'rumba-config-live-')) })
@@ -24,31 +24,31 @@ afterEach(async () => { await rm(root, { recursive: true, force: true }) })
 describe('sandbox.node', () => {
   it('defaults to Node 22', async () => {
     await rumbaYml(base())
-    expect((await loadRumba(root, 'hub')).sandbox).toEqual({ nodeVersion: '22' })
+    expect((await loadRumba(root, 'shop')).sandbox).toEqual({ nodeVersion: '22' })
   })
   it('takes a major version as a number or a string', async () => {
     await rumbaYml(base('sandbox: { node: 24 }'))
-    expect((await loadRumba(root, 'hub')).sandbox).toEqual({ nodeVersion: '24' })
+    expect((await loadRumba(root, 'shop')).sandbox).toEqual({ nodeVersion: '24' })
     await rumbaYml(base('sandbox: { node: "26" }'))
-    expect((await loadRumba(root, 'hub')).sandbox).toEqual({ nodeVersion: '26' })
+    expect((await loadRumba(root, 'shop')).sandbox).toEqual({ nodeVersion: '26' })
   })
   it.each(['latest', '24.1', '24-alpine', '18', '"22; rm -rf /"', '7'])('refuses %s, naming the key', async (value) => {
     await rumbaYml(base(`sandbox: { node: ${value} }`))
-    await expect(loadRumba(root, 'hub')).rejects.toThrow(/hub: sandbox\.node/)
+    await expect(loadRumba(root, 'shop')).rejects.toThrow(/shop: sandbox\.node/)
   })
 })
 
 describe('environment.command_timeout_minutes', () => {
   it('defaults to 10 minutes for docker', async () => {
     await rumbaYml(base())
-    expect((await loadRumba(root, 'hub')).environment).toMatchObject({ kind: 'docker', commandTimeoutMinutes: 10 })
+    expect((await loadRumba(root, 'shop')).environment).toMatchObject({ kind: 'docker', commandTimeoutMinutes: 10 })
   })
   it('can be set per rumba', async () => {
     await rumbaYml(base('', ', command_timeout_minutes: 20'))
-    expect((await loadRumba(root, 'hub')).environment).toMatchObject({ commandTimeoutMinutes: 20 })
+    expect((await loadRumba(root, 'shop')).environment).toMatchObject({ commandTimeoutMinutes: 20 })
   })
   it('must be a positive whole number of minutes', async () => {
     await rumbaYml(base('', ', command_timeout_minutes: 0'))
-    await expect(loadRumba(root, 'hub')).rejects.toThrow(/hub: environment\.command_timeout_minutes/)
+    await expect(loadRumba(root, 'shop')).rejects.toThrow(/shop: environment\.command_timeout_minutes/)
   })
 })

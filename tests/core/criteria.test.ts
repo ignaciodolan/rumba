@@ -23,7 +23,7 @@ describe('criteria', () => {
     ])
   })
   it('renders a checklist that names the approval label', () => {
-    const out = renderCriteriaComment([{ id: 'c1', text: 'A', checkable: true }], defaultLabels('hub'))
+    const out = renderCriteriaComment([{ id: 'c1', text: 'A', checkable: true }], defaultLabels('shop'))
     expect(out).toContain('- [ ] A')
     expect(out).toContain('`rumba-approved`')
     expect(out).toContain(CRITERIA_MARKER)

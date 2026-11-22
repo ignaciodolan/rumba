@@ -61,16 +61,16 @@ describe('relocateChecks', () => {
     expect(task).toMatchObject({ kind: 'relocate-checks', checks: state.checks, criteria: state.criteria, execPrefix: 'docker compose exec app sh -c' })
     // On the change, in the relocated commit; on the base, in a commit of the checks commit with the relocated files.
     expect(d.environment.ups).toEqual([
-      { branch: 'rumba/hub/123', sha: RELOCATED, role: 'after' },
-      { branch: 'rumba/hub/123-relocated-base', sha: RELOCATED_AT_BASE, role: 'before' },
+      { branch: 'rumba/shop/123', sha: RELOCATED, role: 'after' },
+      { branch: 'rumba/shop/123-relocated-base', sha: RELOCATED_AT_BASE, role: 'before' },
     ])
-    expect(d.workspace.log).toContain(`reset /fake/3/rumba/hub/123-relocated-base sha1`)
-    expect(d.workspace.log).toContain(`checkout /fake/3/rumba/hub/123-relocated-base ${RELOCATED} ${TO} ${FROM}`)
+    expect(d.workspace.log).toContain(`reset /fake/3/rumba/shop/123-relocated-base sha1`)
+    expect(d.workspace.log).toContain(`checkout /fake/3/rumba/shop/123-relocated-base ${RELOCATED} ${TO} ${FROM}`)
     // The environment never runs where the agent wrote: the agent's checkout is gone before the next one is made.
     expect(d.environment.upWorkdirs).not.toContain(d.agent.workdirs[0])
     const log = d.workspace.log
     expect(log.indexOf(`cleanup ${d.agent.workdirs[0]}`)).toBeGreaterThan(-1)
-    expect(log.indexOf(`cleanup ${d.agent.workdirs[0]}`)).toBeLessThan(log.indexOf('prepare rumba/hub/123 existing /fake/2/rumba/hub/123'))
+    expect(log.indexOf(`cleanup ${d.agent.workdirs[0]}`)).toBeLessThan(log.indexOf('prepare rumba/shop/123 existing /fake/2/rumba/shop/123'))
     expect(d.tracker.states.get('123')?.relocation?.status).toBe('relocated')
   })
 
@@ -192,7 +192,7 @@ describe('relocation and the rest of the ticket', () => {
   it('starts the base run on a branch that starts where the fix branch did', async () => {
     const { d, state } = setup()
     await relocateChecks(d, makeRumba(), makeTicket(), state)
-    expect(d.workspace.log).toContain('prepare rumba/hub/123-relocated-base fresh like rumba/hub/123 /fake/3/rumba/hub/123-relocated-base')
+    expect(d.workspace.log).toContain('prepare rumba/shop/123-relocated-base fresh like rumba/shop/123 /fake/3/rumba/shop/123-relocated-base')
   })
 
   it('warns about a check moved outside the paths of the rumba, like any other change', async () => {
@@ -208,7 +208,7 @@ describe('relocation and the rest of the ticket', () => {
     d.agent.script['write-checks'] = { kind: 'write-checks', checks: [{ criterionId: 'c1', command: `npx vitest run ${FROM}`, files: [FROM] }] }
     const now = d.clock()
     const ready: TicketState = {
-      ...transition(transition(newState('hub', now), 'triaged', now), 'criteria_ready', now), kind: 'bug',
+      ...transition(transition(newState('shop', now), 'triaged', now), 'criteria_ready', now), kind: 'bug',
       criteria: [{ id: 'c1', text: 'C1', checkable: true }],
       relocation: { status: 'relocated', from: 'old-fix', sha: 'old-move', moves: moved.moves, original: [] },
     }

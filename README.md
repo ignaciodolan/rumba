@@ -23,14 +23,14 @@ This is stage 1: Rumba takes a ticket from its label to an open pull request. Wh
 From inside your repository:
 
 ```sh
-rumba init hub
+rumba init shop
 ```
 
 This creates:
 
-- `.rumba/hub/rumba.yml`: the rumba's config (see below). The starter file uses the GitHub tracker, the Claude Code agent and a Docker environment; edit it to match your project.
-- `.rumba/hub/context.md`: what the agent should know about this area of the code. Written by people.
-- `.rumba/hub/lessons.md`: lessons from earlier tickets. Edited by hand in stage 1.
+- `.rumba/shop/rumba.yml`: the rumba's config (see below). The starter file uses the GitHub tracker, the Claude Code agent and a Docker environment; edit it to match your project.
+- `.rumba/shop/context.md`: what the agent should know about this area of the code. Written by people.
+- `.rumba/shop/lessons.md`: lessons from earlier tickets. Edited by hand in stage 1.
 - `.github/workflows/rumba.yml`, if it does not exist: a workflow that runs every 30 minutes and on demand, one job per rumba. Each later `rumba init <name>` adds the new name to its matrix. If the file exists and was not written by `rumba init`, add the name by hand.
 
 Then add the keys the rumba needs as repository secrets (see [Environment variables](#environment-variables)) and commit the files.
@@ -128,7 +128,7 @@ One file per rumba, at `.rumba/<name>/rumba.yml`. Keys never go in this file.
 
 ```yaml
 paths:                      # globs the rumba is expected to work in
-  - apps/hub/**
+  - apps/shop/**
 tracker:
   kind: github              # github | linear
   # linear only: which tickets belong to this repository
@@ -163,7 +163,7 @@ limits:
   minutes_per_ticket: 30
   max_fix_attempts: 2
 labels:                     # optional: rename the labels
-  opt_in: rumba:hub
+  opt_in: rumba:shop
   state_prefix: "rumba-state:"
   approved: rumba-approved
   retry: rumba-retry
@@ -279,6 +279,14 @@ Ticket text, and anything the agent reads, is untrusted input, and the coding ag
 - When Rumba runs with the Actions token and cannot look up its own login, set the repository variable `RUMBA_GITHUB_LOGIN` to `github-actions[bot]`. Without a known login Rumba stops with an error rather than trust comments from any account.
 - Do not run Rumba as root. The sandbox runs as the calling user, and Claude Code refuses to run without permission prompts as root.
 - Rumba never merges a pull request.
+
+## Contributing
+
+Changes come as pull requests against `main`, with tests written first and `npx vitest run`, `npm run typecheck`, `npm run build` and `npm run test:e2e` passing.
+
+### Examples and privacy
+
+This repository is public. Every example in code, tests, comments, docs, commit messages and pull requests must be invented, never taken from a real project: no company, client, product, project or repository names, no ticket numbers, no file names, folder layouts, test titles or paths copied from a real codebase, and no email addresses or local paths. Use generic stand-ins instead, such as an "orders" or "widgets" domain, `tests/widgets/import.test.ts`, "ticket #42", "the project" or "a live run". When a bug found in a real project needs a test, rebuild the case with invented content that exercises the same thing.
 
 ## Licence
 

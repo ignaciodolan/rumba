@@ -20,7 +20,7 @@ describe('build', () => {
     d.environment.passes = () => true
     const s = await build(d, makeRumba(), makeTicket(), failing(d))
     expect(s.state).toBe('verified'); expect(s.after?.[0]!.passed).toBe(true); expect(s.fixAttempts).toBe(0)
-    expect(d.environment.ups).toEqual([{ branch: 'rumba/hub/123', sha: 'sha1', role: 'after' }]); expect(d.environment.downs).toBe(1)
+    expect(d.environment.ups).toEqual([{ branch: 'rumba/shop/123', sha: 'sha1', role: 'after' }]); expect(d.environment.downs).toBe(1)
     expect(d.workspace.commits).toEqual(['fix: A ticket (#123)'])
     expect(d.agent.calls[0]).toMatchObject({ kind: 'fix', failures: [expect.objectContaining({ criterionId: 'c1' })] })
   })
@@ -43,10 +43,10 @@ describe('build', () => {
   })
   it('rejects a fix that touches .rumba', async () => {
     const d = makeDeps(); d.agent.script.fix = { kind: 'fix', summary: 'x' }; d.workspace.hashes = H
-    d.workspace.changed = ['.rumba/hub/lessons.md']
+    d.workspace.changed = ['.rumba/shop/lessons.md']
     const s = await build(d, makeRumba(), makeTicket(), failing(d))
     expect(s.state).toBe('fix_failed')
-    expect(d.agent.calls[1]!.failures?.[0]!.output).toContain('.rumba/hub/lessons.md')
+    expect(d.agent.calls[1]!.failures?.[0]!.output).toContain('.rumba/shop/lessons.md')
   })
   it('rejects a fix that touches a configured protected path', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.workspace.changed = ['docker-compose.yml']
@@ -123,9 +123,9 @@ describe('build', () => {
     // A failed verification runs once more in a fresh checkout and environment before it counts.
     const [a1, a2] = d.agent.workdirs; const [e1, f1, e2, f2] = d.environment.upWorkdirs
     expect(new Set([a1, a2, e1, f1, e2, f2]).size).toBe(6)
-    const env = (e: string | undefined) => [`prepare rumba/hub/123 existing ${e}`, `hash ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`]
+    const env = (e: string | undefined) => [`prepare rumba/shop/123 existing ${e}`, `hash ${e}`, `up ${e}`, `down ${e}`, `cleanup ${e}`]
     const attempt = (a: string | undefined, e: string | undefined, f: string | undefined) => [
-      `prepare rumba/hub/123 existing ${a}`, `commit ${a}`, `cleanup ${a}`, ...env(e), ...env(f),
+      `prepare rumba/shop/123 existing ${a}`, `commit ${a}`, `cleanup ${a}`, ...env(e), ...env(f),
     ]
     expect(d.workspace.log).toEqual([...attempt(a1, e1, f1), ...attempt(a2, e2, f2)])
   })
@@ -133,7 +133,7 @@ describe('build', () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.workspace.changed = ['.github/workflows/ci.yml']; trace(d)
     expect((await build(d, makeRumba(), makeTicket(), failing(d))).state).toBe('fix_failed')
     const [a1] = d.agent.workdirs
-    expect(d.workspace.log.slice(0, 4)).toEqual([`prepare rumba/hub/123 existing ${a1}`, `commit ${a1}`, `reset ${a1} sha1`, `cleanup ${a1}`])
+    expect(d.workspace.log.slice(0, 4)).toEqual([`prepare rumba/shop/123 existing ${a1}`, `commit ${a1}`, `reset ${a1} sha1`, `cleanup ${a1}`])
     expect(d.environment.upWorkdirs).toEqual([])
   })
   it('returns its state when a cleanup fails', async () => {
@@ -157,8 +157,8 @@ describe('build', () => {
     const e1 = d.workspace.log[3]!.split(' ').at(-1)
     expect(e1).not.toBe(a1)
     expect(d.workspace.log.slice(0, 7)).toEqual([
-      `prepare rumba/hub/123 existing ${a1}`, `commit ${a1}`, `cleanup ${a1}`,
-      `prepare rumba/hub/123 existing ${e1}`, `hash ${e1}`, `reset ${e1} sha1`, `cleanup ${e1}`,
+      `prepare rumba/shop/123 existing ${a1}`, `commit ${a1}`, `cleanup ${a1}`,
+      `prepare rumba/shop/123 existing ${e1}`, `hash ${e1}`, `reset ${e1} sha1`, `cleanup ${e1}`,
     ])
     expect(d.environment.ups).toEqual([])
     expect(d.agent.calls[1]!.failures?.[0]).toMatchObject({ criterionId: 'guard', output: expect.stringContaining('tests/rumba/c1.test.ts') })

@@ -15,7 +15,7 @@ const vercel = (projectId?: string) =>
 describe('buildDeps', () => {
   it('names the missing key and why', () => {
     expect(() => buildDeps(makeRumba({ agent: { kind: 'claude-code' } }), { RUMBA_GITHUB_TOKEN: 't' }, repo))
-      .toThrow(/ANTHROPIC_API_KEY is not set, and neither is CLAUDE_CODE_OAUTH_TOKEN\. Rumba "hub" uses the claude-code agent\./)
+      .toThrow(/ANTHROPIC_API_KEY is not set, and neither is CLAUDE_CODE_OAUTH_TOKEN\. Rumba "shop" uses the claude-code agent\./)
   })
   it('accepts a Claude Code token from `claude setup-token` instead of an API key, and treats it as a secret', () => {
     const d = buildDeps(makeRumba(), { GITHUB_TOKEN: 'g', CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-1' }, repo)
@@ -28,19 +28,19 @@ describe('buildDeps', () => {
   it('throws MissingKeyError when no GitHub token is set', () => {
     expect(() => buildDeps(makeRumba(), { ANTHROPIC_API_KEY: 'a' }, repo)).toThrow(MissingKeyError)
     expect(() => buildDeps(makeRumba(), { ANTHROPIC_API_KEY: 'a', GITHUB_TOKEN: '' }, repo))
-      .toThrow(/^RUMBA_GITHUB_TOKEN is not set.*GITHUB_TOKEN.*Rumba "hub"/)
+      .toThrow(/^RUMBA_GITHUB_TOKEN is not set.*GITHUB_TOKEN.*Rumba "shop"/)
   })
   it('asks for the key of the agent and tracker the rumba uses', () => {
     const env = { RUMBA_GITHUB_TOKEN: 't' }
     expect(() => buildDeps(makeRumba({ agent: { kind: 'gemini-cli' } }), env, repo))
-      .toThrow(/GEMINI_API_KEY is not set\. Rumba "hub" uses the gemini-cli agent\./)
+      .toThrow(/GEMINI_API_KEY is not set\. Rumba "shop" uses the gemini-cli agent\./)
     expect(() => buildDeps(makeRumba({ tracker: { kind: 'linear', team: 'ENG' } }), { ...env, ANTHROPIC_API_KEY: 'a' }, repo))
-      .toThrow(/LINEAR_API_KEY is not set\. Rumba "hub" uses the linear tracker\./)
+      .toThrow(/LINEAR_API_KEY is not set\. Rumba "shop" uses the linear tracker\./)
   })
   it('asks for the Vercel token and a project id for vercel-preview', () => {
     const env = { RUMBA_GITHUB_TOKEN: 't', ANTHROPIC_API_KEY: 'a' }
-    expect(() => buildDeps(vercel('prj_1'), env, repo)).toThrow(/VERCEL_TOKEN is not set\. Rumba "hub" uses the vercel-preview environment/)
-    expect(() => buildDeps(vercel(), { ...env, VERCEL_TOKEN: 'v' }, repo)).toThrow(/VERCEL_PROJECT_ID is not set\. Rumba "hub"/)
+    expect(() => buildDeps(vercel('prj_1'), env, repo)).toThrow(/VERCEL_TOKEN is not set\. Rumba "shop" uses the vercel-preview environment/)
+    expect(() => buildDeps(vercel(), { ...env, VERCEL_TOKEN: 'v' }, repo)).toThrow(/VERCEL_PROJECT_ID is not set\. Rumba "shop"/)
     expect(() => buildDeps(vercel('prj_1'), { ...env, VERCEL_TOKEN: 'v' }, repo)).not.toThrow()
     expect(() => buildDeps(vercel(), { ...env, VERCEL_TOKEN: 'v', VERCEL_PROJECT_ID: 'prj_2' }, repo)).not.toThrow()
   })
@@ -117,7 +117,7 @@ describe('redacting wrappers', () => {
   })
 
   it('delegates every other tracker method, keeping label updates on the same ticket object', async () => {
-    const inner = new FakeTracker(); const t = makeTicket({ labels: ['rumba:hub', 'rumba-approved'] }); inner.tickets.push(t)
+    const inner = new FakeTracker(); const t = makeTicket({ labels: ['rumba:shop', 'rumba-approved'] }); inner.tickets.push(t)
     inner.documents = [{ title: 'Spec', body: 'd' }]
     const tracker = redactingTracker(inner, [SECRET])
     await tracker.ensureLabels()
@@ -126,7 +126,7 @@ describe('redacting wrappers', () => {
     expect(await tracker.readLinkedDocuments(t)).toEqual([{ title: 'Spec', body: 'd' }])
     const copy = { ...t, labels: [...t.labels] }
     await tracker.removeLabel(copy, 'rumba-approved')
-    expect(copy.labels).toEqual(['rumba:hub'])
+    expect(copy.labels).toEqual(['rumba:shop'])
     await tracker.writeState(copy, failing(makeDeps()))
     expect(copy.labels).toContain('rumba-state:checks_failing')
     expect(await tracker.readState(copy)).toMatchObject({ state: 'checks_failing' })
@@ -137,8 +137,8 @@ describe('redacting wrappers', () => {
     expect(await host.openPullRequest({ title: `t ${SECRET}`, body: `b ${SECRET}`, head: 'h', base: 'main', draft: false })).toBe('https://example.test/pr/1')
     expect(inner.prs[0]).toEqual({ title: 't [redacted]', body: 'b [redacted]', head: 'h', base: 'main', draft: false })
     expect(await host.defaultBranch()).toBe('main')
-    await host.pushBranch('/w', 'rumba/hub/1', { force: true }); await host.deleteBranch('rumba/hub/base-1')
-    expect(inner.pushed).toEqual([{ branch: 'rumba/hub/1', force: true }]); expect(inner.deleted).toEqual(['rumba/hub/base-1'])
+    await host.pushBranch('/w', 'rumba/shop/1', { force: true }); await host.deleteBranch('rumba/shop/base-1')
+    expect(inner.pushed).toEqual([{ branch: 'rumba/shop/1', force: true }]); expect(inner.deleted).toEqual(['rumba/shop/base-1'])
   })
 })
 

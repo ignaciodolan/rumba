@@ -13,18 +13,18 @@ const mk = (states: any[], over = {}) => {
 describe('VercelPreviewEnvironment', () => {
   it('pushes a throwaway base branch, waits for READY and returns the URL', async () => {
     const { env, d } = mk([null, { state: 'BUILDING', url: 'x.vercel.app', target: 'preview' }, { state: 'READY', url: 'x.vercel.app', target: 'preview' }])
-    const h = await env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'before' }, '/w')
-    expect(h.baseUrl).toBe('https://x.vercel.app'); expect(d.codeHost.pushed[0].branch).toBe('rumba/hub/base-123')
-    await env.down(h); expect(d.codeHost.deleted).toEqual(['rumba/hub/base-123'])
+    const h = await env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'before' }, '/w')
+    expect(h.baseUrl).toBe('https://x.vercel.app'); expect(d.codeHost.pushed[0].branch).toBe('rumba/shop/base-123')
+    await env.down(h); expect(d.codeHost.deleted).toEqual(['rumba/shop/base-123'])
   })
   it('pushes the fix branch itself for the after-run and deletes nothing', async () => {
     const { env, d } = mk([{ state: 'READY', url: 'y.vercel.app', target: 'preview' }])
-    const h = await env.up({ branch: 'rumba/hub/123', sha: 'def', role: 'after' }, '/w')
-    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/hub/123', force: true }]); await env.down(h); expect(d.codeHost.deleted).toEqual([])
+    const h = await env.up({ branch: 'rumba/shop/123', sha: 'def', role: 'after' }, '/w')
+    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: true }]); await env.down(h); expect(d.codeHost.deleted).toEqual([])
   })
   it('refuses a production deployment', async () => {
     const { env } = mk([{ state: 'READY', url: 'app.com', target: 'production' }])
-    await expect(env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'after' }, '/w')).rejects.toThrow(/production/)
+    await expect(env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'after' }, '/w')).rejects.toThrow(/production/)
   })
   it('fails on a broken deployment and on timeout', async () => {
     await expect(mk([{ state: 'ERROR', url: 'x', target: 'preview' }]).env.up({ branch: 'b', sha: 's', role: 'before' }, '/w')).rejects.toThrow(/ERROR/)
@@ -41,8 +41,8 @@ describe('VercelPreviewEnvironment', () => {
 
   it('force-pushes the throwaway base branch', async () => {
     const { env, d } = mk([{ state: 'READY', url: 'x.vercel.app', target: null }])
-    await env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'before' }, '/w')
-    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/hub/base-123', force: true }])
+    await env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'before' }, '/w')
+    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/base-123', force: true }])
   })
   it('accepts a deployment whose target is null', async () => {
     const { env } = mk([{ state: 'READY', url: 'x.vercel.app', target: null }])
@@ -79,24 +79,24 @@ describe('VercelPreviewEnvironment', () => {
     ]
     for (const states of failures) {
       const { env, d } = mk(states)
-      await expect(env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'before' }, '/w')).rejects.toThrow()
-      expect(d.codeHost.deleted).toEqual(['rumba/hub/base-123'])
+      await expect(env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'before' }, '/w')).rejects.toThrow()
+      expect(d.codeHost.deleted).toEqual(['rumba/shop/base-123'])
     }
   })
   it('rethrows the original error when deleting the branch also fails', async () => {
     const { env, d } = mk([{ state: 'ERROR', url: 'x.vercel.app', target: 'preview' }])
     d.codeHost.deleteBranch = async () => { throw new Error('delete failed') }
-    await expect(env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'before' }, '/w')).rejects.toThrow(/ERROR/)
+    await expect(env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'before' }, '/w')).rejects.toThrow(/ERROR/)
   })
   it('deletes nothing when an after-run up fails', async () => {
     const { env, d } = mk([{ state: 'ERROR', url: 'x.vercel.app', target: 'preview' }])
-    await expect(env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'after' }, '/w')).rejects.toThrow()
+    await expect(env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'after' }, '/w')).rejects.toThrow()
     expect(d.codeHost.deleted).toEqual([])
   })
   it('deletes nothing for an unknown handle, deletes once, and never throws from down', async () => {
     const { env, d } = mk([{ state: 'READY', url: 'x.vercel.app', target: 'preview' }])
     await env.down({ workdir: '/w', baseUrl: 'https://x.vercel.app' }); expect(d.codeHost.deleted).toEqual([])
-    const h = await env.up({ branch: 'rumba/hub/123', sha: 'abc', role: 'before' }, '/w')
+    const h = await env.up({ branch: 'rumba/shop/123', sha: 'abc', role: 'before' }, '/w')
     d.codeHost.deleteBranch = async () => { throw new Error('delete failed') }
     await expect(env.down(h)).resolves.toBeUndefined()
   })

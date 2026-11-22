@@ -5,18 +5,18 @@ import type { Ticket, TicketState } from '../core/types.js'
 import type { Tracker } from '../ports/tracker.js'
 
 export interface TrackerUnderTest {
-  /** Built with defaultLabels('hub'). */
+  /** Built with defaultLabels('shop'). */
   tracker: Tracker
   seedTicket(labels: string[], opts?: { closed?: boolean }): Promise<Ticket>
   /** Bodies of the comments on the ticket, oldest first. */
   comments(t: Ticket): Promise<string[]>
 }
 
-const LABELS = defaultLabels('hub')
+const LABELS = defaultLabels('shop')
 const NOW = new Date('2026-01-01T00:00:00Z')
 
 function triaged(): TicketState {
-  const s = transition(newState('hub', NOW), 'triaged', NOW, 'looks workable')
+  const s = transition(newState('shop', NOW), 'triaged', NOW, 'looks workable')
   return { ...s, kind: 'bug', criteria: [{ id: 'c1', text: 'Saving works', checkable: true }], errorCount: 1 }
 }
 
@@ -45,7 +45,7 @@ export function trackerContract(name: string, make: () => Promise<TrackerUnderTe
       const u = await make()
       const { tracker } = u
       const t = await u.seedTicket([LABELS.optIn])
-      await tracker.writeState(t, newState('hub', NOW))
+      await tracker.writeState(t, newState('shop', NOW))
       const after1 = (await u.comments(t)).length
       await tracker.writeState(t, triaged())
       expect(await u.comments(t)).toHaveLength(after1)
@@ -56,7 +56,7 @@ export function trackerContract(name: string, make: () => Promise<TrackerUnderTe
       const u = await make()
       const { tracker } = u
       const t = await u.seedTicket([LABELS.optIn, 'bug'])
-      await tracker.writeState(t, newState('hub', NOW))
+      await tracker.writeState(t, newState('shop', NOW))
       await tracker.writeState(t, triaged())
       const want = stateLabel(LABELS, 'triaged')
       expect(stateLabels(t.labels)).toEqual([want])

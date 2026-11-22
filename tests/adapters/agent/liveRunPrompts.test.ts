@@ -6,8 +6,8 @@ const criteria = [{ id: 'c1', text: 'C1', checkable: true }]
 
 describe('where a docker check runs', () => {
   it("tells the check writer that checks run in the project's container through the exec prefix", () => {
-    const p = buildPrompt({ kind: 'write-checks', ticket: makeTicket(), context: '', environmentKind: 'docker', criteria, execPrefix: 'docker compose -f .rumba/hub/compose.yml exec -T app' })
-    expect(p).toContain("Rumba runs each check inside the project's container, not in this sandbox, as: docker compose -f .rumba/hub/compose.yml exec -T app sh -c '<command>'")
+    const p = buildPrompt({ kind: 'write-checks', ticket: makeTicket(), context: '', environmentKind: 'docker', criteria, execPrefix: 'docker compose -f .rumba/shop/compose.yml exec -T app' })
+    expect(p).toContain("Rumba runs each check inside the project's container, not in this sandbox, as: docker compose -f .rumba/shop/compose.yml exec -T app sh -c '<command>'")
     expect(p).toContain('You cannot run the checks there yourself')
     expect(p).not.toContain('run from the repository root')
   })

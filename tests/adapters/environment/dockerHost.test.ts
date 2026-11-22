@@ -14,7 +14,7 @@ import { GitWorkspace } from '../../../src/adapters/workspace/git.js'
 // that read or execute files by relative path, exactly as make, a script or compose would.
 
 const BOT = ['-c', 'user.name=Rumba', '-c', 'user.email=rumba@users.noreply.github.com', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null']
-const BRANCH = 'rumba/hub/1'
+const BRANCH = 'rumba/shop/1'
 
 function composeCli(): boolean {
   try {
