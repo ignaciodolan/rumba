@@ -243,6 +243,11 @@ export class GitWorkspace implements Workspace {
     if (out.length > 0) throw new Error(`Refusing to commit symbolic links that lead outside the repository: ${out.join(', ')}`)
   }
 
+  async head(workdir: string): Promise<string> {
+    const wt = await this.worktree(workdir)
+    return (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD'])).stdout.trim()
+  }
+
   async reset(workdir: string, sha: string): Promise<void> {
     const wt = await this.worktree(workdir)
     await this.refuseNestedRepositories(workdir)

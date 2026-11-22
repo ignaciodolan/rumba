@@ -225,16 +225,24 @@ export class FakeWorkspace implements Workspace {
 
   /** What the next commits return, in order; a null is a commit with nothing to commit. */
   commitResults: (string | null)[] = []
+  /** The commit the fix branch points at; commits and resets move it. Starts at the checks commit of `failing`. */
+  branchTip = 'sha1'
+
+  async head(_workdir: string): Promise<string> {
+    return this.branchTip
+  }
 
   async commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null> {
     this.log.push(`commit ${workdir}${opts?.allowEmpty === true ? ' allowEmpty' : ''}`)
     const scripted = this.commitResults.shift()
     if (scripted === null) return null
     this.commits.push(message)
-    return scripted ?? `sha${this.commits.length}`
+    this.branchTip = scripted ?? `sha${this.commits.length}`
+    return this.branchTip
   }
 
   async reset(workdir: string, sha: string): Promise<void> {
+    this.branchTip = sha
     this.resets.push(sha)
     this.log.push(`reset ${workdir} ${sha}`)
   }

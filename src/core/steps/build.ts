@@ -58,7 +58,8 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
     if (lastRecorded.tail !== '') failures = [{ criterionId: lastRecorded.outcome === 'project-tests-failed' || lastRecorded.projectTests !== 'not-run' ? 'project-tests' : lastRecorded.outcome, output: lastRecorded.tail }]
   }
   const checkFiles = [...new Set([...Object.keys(state.checkHashes), ...state.checks.flatMap((c) => c.files)])]
-  // The commit at the head of the fix branch, which a re-verification runs against.
+  // The commit at the head of the fix branch, which a re-verification runs against. It is read
+  // from the branch in every attempt, so a fix committed in an earlier run counts.
   let head = checksSha
 
   const nextNumber = () => (current.attempts?.at(-1)?.n ?? 0) + 1
@@ -70,6 +71,7 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
 
   while (current.fixAttempts < rumba.limits.maxFixAttempts) {
     const fixed = await fixOnce(deps, rumba, ticket, current, failures, checkFiles, situation, nextNumber())
+    head = fixed.tip
 
     if ('noChange' in fixed && head === checksSha) {
       // Nothing was ever committed on top of the checks: passing now would open a pull request
@@ -112,11 +114,9 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
 
     let v: Verdict
     if ('sha' in fixed) {
-      head = fixed.sha
       v = await verify(deps, rumba, current, fixed.sha, checkFiles)
       if (v.kind === 'guard') head = checksSha
     } else {
-      if (fixed.reset) head = checksSha
       v = { kind: 'guard', failures: fixed.failures }
     }
 
@@ -208,7 +208,7 @@ function fence(text: string): string {
 async function fixOnce(
   deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, failures: Failure[], checkFiles: string[],
   situation: Pick<AgentTask, 'checkStatus' | 'projectTests'>, attempt: number,
-): Promise<{ sha: string; summary: string } | { failures: Failure[]; summary: string; reset: boolean } | { noChange: string; summary: string }> {
+): Promise<({ sha: string } | { failures: Failure[] } | { noChange: string }) & { summary: string; tip: string }> {
   const { workdir } = await deps.workspace.prepare(state.branch!, { fresh: false })
   try {
     const result = await deps.agent.run({
@@ -219,15 +219,16 @@ async function fixOnce(
 
     const sha = await deps.workspace.commit(workdir, `fix: ${inertTitle(ticket.title)} (${ticket.ref})`)
     if (sha === null) {
-      if (result.noChangeNeeded !== undefined) return { noChange: result.noChangeNeeded, summary: result.summary }
-      return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }], summary: result.summary, reset: false }
+      const tip = await deps.workspace.head(workdir)
+      if (result.noChangeNeeded !== undefined) return { noChange: result.noChangeNeeded, summary: result.summary, tip }
+      return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }], summary: result.summary, tip }
     }
     const guard = await protectedFailure(deps, rumba, workdir, state)
     if (guard) {
       await deps.workspace.reset(workdir, state.checksSha!)
-      return { failures: [{ criterionId: 'guard', output: guard }], summary: result.summary, reset: true }
+      return { failures: [{ criterionId: 'guard', output: guard }], summary: result.summary, tip: state.checksSha! }
     }
-    return { sha, summary: result.summary }
+    return { sha, summary: result.summary, tip: sha }
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
