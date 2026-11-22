@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { isTestPath, judgeRelocation } from '../../src/core/relocation.js'
+import { isTestPath, judgeRelocation, moduleVariants } from '../../src/core/relocation.js'
 import { writeFile } from 'node:fs/promises'
 import { makeRumba } from '../../src/testing/fakes.js'
 import { buildDeps, cloneIdentity, resolveCommitAuthor } from '../../src/wiring.js'
@@ -251,5 +251,12 @@ describe('cloneIdentity, isolated from the environment', () => {
     await execa('git', ['config', 'user.name', 'Other'], { cwd: other, env: isolated }); await execa('git', ['config', 'user.email', 'other@example.test'], { cwd: other, env: isolated })
     expect(await cloneIdentity(clone, { ...isolated, GIT_DIR: path.join(other, '.git') })).toBeNull()
     await rm(root, { recursive: true, force: true })
+  })
+})
+
+describe('moduleVariants', () => {
+  it('covers what a resolver tries for a module name', () => {
+    const v = moduleVariants('tests/helpers/factory.js')
+    for (const p of ['tests/helpers/factory.ts', 'tests/helpers/factory.json', 'tests/helpers/factory.d.ts', 'tests/helpers/factory/index.mts', 'tests/helpers/factory/index.cjs', 'tests/helpers/factory/package.json', 'tests/helpers/factory/__init__.py']) expect(v, p).toContain(p)
   })
 })

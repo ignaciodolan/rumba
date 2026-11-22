@@ -461,10 +461,13 @@ function moduleNames(file: string): string[] {
 /** Every path that answers to the same module name as `file`, `file` included. Exported for the step, which reads them all. */
 export function moduleVariants(file: string): string[] {
   const dir = path.posix.dirname(file)
-  const stem = path.posix.basename(file).replace(/\.[^.]+$/, '')
+  const stem = path.posix.basename(file).replace(/\.d\.ts$|\.[^.]+$/, '')
   const at = (p: string) => (dir === '.' ? p : `${dir}/${p}`)
-  const exts = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs', '.py']
-  const out = [...exts.map((e) => at(`${stem}${e}`)), ...['index.ts', 'index.tsx', 'index.js', 'index.jsx', '__init__.py'].map((f) => at(`${stem}/${f}`))]
+  // What Node, TypeScript, Vite and Python try for a module name: the file with each
+  // extension, and the folder of that name with an index, a package.json or an __init__.py.
+  const exts = ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs', '.json', '.node', '.py']
+  const inFolder = [...['ts', 'tsx', 'd.ts', 'js', 'jsx', 'mts', 'mjs', 'cts', 'cjs', 'json'].map((e) => `index.${e}`), 'package.json', '__init__.py']
+  const out = [...exts.map((e) => at(`${stem}${e}`)), ...inFolder.map((f) => at(`${stem}/${f}`))]
   // `x/index.ts` and `x.ts` both answer to `x`.
   if (stem === 'index' || stem === '__init__') out.push(...exts.map((e) => `${dir}${e}`))
   return [...new Set(out)]
