@@ -12,6 +12,8 @@ import { nestedGitEntries, resolveLink } from './untrustedTree.js'
 const BOT_NAME = 'Rumba'
 const BOT_EMAIL = 'rumba@users.noreply.github.com'
 const OUTPUT_DIR = '.rumba-out'
+/** The largest file readFileAt reads: more than any test file needs. */
+const MAX_READ_BYTES = 1_000_000
 /**
  * Config for every git process: no hook and no fsmonitor command ever runs, no attributes
  * file outside the repository is read, no command recurses into submodules, and files are
@@ -282,6 +284,35 @@ export class GitWorkspace implements Workspace {
     return hashes
   }
 
+  async readFileAt(_workdir: string, sha: string, file: string): Promise<string | null> {
+    const entry = await this.entryAt(sha, file)
+    if (entry === null || (entry.mode !== '100644' && entry.mode !== '100755')) return null
+    const size = Number((await this.git(['cat-file', '-s', entry.oid])).trim())
+    if (size > MAX_READ_BYTES) throw new Error(`${file} is too large to read (${size} bytes)`)
+    return (await this.gitResult(['cat-file', 'blob', entry.oid], [0], { strip: false })).stdout
+  }
+
+  async checkoutFiles(workdir: string, sha: string, files: string[]): Promise<void> {
+    const wt = await this.worktree(workdir)
+    const present: string[] = []
+    const absent: string[] = []
+    for (const file of files) ((await this.entryAt(sha, file)) === null ? absent : present).push(file)
+    if (present.length > 0) await this.inWorktree(wt, workdir, ['--literal-pathspecs', 'checkout', '-q', sha, '--', ...present])
+    if (absent.length > 0) await this.inWorktree(wt, workdir, ['--literal-pathspecs', 'rm', '-q', '-f', '--ignore-unmatch', '--', ...absent])
+  }
+
+  /** The tree entry of one path in a commit, read from the trusted repository's objects. */
+  private async entryAt(sha: string, file: string): Promise<TreeEntry | null> {
+    const out = (await this.gitResult(['--literal-pathspecs', 'ls-tree', '-z', '--full-tree', sha, '--', file], [0], { strip: false })).stdout
+    for (const record of out.split('\0')) {
+      const tab = record.indexOf('\t')
+      if (tab < 0 || record.slice(tab + 1) !== file) continue
+      const [mode, , oid] = record.slice(0, tab).split(' ')
+      return { mode: mode!, oid: oid! }
+    }
+    return null
+  }
+
   /** Never throws. A directory that is not one of repoRoot's worktrees is left alone. */
   async cleanup(workdir: string): Promise<void> {
     try {
@@ -393,8 +424,8 @@ export class GitWorkspace implements Workspace {
     return (await this.gitResult(args)).stdout
   }
 
-  private async gitResult(args: string[], ok: number[] = [0]) {
-    return this.run([...SAFE, ...args], this.repoRoot, ok)
+  private async gitResult(args: string[], ok: number[] = [0], o: { strip?: boolean } = {}) {
+    return this.run([...SAFE, ...args], this.repoRoot, ok, {}, o)
   }
 
   /**
@@ -403,8 +434,8 @@ export class GitWorkspace implements Workspace {
    * own config switched off. A git too old to know `--attr-source` fails here instead of
    * running without it.
    */
-  private async run(args: string[], cwd: string, ok: number[], env: Record<string, string> = {}) {
-    return this.spawnGit([...(await this.started()).options, ...args], cwd, ok, env)
+  private async run(args: string[], cwd: string, ok: number[], env: Record<string, string> = {}, o: { strip?: boolean } = {}) {
+    return this.spawnGit([...(await this.started()).options, ...args], cwd, ok, env, o)
   }
 
   private started(): Promise<Setup> {
@@ -441,10 +472,11 @@ export class GitWorkspace implements Workspace {
    * private (mode 700). `sh` only sets the umask and then replaces itself with git; the
    * arguments are passed as "$@", never as shell text.
    */
-  private async spawnGit(args: string[], cwd: string, ok: number[], env: Record<string, string>) {
+  private async spawnGit(args: string[], cwd: string, ok: number[], env: Record<string, string>, o: { strip?: boolean } = {}) {
     const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !LOCATION_VARS.includes(k)))
     const result = await execa('/bin/sh', ['-c', 'umask 022 && exec git "$@"', 'git', ...args], {
       cwd, stdin: 'ignore', all: true, reject: false, extendEnv: false, env: { ...base, ...env, GIT_TERMINAL_PROMPT: '0' },
+      stripFinalNewline: o.strip ?? true,
     })
     if (!ok.includes(result.exitCode ?? -1)) throw new Error(`git ${args.join(' ')} failed:\n${result.all ?? ''}`)
     return result

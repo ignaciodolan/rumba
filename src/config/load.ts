@@ -17,6 +17,8 @@ export interface RumbaConfig {
     | { kind: 'docker'; up: string; exec: string; down: string; protected: string[]; commandTimeoutMinutes: number; minFreeDiskGb: number }
     | { kind: 'vercel-preview'; projectId?: string; protected: string[] }
   verify: { test?: string }
+  /** relocate: move Rumba's checks into the project's own tests once the change is verified. */
+  checks: { relocate: boolean }
   /** The container the agent and the URL checks run in: the Node major version of Rumba's sandbox image. */
   sandbox: { nodeVersion: string }
   /** Who Rumba's commits are made as, when rumba.yml says; see resolveCommitAuthor. */
@@ -88,6 +90,7 @@ async function loadOne(repoRoot: string, name: string): Promise<RumbaConfig> {
         ? { kind: 'docker', up: env.up, exec: env.exec, down: env.down, protected: env.protected, commandTimeoutMinutes: env.command_timeout_minutes, minFreeDiskGb: env.min_free_disk_gb }
         : { kind: 'vercel-preview', ...(env.project_id ? { projectId: env.project_id } : {}), protected: env.protected },
     verify: c.verify,
+    checks: { relocate: c.checks.relocate },
     sandbox: { nodeVersion: c.sandbox.node },
     ...(c.commit_author ? { commitAuthor: c.commit_author } : {}),
     limits: {

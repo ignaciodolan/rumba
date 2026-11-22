@@ -43,6 +43,12 @@ const TASKS: Record<AgentTaskKind, string> = {
     'yet, and pass once it is. Do not fix the problem itself.',
   ].join(' '),
   fix: 'Change the code so that every check below passes and the ticket is done.',
+  'relocate-checks': [
+    "Move Rumba's checks into the project's own tests. The change for this ticket is done and the checks below pass on it,",
+    "but they sit in files Rumba made for itself. Make them ordinary tests of this repository: put them where the project",
+    'keeps its tests, following its layout and naming, give the files and the tests descriptive names, and merge a check',
+    'into an existing test file when that is the natural place for it. Do not change what the checks test.',
+  ].join(' '),
 }
 
 const SHAPES: Record<AgentTaskKind, string> = {
@@ -70,6 +76,12 @@ Optional: "notCheckable": [{ "id": "c2", "reason": "why no command can check it"
   "summary": "what you changed and why, in a few sentences; it goes in the pull request"
 }
 When you find that no change is needed, change no file and add "noChangeNeeded": "why", for example because the checks already pass and the failure came from somewhere else. Rumba then verifies the code once more as it stands.`,
+  'relocate-checks': `{
+  "kind": "relocate-checks",
+  "moves": [{ "from": "tests/rumba/c1.test.ts", "to": "test/profile.test.ts" }],
+  "checks": [{ "criterionId": "c1", "command": "the command that runs the check from its new place", "files": ["test/profile.test.ts"] }]
+}
+Give one move for every check file listed above, and one check for every criterion above.`,
 }
 
 function cut(text: string, max: number, note: string): string {
@@ -124,6 +136,17 @@ function checkRules(task: AgentTask): string {
     )
   }
   return rules.map((r) => `- ${r}`).join('\n')
+}
+
+function relocateRules(): string {
+  return [
+    '- Move every check file listed above, and delete it from where it was. Give each one in "moves", from its old path to its new one.',
+    '- Keep every other line of a check exactly as it is, in the same order. You may change only the import lines, the test titles and the indentation: a title is the name in describe, it or test, or the name after test_ or Test of a test function or class. Do not add, remove or change any other line, not even to match the style of the file.',
+    '- When you merge a check into an existing test file, add its lines to that file and keep the lines already there as they are, except the imports, which you may merge.',
+    '- Do not change any other file.',
+    '- For each criterion, give the command that runs its check from the new place. The command must name the test file it runs.',
+    '- Rumba compares the moved lines with the ones it verified, then runs each moved check on the change, where it must pass, and on the base commit, where it must fail. If anything differs, Rumba keeps the checks where they were.',
+  ].join('\n')
 }
 
 function whereChecksRun(execPrefix: string): string {
@@ -200,7 +223,8 @@ export function buildPrompt(task: AgentTask): string {
   }
   if (task.kind === 'write-checks') rest.push(`# How to write the checks\n${checkRules(task)}`)
   if (task.kind === 'fix') rest.push(`# How to fix\n${fixRules(task)}`)
-  if ((task.kind === 'write-checks' || task.kind === 'fix') && task.execPrefix !== undefined) rest.push(`# Where the checks run\n${whereChecksRun(task.execPrefix)}`)
+  if (task.kind === 'relocate-checks') rest.push(`# How to move the checks\n${relocateRules()}`)
+  if ((task.kind === 'write-checks' || task.kind === 'fix' || task.kind === 'relocate-checks') && task.execPrefix !== undefined) rest.push(`# Where the checks run\n${whereChecksRun(task.execPrefix)}`)
 
   const assemble = (ctx: string | null, docs: string | null): string => {
     const middle = [ticket]

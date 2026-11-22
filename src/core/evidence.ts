@@ -1,6 +1,6 @@
 import type { RumbaConfig } from '../config/load.js'
 import { cleanOutput, MAX_OUTPUT } from './redact.js'
-import type { CheckResult, Criterion, Ticket, TicketState } from './types.js'
+import type { Check, CheckResult, Criterion, Relocation, Ticket, TicketState } from './types.js'
 
 export interface EvidenceInput {
   ticket: Ticket
@@ -42,6 +42,15 @@ function block(text: string): string {
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** The check's files; for a relocated check, also where each came from. */
+function fileCell(check: Check, relocation: Relocation | undefined): string {
+  const original = relocation?.original?.find((c) => c.criterionId === check.criterionId)
+  return check.files.map((f) => {
+    const from = (relocation?.moves ?? []).filter((m) => m.to === f && original?.files.includes(m.from)).map((m) => codeSpan(m.from))
+    return from.length > 0 ? `${codeSpan(f)} (relocated from ${from.join(', ')})` : codeSpan(f)
+  }).join(', ')
 }
 
 function verdict(results: CheckResult[] | undefined, criterionId: string): string {
@@ -92,12 +101,33 @@ function render(i: EvidenceInput, cap: number | null): string {
   const closes = rumba.tracker.kind === 'github' && /^#\d+$/.test(ticket.ref) ? `\n\nCloses ${ticket.ref}` : ''
   sections.push(`## Ticket\n\n${ticket.url}${closes}\n\nRumba: ${rumba.name}`)
 
+  const relocation = state.relocation?.status === 'relocated' ? state.relocation : undefined
   const rows = state.checks.flatMap((check) => {
     const criterion = state.criteria.find((c) => c.id === check.criterionId)
     if (!criterion) return []
-    return [`| ${cell(criterion.text)} | ${codeSpan(check.command)} | ${verdict(state.before, check.criterionId)} | ${verdict(state.after, check.criterionId)} |`]
+    return [`| ${cell(criterion.text)} | ${codeSpan(check.command)} | ${fileCell(check, relocation)} | ${verdict(state.before, check.criterionId)} | ${verdict(state.after, check.criterionId)} |`]
   })
-  sections.push(['## Evidence', '', '| Criterion | Check | Before | After |', '| --- | --- | --- | --- |', ...rows].join('\n'))
+  sections.push(['## Evidence', '', '| Criterion | Check | File | Before | After |', '| --- | --- | --- | --- | --- |', ...rows].join('\n'))
+
+  if (state.relocation?.status === 'relocated') {
+    const moves = (state.relocation.moves ?? []).map((m) => `- ${codeSpan(m.from)} → ${codeSpan(m.to)}`)
+    sections.push([
+      '## Checks', '',
+      "Rumba wrote its checks in files of its own, and moved them into the project's tests once the change passed:", '',
+      ...moves, '',
+      'Rumba kept the move only because it could show that the move weakened no check:', '',
+      '- It compared the moved checks with the ones it verified, line by line. Only their place, their imports, their test titles and their indentation changed. Every other line is as it was, in the same order, and no line was added.',
+      "- Each moved check fails on the base commit and passes on the change, run again in the project's environment.", '',
+      'In the table, Before is the check as Rumba wrote it, on the base commit, and After is the moved check, on the change.',
+    ].join('\n'))
+  } else if (state.relocation?.status === 'rejected') {
+    sections.push([
+      '## Checks', '',
+      "Rumba moved its checks into the project's tests, then rejected the move and undid it, for this reason:", '',
+      block(state.relocation.reason ?? 'no reason was recorded'), '',
+      'The checks in this pull request are as Rumba wrote them, in files of their own, and the results are theirs.',
+    ].join('\n'))
+  }
 
   const open = unverified(state)
   if (open.length > 0) {
@@ -117,7 +147,8 @@ function render(i: EvidenceInput, cap: number | null): string {
         const r = results?.find((x) => x.criterionId === check.criterionId)
         return `${label}:\n\n${block(cleanOutput(r?.output ?? '', i.secrets, cap))}`
       }
-      return `<details>\n<summary>${escapeHtml(check.criterionId)}: ${escapeHtml(check.command)}</summary>\n\n${part('Before', state.before)}\n\n${part('After', state.after)}\n\n</details>`
+      const before = relocation ? 'Before (the check as Rumba wrote it, on the base commit)' : 'Before'
+      return `<details>\n<summary>${escapeHtml(check.criterionId)}: ${escapeHtml(check.command)}</summary>\n\n${part(before, state.before)}\n\n${part('After', state.after)}\n\n</details>`
     })
     sections.push(['## Check output', ...outputs].join('\n\n'))
   }

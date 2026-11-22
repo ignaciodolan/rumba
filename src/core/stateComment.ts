@@ -18,6 +18,17 @@ const attempt = z.object({
   tail: z.string(),
 })
 
+const check = z.object({ criterionId: z.string(), command: z.string(), files: z.array(z.string()) })
+const relocation = z.object({
+  status: z.enum(['started', 'relocated', 'rejected']),
+  from: z.string(),
+  reason: z.string().optional(),
+  sha: z.string().optional(),
+  moves: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+  original: z.array(check).optional(),
+  before: z.array(checkResult).optional(),
+})
+
 // Tracker comments are untrusted input, so the decoded state is validated strictly.
 const ticketState = z.object({
   version: z.literal(1),
@@ -26,7 +37,7 @@ const ticketState = z.object({
   lastDurable: durableState,
   kind: z.enum(['bug', 'feature']).optional(),
   criteria: z.array(z.object({ id: z.string(), text: z.string(), checkable: z.boolean(), reason: z.string().optional() })),
-  checks: z.array(z.object({ criterionId: z.string(), command: z.string(), files: z.array(z.string()) })),
+  checks: z.array(check),
   checkHashes: z.record(z.string(), z.string()),
   fixAttempts: count,
   errorCount: count,
@@ -38,6 +49,7 @@ const ticketState = z.object({
   after: z.array(checkResult).optional(),
   attempts: z.array(attempt).optional(),
   fixSummary: z.string().optional(),
+  relocation: relocation.optional(),
   lease: z.object({ runId: z.string(), at: z.string() }).optional(),
   history: z.array(z.object({ state: stateName, at: z.string(), note: z.string().optional() })),
 })
@@ -63,6 +75,7 @@ export function encodeStateComment(s: TicketState): string {
   const slim: TicketState = { ...s }
   if (s.before !== undefined) slim.before = drop(s.before)
   if (s.after !== undefined) slim.after = drop(s.after)
+  if (s.relocation?.before !== undefined) slim.relocation = { ...s.relocation, before: drop(s.relocation.before) }
   if (s.attempts !== undefined) slim.attempts = s.attempts.map((a) => ({ ...a, tail: OUTPUT_DROPPED }))
   const body = encode(slim)
   if (body.length <= MAX_STATE_COMMENT) return body

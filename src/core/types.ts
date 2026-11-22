@@ -21,6 +21,26 @@ export interface AttemptRecord {
   /** A short, cleaned tail of the output that decided the outcome. */
   tail: string
 }
+/** One check file the relocation moved: where Rumba wrote it, and where it now lives. */
+export interface Move { from: string; to: string }
+/**
+ * Moving Rumba's checks into the project's own tests, after the change is verified.
+ * `started`: written before the agent runs, so an interrupted relocation can be undone.
+ * `relocated`: kept; the ticket's checks are now the relocated ones, and `original` holds the
+ * checks Rumba wrote. `rejected`: undone, for `reason`; the ticket keeps the checks Rumba wrote.
+ */
+export interface Relocation {
+  status: 'started' | 'relocated' | 'rejected'
+  /** The tip of the fix branch before the relocation: the verified change. */
+  from: string
+  reason?: string
+  /** Relocated: the commit that moved the checks. */
+  sha?: string
+  moves?: Move[]
+  original?: Check[]
+  /** Relocated: how each relocated check did on the base commit, where it must fail. */
+  before?: CheckResult[]
+}
 export interface LinkedDocument { title: string; body: string }
 export interface LabelNames { optIn: string; statePrefix: string; approved: string; retry: string }
 export interface TicketState {
@@ -44,6 +64,8 @@ export interface TicketState {
   attempts?: AttemptRecord[]
   /** The agent's summary of the fix that passed, for the pull request. */
   fixSummary?: string
+  /** Set once Rumba tried to move the checks into the project's tests. */
+  relocation?: Relocation
   lease?: { runId: string; at: string }
   history: { state: StateName; at: string; note?: string }[]
 }

@@ -11,6 +11,13 @@ export interface Workspace {
   head(workdir: string): Promise<string>
   changedFiles(workdir: string, sinceSha: string): Promise<string[]>
   hashFiles(workdir: string, files: string[]): Promise<Record<string, string>>
+  /**
+   * A file's text as commit `sha` holds it, read from the repository's objects, never from the
+   * workdir. Null when the commit has no regular file at that path (none, a link, a folder).
+   */
+  readFileAt(workdir: string, sha: string, file: string): Promise<string | null>
+  /** Sets `files` in the workdir and its index to their content at `sha`; a file `sha` does not have is deleted. */
+  checkoutFiles(workdir: string, sha: string, files: string[]): Promise<void>
   /** Never throws: a workdir that cannot be removed is left behind, and its branch is freed. */
   cleanup(workdir: string): Promise<void>
   /** Removes every worktree this instance created. */

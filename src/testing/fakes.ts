@@ -26,6 +26,7 @@ export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
     agent: { kind: 'claude-code' },
     environment: { kind: 'docker', up: 'docker compose up -d', exec: 'docker compose exec app sh -c', down: 'docker compose down', protected: [], commandTimeoutMinutes: 10, minFreeDiskGb: 5 },
     verify: {},
+    checks: { relocate: true },
     sandbox: { nodeVersion: '22' },
     limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 },
     labels: defaultLabels('hub'),
@@ -219,6 +220,8 @@ export class FakeWorkspace implements Workspace {
     // Each call gets its own directory, as a real worktree would.
     this.prepared += 1
     const workdir = `/fake/${this.prepared}/${branch}`
+    this.branches.set(workdir, branch)
+    if (branch !== this.fixBranch && opts.fresh) this.otherTips.set(branch, 'base000')
     this.log.push(`prepare ${branch} ${opts.fresh ? 'fresh' : 'existing'} ${workdir}`)
     return { workdir, baseSha: 'base000' }
   }
@@ -227,9 +230,24 @@ export class FakeWorkspace implements Workspace {
   commitResults: (string | null)[] = []
   /** The commit the fix branch points at; commits and resets move it. Starts at the checks commit of `failing`. */
   branchTip = 'sha1'
+  /** The fix branch of the default ticket; any other branch keeps its own tip in `otherTips`. */
+  fixBranch = 'rumba/hub/123'
+  otherTips = new Map<string, string>()
+  private branches = new Map<string, string>()
 
-  async head(_workdir: string): Promise<string> {
-    return this.branchTip
+  private tipOf(workdir: string): string {
+    const branch = this.branches.get(workdir)
+    return branch === undefined || branch === this.fixBranch ? this.branchTip : this.otherTips.get(branch) ?? 'base000'
+  }
+
+  private move(workdir: string, sha: string): void {
+    const branch = this.branches.get(workdir)
+    if (branch === undefined || branch === this.fixBranch) this.branchTip = sha
+    else this.otherTips.set(branch, sha)
+  }
+
+  async head(workdir: string): Promise<string> {
+    return this.tipOf(workdir)
   }
 
   async commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null> {
@@ -237,12 +255,12 @@ export class FakeWorkspace implements Workspace {
     const scripted = this.commitResults.shift()
     if (scripted === null) return null
     this.commits.push(message)
-    this.branchTip = scripted ?? `sha${this.commits.length}`
-    return this.branchTip
+    this.move(workdir, scripted ?? `sha${this.commits.length}`)
+    return this.tipOf(workdir)
   }
 
   async reset(workdir: string, sha: string): Promise<void> {
-    this.branchTip = sha
+    this.move(workdir, sha)
     this.resets.push(sha)
     this.log.push(`reset ${workdir} ${sha}`)
   }
@@ -253,6 +271,17 @@ export class FakeWorkspace implements Workspace {
 
   async hashFiles(_workdir: string, files: string[]): Promise<Record<string, string>> {
     return this.hashes ?? Object.fromEntries(files.map((f) => [f, 'h0']))
+  }
+
+  /** What readFileAt returns: by commit, then by path. */
+  files: Record<string, Record<string, string>> = {}
+
+  async readFileAt(_workdir: string, sha: string, file: string): Promise<string | null> {
+    return this.files[sha]?.[file] ?? null
+  }
+
+  async checkoutFiles(workdir: string, sha: string, files: string[]): Promise<void> {
+    this.log.push(`checkout ${workdir} ${sha} ${files.join(' ')}`)
   }
 
   async cleanup(workdir: string): Promise<void> {

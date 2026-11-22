@@ -44,6 +44,8 @@ export const rumbaFileSchema = z
     }),
     environment: z.discriminatedUnion('kind', [dockerEnvironment, vercelEnvironment]),
     verify: z.object({ test: z.string().min(1).optional() }).default({}),
+    /** relocate: once the change is verified, move Rumba's checks into the project's own tests. */
+    checks: z.object({ relocate: z.boolean().default(true) }).default({ relocate: true }),
     sandbox: z.object({ node: nodeMajor.default('22') }).default({ node: '22' }),
     commit_author: z.object({ name: z.string().trim().min(1), email: z.string().trim().regex(/^[^\s<>@]+@[^\s<>@]+$/, 'must be an email address') }).optional(),
     limits: z

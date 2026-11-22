@@ -64,7 +64,20 @@ On each run Rumba takes each opted-in ticket as far as it can:
 4. `awaiting_criteria`: a feature whose criteria are not written anywhere. Rumba never treats criteria it wrote itself as approved: it posts them as a draft and waits. Add `rumba-approved` to accept the draft as posted, or write the final criteria in the ticket description under an "Acceptance criteria" heading and then add the label.
 5. `env_ready` → `checks_failing`: the environment is up at the base commit, the agent writes one check per criterion, and every check fails there, as it should.
 6. `building` → `verified`: the agent changes the code on the branch `rumba/<name>/<ticket-id>` until every check passes, and the project's own tests too. Before each attempt the agent is told which checks pass, which fail, and whether only the project's tests failed. It may answer that no change is needed, with a reason; Rumba then verifies the code once more as it stands, and if it still does not pass, the ticket goes to `needs_human` with that reason.
-7. `pr_open`: the pull request is open, with a summary of the change written by the agent, `Closes #<n>` for a GitHub issue (a link for Linear), and the before and after results of each check. Criteria that no command can check are listed as not verified, and the pull request is then opened as a draft.
+7. `pr_open`: the pull request is open, with a summary of the change written by the agent, `Closes #<n>` for a GitHub issue (a link for Linear), and for each criterion the check's command, its file, and its result before and after the change. Criteria that no command can check are listed as not verified, and the pull request is then opened as a draft. Just before it opens the pull request, Rumba moves its checks into the project's own tests, as described below.
+
+### Moving the checks into the project's tests
+
+The agent writes its checks where it can find them, often in a folder of their own such as `tests/rumba/`. Once the change is verified, and before the pull request opens, Rumba has the agent move them into the repository's existing test layout: descriptive file and test names, merged into an existing test file where that is the natural place, imports fixed. They then arrive in the pull request as ordinary tests of the project. `checks.relocate: false` turns this off.
+
+The move must not weaken a check, so Rumba keeps it only when both of these hold:
+
+- **The lines are the ones it verified.** Rumba compares the moved files with the checks it verified, from the commits, line by line. Only a check's place, its import lines, its test titles and its indentation may change: every other line must be there, in the same order, and no line may be added. A file the check was merged into must keep its own lines too. A title is the name given to `describe`, `it` or `test`, or the name of a `test_` function or `Test` class; `it.skip` is not `it`. Only the check files and their new places may change.
+- **The moved checks still show the problem.** Rumba runs each moved check in the project's environment, in a fresh checkout, like any check: on the change, where it must pass (and the project's own tests with it, when `verify.test` is set), and on the base commit with the moved files on it, where it must fail. A check that does not run, or whose command no longer names its new test file, does not count.
+
+The line check catches a changed or dropped assertion, an added `return` or mock, and a skipped test. It cannot judge what an import now points at, or what a command runs; the runs catch those, since a check that no longer tests the change passes on the base commit too.
+
+If either fails, Rumba undoes the move: the branch goes back to the verified change, with the checks as it wrote them, and the pull request opens anyway, saying in a "Checks" section why the move was rejected. If the move is kept, the evidence table shows each check's final command and file, notes where it was moved from, and keeps the result of the check Rumba wrote on the base commit as the "before". A move that the machine interrupts is undone the same way, on the next run.
 
 Every fix attempt is recorded in the state comment on the ticket: how each check did, whether the project's tests passed, failed or were stopped by the machine, and the last part of the output. A `fix_failed` comment lists the attempts one by one, so it can be explained from the ticket alone.
 
@@ -133,6 +146,8 @@ environment:
   # protected: ["Makefile"]
 verify:
   test: npm test            # optional: the project's own tests, run on the default branch first and against the change
+checks:
+  relocate: true            # optional: move Rumba's checks into the project's tests before the pull request
 sandbox:
   node: 22                  # optional: the Node major version of the container the agent runs in
 commit_author:              # optional: who Rumba's commits are made as (see below)
@@ -156,6 +171,7 @@ labels:                     # optional: rename the labels
 - `environment.protected`: globs of files the agent may not change. The docker default is the files that define the containers (`docker-compose*.y*ml`, `compose*.y*ml`, `Dockerfile*`, `*.dockerfile`, `.dockerignore`); the vercel-preview default is none. Setting the list replaces the default. Anything under `.rumba/` or `.github/`, and any file named `.env` at any depth, is always protected.
 - `environment.command_timeout_minutes` (docker): the limit of each of `up`, `exec` and `down`, 10 minutes by default. A check or `verify.test` runs through `exec`, so a slow test suite needs a higher value. No command outlasts the ticket's time either, except `down`.
 - `verify.test`: the project's own tests. Rumba runs them once on the default branch before any agent call, and against every fix.
+- `checks.relocate`: whether Rumba moves its checks into the project's own test layout once the change is verified, `true` by default. See "Moving the checks into the project's tests" above. With `false`, the checks stay in the files the agent first wrote them in.
 - `sandbox.node`: the Node major version (20 or later) of Rumba's sandbox image, the container the agent and the URL checks run in. Rumba always builds that image from its own Dockerfile, never from your repository; this setting only picks the Node version. The image has pnpm and yarn through corepack, at the version your `package.json` pins.
 - `environment.min_free_disk_gb` (docker): before `up`, Rumba measures the disk Docker has left, from inside a tiny `busybox` container, and stops with "Not enough disk space for Docker" below this, 5 GB by default. This counts as an infrastructure error. 0 skips the check. When the measurement cannot run (no network to pull `busybox` the first time, say), the check is skipped.
 - `commit_author`: who Rumba's commits are made as. `RUMBA_COMMIT_AUTHOR_NAME` and `RUMBA_COMMIT_AUTHOR_EMAIL`, set together, win over it. Without either, Rumba commits as the GitHub account it runs as, with that account's `<id>+<login>@users.noreply.github.com` address, so integrations that check the commit author (a Vercel project that only builds commits by its members, say) recognise it. When the account cannot be looked up, it commits as `Rumba <rumba@users.noreply.github.com>`.

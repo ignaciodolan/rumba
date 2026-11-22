@@ -213,7 +213,7 @@ What counts as feedback **(call)**: a review that requests changes, or a review 
 Revising:
 
 - The agent revises the change on the same branch, with the feedback in front of it.
-- Checks stay locked, as in section 11, unless the feedback says a check or a criterion is wrong. In that case the agent may change the check, Rumba runs it again against the base commit and against the change, and the evidence table marks it as changed after review. **(call)**
+- Checks stay locked, as in section 11, unless the feedback says a check or a criterion is wrong. When the checks were moved into the project's tests (section 11), the moved files are the ones locked. In that case the agent may change the check, Rumba runs it again against the base commit and against the change, and the evidence table marks it as changed after review. **(call)**
 - Rumba pushes to the same pull request, updates the evidence in its body, and replies on the pull request saying what changed.
 - At most two review rounds per pull request (`max_review_rounds`, default 2). After that the ticket moves to `needs_human`. **(call)**
 
@@ -241,7 +241,7 @@ interface Tracker {
 }
 
 interface Agent {
-  // task is one of: triage, draft-criteria, write-checks, fix, revise, distill-lesson
+  // task is one of: triage, draft-criteria, write-checks, fix, relocate-checks, revise, distill-lesson
   // always executed inside the sandbox container, with workdir mounted
   run(task: AgentTask, workdir: string): Promise<AgentResult>
 }
@@ -278,6 +278,12 @@ Two of each of the first three, so the interfaces are proven by a second impleme
 - A check is a command. Exit 0 means the criterion holds.
 - The agent prefers the project's existing test framework and falls back to a standalone script. **(call)**
 - Checks are committed on the fix branch, so they arrive in the pull request as regression tests. **(call)**
+- Once the change is verified, and before the pull request, the agent moves the checks into the project's existing test layout: descriptive file and test names, merged into an existing test file where that is the natural place, imports fixed. They arrive as ordinary tests of the repository, not as files in a folder of Rumba's. `checks.relocate: false` turns it off; it is on by default. The state stays `verified` throughout; the ticket records the relocation, and records that it started before the agent runs, so a run that stops halfway is undone by the next. **(call)**
+- A relocation must not weaken a check. Rumba keeps it only when both hold: **(call)**
+  - *Line check.* From the commits, never from the agent's folder: every line of each check is in its new file, in the same order, except import lines, test titles (the name given to `describe`, `it`, `test`, or a `test_` function or `Test` class; modifiers such as `.skip` stay) and indentation; no line is added; a file the check merged into keeps its own lines in order; only the check files and their new places change; protected paths stay untouched; every criterion keeps exactly one check, whose command names its new file and not the old one.
+  - *Runs.* Each moved check runs in the project's environment, in fresh checkouts: on the change it must pass, and so must the project's tests; on the checks commit with the moved files on it, it must fail. A check that cannot run (exit 124, 126, 127) fails the relocation.
+  - Why both: the line check alone cannot tell what an import points at or what a command really runs (`|| true`, another file); the runs alone would accept a check that still fails on the base and passes on the change but asserts less. Together, a moved check asserts what the verified one did and still separates the base from the change. Rerunning the moved check on the base is the same evidence the original check gave, so the evidence table can keep the original's base result.
+  - Anything else (a failed check, an agent error, the machine, the time budget) rejects the relocation: the branch is reset to the verified change, the original checks and their results stay, and the pull request still opens and says why. The relocation is never a reason not to open the pull request.
 - After `checks_failing`, Rumba records a hash of every check file. If a check file changed during `building`, verification fails. This stops the agent passing by editing the test. The one exception is a revision where the feedback asked for it, described in section 9. **(call)**
 - For URL-based environments, checks read the target from `RUMBA_BASE_URL`.
 - If the rumba's config names the project's own test command, Rumba runs it once on the default branch before any agent call, and against the change. On the default branch a failure stops the ticket with `needs_human`. Against the change, a timeout or a command that cannot run (exit 124, 126, 127) is an error, not evidence; any other failure counts as a failed fix attempt, so a fix that breaks other tests does not reach `verified`. This applies where the environment can run commands, which means Docker and not Vercel preview. **(call)**
@@ -286,7 +292,8 @@ Pull request body:
 
 - a short summary of the change, written by the agent;
 - link to the ticket, `Closes #<n>` for a GitHub issue, and which rumba produced it;
-- a table of criterion, check, result before, result after;
+- a table of criterion, check command, check file, result before, result after; a relocated check shows its final command and file, notes the file it was moved from, and keeps the original check's base result as "before";
+- a Checks section when relocation ran: the moves and how Rumba made sure they weakened nothing, or why the relocation was rejected;
 - criteria not verified, if any;
 - files changed outside the rumba's scope, if any;
 - trimmed check output;
@@ -344,6 +351,8 @@ environment:
   # command_timeout_minutes: 10  # the limit of each of up, exec and down
 verify:
   test: npm test          # optional: the project's own tests, on the default branch first and against the change
+checks:
+  relocate: true          # optional: move the checks into the project's tests before the pull request
 sandbox:
   node: 22                # optional: the Node major version of the agent's container
 limits:

@@ -33,6 +33,11 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
   }),
   'draft-criteria': z.object({ kind: z.literal('draft-criteria'), criteria }),
   'write-checks': z.object({ kind: z.literal('write-checks'), checks: z.array(check).max(MAX_ITEMS) }),
+  'relocate-checks': z.object({
+    kind: z.literal('relocate-checks'),
+    moves: z.array(z.object({ from: relativeFile, to: relativeFile })).max(MAX_ITEMS),
+    checks: z.array(check).max(MAX_ITEMS),
+  }),
   fix: z.object({ kind: z.literal('fix'), summary: z.string(), noChangeNeeded: z.string().trim().min(1).max(MAX_CRITERION_TEXT * 4).optional() }),
 }
 
