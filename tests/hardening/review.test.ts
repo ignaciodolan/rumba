@@ -162,3 +162,57 @@ describe('wiring', () => {
     expect((off.environment as unknown as { o: Record<string, unknown> }).o.disk).toBeUndefined()
   })
 })
+
+describe('no change needed on a later run, decided from the branch', () => {
+  it('re-verifies the fix committed in an earlier run when the agent says no change is needed', async () => {
+    const d = makeDeps(); d.workspace.hashes = H; d.environment.passes = () => true
+    d.workspace.branchTip = 'fix-from-run-3'
+    d.agent.script.fix = { kind: 'fix', summary: 'The fix is already there.', noChangeNeeded: 'The checks pass; the tests were killed for memory.' }
+    d.workspace.commitResults = [null]
+    const st = { ...failing(d), attempts: [{ n: 1, outcome: 'infrastructure' as const, checks: [{ criterionId: 'c1', passed: true, exitCode: 0 }], projectTests: 'infrastructure' as const, tail: 'Killed' }] }
+    const s = await build(d, withTests, makeTicket(), st)
+    expect(s.state).toBe('verified')
+    expect(d.environment.ups).toEqual([{ branch: 'rumba/hub/123', sha: 'fix-from-run-3', role: 'after' }])
+  })
+  it('keeps telling the agent the truth after it changed nothing, when the branch still holds a fix', async () => {
+    const d = makeDeps(); d.workspace.hashes = H; d.environment.passes = () => true
+    d.workspace.branchTip = 'fix-from-run-3'
+    d.agent.script.fix = [{ kind: 'fix', summary: 'nothing' }, { kind: 'fix', summary: 'x' }]
+    d.workspace.commitResults = [null]
+    const st = { ...failing(d), attempts: [{ n: 1, outcome: 'infrastructure' as const, checks: [{ criterionId: 'c1', passed: true, exitCode: 0 }], projectTests: 'infrastructure' as const, tail: 'Killed' }] }
+    await build(d, withTests, makeTicket(), st)
+    expect(d.agent.calls[1]).toMatchObject({ checkStatus: [{ criterionId: 'c1', passed: true }] })
+  })
+})
+
+describe('more lock edges', () => {
+  let dir: string
+  beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), 'rumba-lock3-')) })
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
+
+  it('removes draft files left by a process that died between writing and linking', async () => {
+    const file = path.join(dir, 'environment.lock')
+    await writeFile(`${file}.999999.abc`, '{}')
+    const lock = new HostLock({ file, pollMs: 10, isAlive: (pid) => pid !== 999999 })
+    await lock.acquire(500); await lock.release()
+    const { readdir } = await import('node:fs/promises')
+    expect(await readdir(dir)).toEqual([])
+  })
+  it('does not remove a live lock that replaced the stale one it judged', async () => {
+    const file = path.join(dir, 'environment.lock')
+    await writeFile(file, JSON.stringify({ pid: 999999, host: 'h', at: 'x' }))
+    const live = new HostLock({ file, pollMs: 10, isAlive: (pid) => pid !== 999999 })
+    // Between judging the old lock stale and removing it, another waiter takes the lock.
+    const slow = new HostLock({ file, pollMs: 10, isAlive: (pid) => pid !== 999999, beforeRemoveStale: async () => {
+      const { unlink } = await import('node:fs/promises'); await unlink(file); await live.acquire(100)
+    } })
+    await expect(slow.acquire(150)).rejects.toThrow(/did not finish in time/)
+    await live.release()
+  })
+})
+
+describe('timeout wording', () => {
+  it('does not blame the command limit alone, since the ticket may have run out of time', () => {
+    expect(classifyInfrastructure({ exitCode: 124, output: '', dockerOom: false })).toMatch(/command limit or the ticket's time/)
+  })
+})
