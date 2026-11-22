@@ -1,6 +1,6 @@
-import type { Check, Criterion, Kind, LinkedDocument, ProjectTestsResult, Ticket } from '../core/types.js'
+import type { Check, Criterion, Kind, LinkedDocument, Move, ProjectTestsResult, Ticket } from '../core/types.js'
 
-export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix'
+export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix' | 'relocate-checks'
 
 export interface AgentTask {
   kind: AgentTaskKind
@@ -45,6 +45,13 @@ export type AgentResultBody =
     kind: 'fix'; summary: string
     /** Set when the agent found no change was needed; the reason. */
     noChangeNeeded?: string
+  }
+  | {
+    kind: 'relocate-checks'
+    /** Every check file, from where Rumba wrote it to where it now lives. */
+    moves: Move[]
+    /** The checks as they run from their new place. */
+    checks: Check[]
   }
 
 export interface Agent {

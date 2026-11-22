@@ -13,7 +13,9 @@ export async function openPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ti
 
   const { workdir } = await deps.workspace.prepare(branch, { fresh: false })
   const changed = await deps.workspace.changedFiles(workdir, baseSha)
-  const outside = outsideScope(changed, rumba.paths, state.checks.flatMap((c) => c.files))
+  // Only the files Rumba wrote its checks in are left out of the scope warning: a check moved
+  // into the project's tests is judged by its new place, like any other change.
+  const outside = outsideScope(changed, rumba.paths, (state.relocation?.original ?? state.checks).flatMap((c) => c.files))
   await deps.codeHost.pushBranch(workdir, branch, { force: true })
 
   const url = await deps.codeHost.openPullRequest({

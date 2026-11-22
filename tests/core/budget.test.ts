@@ -20,8 +20,9 @@ describe('the time budget of a ticket', () => {
     d.agent.run = async (task, w) => { const r = await agentRun(task, w); minutes += 5; return r }
     await advanceTicket(d, makeRumba(), makeTicket(), newState('hub', d.clock()))
     const limits = d.agent.calls.map((c) => c.timeoutMs)
-    // triage at minute 0, write-checks at 5, fix at 10; the environment on the base at 0, before at 10, after at 15.
-    expect(limits).toEqual([30 * MIN, 25 * MIN, 20 * MIN])
+    // triage at minute 0, write-checks at 5, fix at 10, relocate-checks at 15; the environment on the base at 0, before at 10, after at 15.
+    // (The agent has no relocate-checks script here, so the move is rejected before any environment runs.)
+    expect(limits).toEqual([30 * MIN, 25 * MIN, 20 * MIN, 15 * MIN])
     expect(d.environment.upTimeouts).toEqual([30 * MIN, 20 * MIN, 15 * MIN])
   })
   it('ends the ticket in needs_human, not in an error, when a call is cut short by the budget', async () => {
