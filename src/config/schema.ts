@@ -53,8 +53,9 @@ export const rumbaFileSchema = z
         max_tickets_per_run: z.number().int().positive().default(3),
         minutes_per_ticket: z.number().int().positive().default(30),
         max_fix_attempts: z.number().int().positive().default(2),
+        max_review_rounds: z.number().int().positive().default(2),
       })
-      .default({ max_tickets_per_run: 3, minutes_per_ticket: 30, max_fix_attempts: 2 }),
+      .default({ max_tickets_per_run: 3, minutes_per_ticket: 30, max_fix_attempts: 2, max_review_rounds: 2 }),
     labels: z
       .object({
         opt_in: z.string().min(1).optional(),

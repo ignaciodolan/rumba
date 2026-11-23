@@ -2,9 +2,10 @@ import type { RumbaConfig } from '../../config/load.js'
 import { AgentError } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
 import { timeLeft } from '../budget.js'
-import { checkOutputMax, cleanOutput } from '../redact.js'
+import { cleanOutput } from '../redact.js'
 import { judgeRelocation, moduleVariants } from '../relocation.js'
 import type { Check, CheckResult, Move, Relocation, Ticket, TicketState } from '../types.js'
+import { notWhereTheAgentWrote, onTheBase, runChecks } from './baseRun.js'
 import { COULD_NOT_RUN, execPrefixOf, inertTitle } from './build.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
 
@@ -133,7 +134,10 @@ async function move(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: Ticke
 async function runMoved(deps: Deps, rumba: RumbaConfig, state: TicketState, moved: Moved, agentDir: string): Promise<Outcome> {
   const onChange = await onTheChange(deps, rumba, state, moved.sha, moved.checks, agentDir)
   if ('reason' in onChange) return onChange
-  const onBase = await onTheBase(deps, state, moved.sha, moved.checks, [...new Set([...moved.moves.map((m) => m.to), ...moved.moves.map((m) => m.from)])], agentDir)
+  const onBase = await onTheBase(deps, state, {
+    branch: `${state.branch!}-relocated-base`, sha: moved.sha, checks: moved.checks, files: [...new Set([...moved.moves.map((m) => m.to), ...moved.moves.map((m) => m.from)])],
+    what: 'relocated', message: 'test: the relocated checks on the base commit', agentDir,
+  })
   if ('reason' in onBase) return onBase
   return { ...moved, after: onChange.results, before: onBase.results }
 }
@@ -166,51 +170,4 @@ async function onTheChange(deps: Deps, rumba: RumbaConfig, state: TicketState, s
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
-}
-
-/**
- * On the base commit with the relocated checks on it, every moved check fails. The commit is
- * the checks commit, which the checks Rumba wrote failed on, with the moved files set to their
- * relocated content, on a branch of its own that starts where the fix branch did. Rumba never
- * pushes it; a vercel-preview environment pushes it as a throwaway branch and deletes it.
- */
-async function onTheBase(deps: Deps, state: TicketState, sha: string, checks: Check[], files: string[], agentDir: string): Promise<{ results: CheckResult[] } | { reason: string }> {
-  const branch = `${state.branch!}-relocated-base`
-  const { workdir } = await deps.workspace.prepare(branch, { fresh: true, like: state.branch! })
-  try {
-    notWhereTheAgentWrote(workdir, agentDir)
-    await deps.workspace.reset(workdir, state.checksSha!)
-    await deps.workspace.checkoutFiles(workdir, sha, files)
-    const base = await deps.workspace.commit(workdir, 'test: the relocated checks on the base commit', { allowEmpty: true })
-    if (base === null) throw new Error('The workspace made no commit of the relocated checks on the base commit.')
-    const handle = await deps.environment.up({ branch, sha: base, role: 'before', timeoutMs: timeLeft(deps) }, workdir)
-    try {
-      const results = await runChecks(deps, handle, checks)
-      for (const r of results) {
-        if (r.infrastructure) return { reason: `The relocated check for ${r.criterionId} could not be judged on the base commit: ${r.infrastructure}.` }
-        if (COULD_NOT_RUN.includes(r.exitCode)) return { reason: `The relocated check for ${r.criterionId} could not run on the base commit (exit ${r.exitCode}).` }
-        if (r.passed) return { reason: `The relocated check for ${r.criterionId} passes on the base commit, so it no longer shows the problem.` }
-      }
-      return { results }
-    } finally {
-      await downQuietly(deps.environment, handle)
-    }
-  } finally {
-    await cleanupQuietly(deps.workspace, workdir)
-  }
-}
-
-/** A checkout that would run where the agent wrote (its folder could not be removed, say) is refused. */
-function notWhereTheAgentWrote(workdir: string, agentDir: string): void {
-  if (workdir === agentDir) throw new Error('The checkout for the run is the folder the agent wrote in, which was not removed.')
-}
-
-async function runChecks(deps: Deps, handle: Awaited<ReturnType<Deps['environment']['up']>>, checks: Check[]): Promise<CheckResult[]> {
-  const max = checkOutputMax(checks.length)
-  const results: CheckResult[] = []
-  for (const check of checks) {
-    const r = await deps.environment.runCheck(handle, check)
-    results.push({ ...r, output: cleanOutput(r.output, deps.secrets, max) })
-  }
-  return results
 }

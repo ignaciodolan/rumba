@@ -27,6 +27,37 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
+describe('readAgentResult revise', () => {
+  const ok = { kind: 'revise', summary: 'done', replies: [{ item: 1, reply: 'Handled.' }] }
+
+  it('reads a revise result with the optional fields', async () => {
+    const full = { ...ok, noChangeNeeded: 'already so', checkChanges: [{ criterionId: 'c1', item: 1, reason: 'alice says it is wrong' }] }
+    await writeResult(full); expect(await readAgentResult(dir, 'revise')).toEqual(full)
+    await writeResult(ok); expect(await readAgentResult(dir, 'revise')).toEqual(ok)
+  })
+
+  it.each([
+    ['no replies', { kind: 'revise', summary: 's' }],
+    ['item 0', { ...ok, replies: [{ item: 0, reply: 'x' }] }],
+    ['blank reply', { ...ok, replies: [{ item: 1, reply: '   ' }] }],
+    ['blank reason', { ...ok, checkChanges: [{ criterionId: 'c1', item: 1, reason: ' \n' }] }],
+    ['a change without the item that asked for it', { ...ok, checkChanges: [{ criterionId: 'c1', reason: 'alice says it is wrong' }] }],
+    ['a change citing item 0', { ...ok, checkChanges: [{ criterionId: 'c1', item: 0, reason: 'alice says it is wrong' }] }],
+    ['a change citing item 1.5', { ...ok, checkChanges: [{ criterionId: 'c1', item: 1.5, reason: 'alice says it is wrong' }] }],
+    ['a change citing item "1"', { ...ok, checkChanges: [{ criterionId: 'c1', item: '1', reason: 'alice says it is wrong' }] }],
+    ['empty reply', { ...ok, replies: [{ item: 1, reply: '' }] }],
+    ['long reply', { ...ok, replies: [{ item: 1, reply: 'x'.repeat(501) }] }],
+    ['21 replies', { ...ok, replies: Array.from({ length: 21 }, () => ({ item: 1, reply: 'x' })) }],
+    ['empty reason', { ...ok, checkChanges: [{ criterionId: 'c1', item: 1, reason: '' }] }],
+    ['long reason', { ...ok, checkChanges: [{ criterionId: 'c1', item: 1, reason: 'x'.repeat(501) }] }],
+    ['21 changes', { ...ok, checkChanges: Array.from({ length: 21 }, () => ({ criterionId: 'c1', item: 1, reason: 'x' })) }],
+    ['empty noChangeNeeded', { ...ok, noChangeNeeded: '' }],
+    ['long noChangeNeeded', { ...ok, noChangeNeeded: 'x'.repeat(2001) }],
+  ])('rejects %s', async (_n, value) => {
+    await writeResult(value); await expect(readAgentResult(dir, 'revise')).rejects.toThrow(AgentError)
+  })
+})
+
 describe('readAgentResult', () => {
   it('reads a valid result', async () => {
     await writeResult({ kind: 'fix', summary: 'done' }); expect(await readAgentResult(dir, 'fix')).toEqual({ kind: 'fix', summary: 'done' })

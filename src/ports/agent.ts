@@ -1,6 +1,6 @@
-import type { Check, Criterion, Kind, LinkedDocument, Move, ProjectTestsResult, Ticket } from '../core/types.js'
+import type { Check, Criterion, Feedback, Kind, LinkedDocument, Move, ProjectTestsResult, Ticket } from '../core/types.js'
 
-export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix' | 'relocate-checks'
+export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix' | 'relocate-checks' | 'revise'
 
 export interface AgentTask {
   kind: AgentTaskKind
@@ -24,6 +24,10 @@ export interface AgentTask {
   checkStatus?: { criterionId: string; passed: boolean }[]
   /** Fix tasks: how the project's own tests did in the last run. */
   projectTests?: ProjectTestsResult
+  /** Revise tasks: what the reviewers of the pull request said. Untrusted input. */
+  feedback?: Feedback[]
+  /** Revise tasks: the change so far, as a diff against the base. */
+  diff?: string
 }
 
 export type AgentResult = AgentResultBody & {
@@ -52,6 +56,18 @@ export type AgentResultBody =
     moves: Move[]
     /** The checks as they run from their new place. */
     checks: Check[]
+  }
+  | {
+    kind: 'revise'; summary: string
+    /** One answer per feedback item the agent addresses; `item` is the 1-based position in the feedback list. */
+    replies: { item: number; reply: string }[]
+    /** Set when the agent found no change was needed; the reason. */
+    noChangeNeeded?: string
+    /**
+     * Checks a reviewer showed to be wrong, each with the reason and `item`, the 1-based position
+     * in the feedback list of the item that asked for the change.
+     */
+    checkChanges?: { criterionId: string; item: number; reason: string }[]
   }
 
 export interface Agent {

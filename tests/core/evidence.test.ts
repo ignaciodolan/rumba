@@ -12,6 +12,35 @@ describe('renderPullRequestBody', () => {
     expect(body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
     expect(body).toContain('https://t/1'); expect(body).toContain('Rumba: shop')
   })
+  it('marks a check that changed after review in the File cell', () => {
+    const s = verified(d); s.checks[0] = { ...s.checks[0]!, changedAfterReview: true }
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` (changed after review) | fail | pass |')
+    expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: verified(d), outsideScope: [], secrets: [] })).not.toContain('changed after review')
+  })
+  it('says the Before of a relocated check changed after review is the changed check, not the one Rumba wrote', () => {
+    const s = verified(d)
+    s.relocation = { status: 'relocated', from: 'sha2', sha: 'sha3', moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/cart.test.ts' }], original: s.checks }
+    const relocated = { criterionId: 'c1', command: 'npm test -- cart', files: ['tests/cart.test.ts'] }
+    s.checks = [relocated]
+    expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })).toContain('Before (the check as Rumba wrote it, on the base commit):')
+    s.checks = [{ ...relocated, changedAfterReview: true }]
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(body).toContain('Before (the check as changed after review, on the base commit):')
+    expect(body).not.toContain('Before (the check as Rumba wrote it, on the base commit):')
+    expect(body).toContain('For a check changed after review, Before is the changed check, on the base commit.')
+  })
+  it('links a check changed after review to the feedback that asked for it, with a url that cannot break the table or the link', () => {
+    const s = verified(d); s.checks[0] = { ...s.checks[0]!, changedAfterReview: true, changeAskedIn: 'https://example.test/pr/1#pullrequestreview-1' }
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` (changed after review, as asked in [feedback](https://example.test/pr/1#pullrequestreview-1)) | fail | pass |')
+    s.checks[0] = { ...s.checks[0]!, changeAskedIn: 'https://example.test/pr/1#x|y) z\n<b>[w]' }
+    const odd = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(odd).toContain('(changed after review, as asked in [feedback](https://example.test/pr/1#x%7Cy%29%20z%0A%3Cb%3E%5Bw%5D)) | fail | pass |')
+    s.checks[0] = { ...s.checks[0]!, changeAskedIn: 'javascript:alert(1)' }
+    const script = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(script).toContain('`tests/rumba/c1.test.ts` (changed after review) | fail | pass |'); expect(script).not.toContain('javascript')
+  })
   it('never prints a secret from check output', () => {
     const s = verified(d); s.after![0]!.output = 'Bearer sk-live-999'
     expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: ['sk-live-999'] })).not.toContain('sk-live-999')

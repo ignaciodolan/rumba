@@ -38,6 +38,15 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
     moves: z.array(z.object({ from: relativeFile, to: relativeFile })).max(MAX_ITEMS),
     checks: z.array(check).max(MAX_ITEMS),
   }),
+  revise: z.object({
+    kind: z.literal('revise'),
+    summary: z.string(),
+    replies: z.array(z.object({ item: z.number().int().min(1), reply: z.string().trim().min(1).max(MAX_CRITERION_TEXT) })).max(MAX_ITEMS),
+    noChangeNeeded: z.string().trim().min(1).max(MAX_CRITERION_TEXT * 4).optional(),
+    checkChanges: z.array(z.object({
+      criterionId: z.string().min(1), item: z.number().int().min(1), reason: z.string().trim().min(1).max(MAX_CRITERION_TEXT),
+    })).max(MAX_ITEMS).optional(),
+  }),
   fix: z.object({ kind: z.literal('fix'), summary: z.string(), noChangeNeeded: z.string().trim().min(1).max(MAX_CRITERION_TEXT * 4).optional() }),
 }
 

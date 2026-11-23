@@ -8,6 +8,7 @@ import { openPullRequest } from './steps/openPullRequest.js'
 import { relocateChecks } from './steps/relocateChecks.js'
 import { reproduce } from './steps/reproduce.js'
 import { resumeCriteria } from './steps/resumeCriteria.js'
+import { revise } from './steps/revise.js'
 import { triage } from './steps/triage.js'
 import type { Ticket, TicketState } from './types.js'
 
@@ -47,6 +48,7 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
           }
           case 'criteria_ready': current = await reproduce(d, rumba, ticket, current); break
           case 'checks_failing': current = await build(d, rumba, ticket, current); break
+          case 'changes_requested': current = await revise(d, rumba, ticket, current); break
           case 'verified':
             // One step with the pull request, so that a relocation that ran out of time still ends in a pull request.
             // An interrupted relocation is always undone, even when relocation has since been turned off.
@@ -59,8 +61,13 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
         }
       } catch (e) {
         // A call stopped because the ticket's time ran out is the budget, not an error. What
-        // stopped the step is still said, in case it was something else.
-        if (spent()) return await outOfTime(deps, rumba, ticket, current, cleanOutput(e instanceof Error ? e.message : String(e), deps.secrets, 1000))
+        // stopped the step is still said, in case it was something else. The step may have
+        // written more than `current` holds (a round's attempts), so the latest state written is
+        // the one that ends, as on the runner's error path.
+        if (spent()) {
+          const latest = (await deps.tracker.readState(ticket)) ?? current
+          return await outOfTime(deps, rumba, ticket, latest, cleanOutput(e instanceof Error ? e.message : String(e), deps.secrets, 1000))
+        }
         throw e
       }
     }

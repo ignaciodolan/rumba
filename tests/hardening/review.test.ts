@@ -45,7 +45,7 @@ describe('what the fix agent is told on a later run', () => {
     d.environment.commandResults = [{ exitCode: 1, output: 'FAIL' }, { exitCode: 1, output: 'FAIL' }]
     let calls = 0
     d.workspace.changedFiles = async () => (++calls === 2 ? ['.github/workflows/ci.yml'] : ['src/a.ts'])
-    await build(d, makeRumba({ verify: { test: 'pnpm test' }, limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 3 } }), makeTicket(), failing(d))
+    await build(d, makeRumba({ verify: { test: 'pnpm test' }, limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 3, maxReviewRounds: 2 } }), makeTicket(), failing(d))
     expect(d.agent.calls[1]).toMatchObject({ projectTests: 'failed' })
     expect(d.agent.calls[2]).toMatchObject({ checkStatus: [{ criterionId: 'c1', passed: false }], projectTests: 'not-run' })
   })

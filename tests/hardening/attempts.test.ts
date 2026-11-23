@@ -69,7 +69,7 @@ describe('a failing command is run once more before an attempt is charged', () =
   })
   it('charges the attempt when the check fails both times', async () => {
     const d = makeDeps(); d.agent.script.fix = fix; d.workspace.hashes = H; d.environment.passes = () => false
-    const s = await build(d, makeRumba({ limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 1 } }), makeTicket(), failing(d))
+    const s = await build(d, makeRumba({ limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 1, maxReviewRounds: 2 } }), makeTicket(), failing(d))
     expect(s.state).toBe('fix_failed'); expect(d.environment.checksRun).toEqual(['c1', 'c1'])
   })
 })
@@ -144,7 +144,7 @@ describe('a second run can not be gamed by the code under test', () => {
       markers.add(h.workdir)
       return { criterionId: check.criterionId, passed, exitCode: passed ? 0 : 1, output: passed ? 'ok' : 'first run fails' }
     }
-    const s = await build(d, makeRumba({ limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 1 } }), makeTicket(), failing(d))
+    const s = await build(d, makeRumba({ limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 1, maxReviewRounds: 2 } }), makeTicket(), failing(d))
     expect(s.state).toBe('fix_failed')
   })
 })

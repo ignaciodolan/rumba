@@ -2,10 +2,10 @@ import type { RumbaConfig } from '../config/load.js'
 import { defaultLabels } from '../core/labels.js'
 import { newState, transition } from '../core/states.js'
 import type {
-  Check, CheckResult, Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
+  Check, CheckResult, Criterion, Feedback, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
 } from '../core/types.js'
 import type { Agent, AgentResult, AgentTask, AgentTaskKind } from '../ports/agent.js'
-import type { CodeHost, FeedbackItem, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
+import type { CodeHost, FeedbackItem, LabelAdded, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
 import type { Deps } from '../ports/deps.js'
 import type { EnvHandle, EnvRef, Environment } from '../ports/environment.js'
 import type { Tracker } from '../ports/tracker.js'
@@ -28,7 +28,7 @@ export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
     verify: {},
     checks: { relocate: true },
     sandbox: { nodeVersion: '22' },
-    limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 },
+    limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 },
     labels: defaultLabels('shop'),
     context: '',
     ...overrides,
@@ -196,7 +196,11 @@ export class FakeCodeHost implements CodeHost {
   pullRequests = new Map<string, Omit<PullRequestInfo, 'labels'> & { labels?: string[] }>()
   /** The feedback listFeedback returns for a URL, filtered by `since`. */
   feedback = new Map<string, FeedbackItem[]>()
+  /** What labelAdded returns for a URL, whatever the label. Unset: the label was never added. */
+  labelEvents = new Map<string, LabelAdded>()
   labelsRemoved: { url: string; label: string }[] = []
+  updates: { url: string; body: string }[] = []
+  pullRequestComments: { url: string; body: string }[] = []
   pullRequestError: Error | null = null
   private readonly opened = new Set<string>()
 
@@ -229,6 +233,18 @@ export class FakeCodeHost implements CodeHost {
 
   async listFeedback(url: string, since: string): Promise<FeedbackItem[]> {
     return (this.feedback.get(url) ?? []).filter((i) => Date.parse(i.at) > Date.parse(since))
+  }
+
+  async labelAdded(url: string, _label: string): Promise<LabelAdded | null> {
+    return this.labelEvents.get(url) ?? null
+  }
+
+  async updatePullRequest(url: string, update: { body: string }): Promise<void> {
+    this.updates.push({ url, body: update.body })
+  }
+
+  async commentOnPullRequest(url: string, body: string): Promise<void> {
+    this.pullRequestComments.push({ url, body })
   }
 
   async removeLabel(url: string, label: string): Promise<void> {
@@ -296,11 +312,27 @@ export class FakeWorkspace implements Workspace {
     this.log.push(`reset ${workdir} ${sha}`)
   }
 
+  /** Every syncToRemote, in order. */
+  syncs: { branch: string; sha: string }[] = []
+
+  async syncToRemote(workdir: string, branch: string, sha: string): Promise<void> {
+    this.syncs.push({ branch, sha })
+    this.log.push(`sync ${workdir} ${sha}`)
+    this.move(workdir, sha)
+  }
+
   /** What changedFiles returns since a given commit, when set; otherwise `changed`. */
   changedSince: Record<string, string[]> = {}
 
   async changedFiles(_workdir: string, sinceSha: string): Promise<string[]> {
     return this.changedSince[sinceSha] ?? this.changed
+  }
+
+  /** What diff returns, whatever the arguments. */
+  diffText = ''
+
+  async diff(_workdir: string, _sinceSha: string, _maxChars: number): Promise<string> {
+    return this.diffText
   }
 
   async hashFiles(_workdir: string, files: string[]): Promise<Record<string, string>> {
@@ -377,6 +409,27 @@ export function verified(d: FakeDeps): TicketState {
     criteria: [...f.criteria, { id: 'c2', text: 'C2', checkable: false }],
     after: [{ criterionId: 'c1', passed: true, exitCode: 0, output: 'check passed' }],
   }
+}
+
+/** The pull request of `changesRequested(d)`. */
+export const REVIEWED_PR = 'https://example.test/pr/1'
+
+/** One review from alice, written after Rumba's push. */
+export const aliceReview: Feedback = {
+  kind: 'review', author: 'alice', url: `${REVIEWED_PR}#pullrequestreview-1`, at: '2025-12-31T12:00:00Z', text: 'Please rename total to subtotal.',
+}
+
+/**
+ * A 'changes_requested' state: verified(d) with its pull request open, pushed at the fix
+ * commit 'sha2' (the branch tip and the pull request's head), and review feedback stored,
+ * built through real transitions.
+ */
+export function changesRequested(d: FakeDeps, feedback: Feedback[] = [aliceReview]): TicketState {
+  const now = d.clock()
+  const s = transition(transition(verified(d), 'pr_open', now), 'changes_requested', now, 'review feedback')
+  d.workspace.branchTip = 'sha2'
+  d.codeHost.pullRequests.set(REVIEWED_PR, { state: 'open', headSha: 'sha2' })
+  return { ...s, pullRequestUrl: REVIEWED_PR, pushedAt: '2025-12-31T00:00:00.000Z', reviewRounds: 0, fixSummary: 'fixed', feedback }
 }
 
 export const happyTriage: Extract<AgentResult, { kind: 'triage' }> = {

@@ -83,8 +83,8 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   let state = stored !== null && stored.rumba === rumba.name ? stored : newState(rumba.name, deps.clock())
 
   if (ticket.labels.includes(labels.retry) && (ENDS.includes(state.state) || state.state === 'pr_open' || state.state === 'changes_requested')) {
-    // A retry starts the attempts again; the old ones would explain nothing about the new run.
-    const { attempts: _attempts, fixSummary: _summary, relocation: _relocation, feedback: _feedback, ...rest } = state
+    // A retry starts the attempts and the review rounds again; the old ones would explain nothing about the new run.
+    const { attempts: _attempts, fixSummary: _summary, relocation: _relocation, feedback: _feedback, answeredAt: _answered, reviewRounds: _rounds, ...rest } = state
     state = { ...transition(rest, 'queued', deps.clock()), fixAttempts: 0, errorCount: 0 }
     await deps.tracker.writeState(ticket, state)
     await deps.tracker.removeLabel(ticket, labels.retry)
@@ -104,9 +104,13 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   }
 
   if (ENDS.includes(state.state)) return left(state.state)
-  // Until feedback is acted on, a ticket waiting for changes stays parked, unless its pull request has ended.
-  if (state.state === 'changes_requested') return await checkPullRequest(deps, ticket, state, summary, count, () => trackParkedPullRequest(deps, ticket, state), 'changes requested')
-  if (state.state === 'pr_open') return await checkPullRequest(deps, ticket, state, summary, count, () => trackPullRequest(deps, rumba, ticket, state), 'pull request open')
+  if (state.state === 'pr_open') {
+    await checkPullRequest(deps, ticket, state, summary, count, () => trackPullRequest(deps, rumba, ticket, state), 'pull request open')
+    return
+  }
+  // The outcome first: a pull request that has ended moves the ticket at no limit cost. One
+  // still open goes on to the engine for its review round, like any other workable ticket.
+  if (state.state === 'changes_requested' && !(await checkPullRequest(deps, ticket, state, summary, count, () => trackParkedPullRequest(deps, ticket, state), null))) return
   if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 
   const from = state.state
@@ -134,20 +138,26 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
 
 /**
  * Reads the pull request of a ticket in `pr_open` or `changes_requested`. It needs no lease and no engine, so it does not
- * count toward the run limit; only a failed read does, like any other error.
+ * count toward the run limit; only a failed read does, like any other error. Returns true when the ticket stayed as it
+ * was; it is then listed as left with `stays`, unless `stays` is null.
  */
 async function checkPullRequest(
   deps: Deps, ticket: Ticket, state: TicketState, summary: RunSummary, count: RunCount,
-  track: () => Promise<TicketState>, stays: string,
-): Promise<void> {
+  track: () => Promise<TicketState>, stays: string | null,
+): Promise<boolean> {
   try {
     const next = await track()
-    if (next.state === state.state) summary.left.push({ ticket: ticket.id, why: stays })
-    else summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
+    if (next.state !== state.state) {
+      summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
+      return false
+    }
+    if (stays !== null) summary.left.push({ ticket: ticket.id, why: stays })
+    return true
   } catch (e) {
     // A setup error, not the ticket's: it stops the run and counts against no ticket.
     if (e instanceof CodeHostIdentityError) throw e
     summary.left.push({ ticket: ticket.id, why: await recordError(deps, ticket, state, e, count) })
+    return false
   }
 }
 

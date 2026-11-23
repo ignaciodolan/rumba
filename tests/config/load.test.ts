@@ -35,7 +35,7 @@ describe('loadRumbas', () => {
     const [r] = await loadRumbas(root)
     expect(r.name).toBe('shop')
     expect(r.dir).toBe(path.join(root, '.rumba', 'shop'))
-    expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 })
+    expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 })
     expect(r.labels.optIn).toBe('rumba:shop')
     expect(r.environment).toMatchObject({ kind: 'docker', protected: ['docker-compose*.y*ml', 'compose*.y*ml', 'Dockerfile*', '*.dockerfile', '.dockerignore'] })
     expect(r.context).toContain('Shop is the storefront.')
@@ -60,10 +60,14 @@ describe('loadRumbas', () => {
     await mkdir(path.join(root, '.rumba', 'shop'), { recursive: true })
     await expect(loadRumbas(root)).rejects.toThrow(/^shop.*rumba\.yml/)
   })
-  it('ignores unknown keys such as limits.max_review_rounds', async () => {
+  it('reads limits.max_review_rounds, and ignores unknown keys', async () => {
     await write('.rumba/shop/rumba.yml', `${minimal}limits: { max_review_rounds: 5, max_fix_attempts: 4 }\nsomething_else: 1\n`)
     const [r] = await loadRumbas(root)
-    expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 4 })
+    expect(r.limits).toEqual({ maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 4, maxReviewRounds: 5 })
+  })
+  it.each(['0', '1.5', '-1', '"two"'])('rejects limits.max_review_rounds: %s', async (v) => {
+    await write('.rumba/shop/rumba.yml', `${minimal}limits: { max_review_rounds: ${v} }\n`)
+    await expect(loadRumbas(root)).rejects.toThrow()
   })
   it('maps snake_case keys, labels and vercel-preview defaults', async () => {
     await write('.rumba/web/rumba.yml', `
@@ -80,7 +84,7 @@ labels: { opt_in: auto, approved: ok }
     expect(r.agent).toEqual({ kind: 'gemini-cli', model: 'gemini-x' })
     expect(r.environment).toEqual({ kind: 'vercel-preview', projectId: 'prj_1', protected: [] })
     expect(r.verify).toEqual({ test: 'npm test' })
-    expect(r.limits).toEqual({ maxTicketsPerRun: 5, minutesPerTicket: 10, maxFixAttempts: 2 })
+    expect(r.limits).toEqual({ maxTicketsPerRun: 5, minutesPerTicket: 10, maxFixAttempts: 2, maxReviewRounds: 2 })
     expect(r.labels).toEqual({ optIn: 'auto', statePrefix: 'rumba-state:', approved: 'ok', retry: 'rumba-retry', revise: 'rumba-revise' })
     expect(r.context).toBe('')
   })

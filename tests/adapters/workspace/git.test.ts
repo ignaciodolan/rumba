@@ -73,6 +73,29 @@ describe('GitWorkspace', () => {
     await ws.reset(workdir, baseSha); expect(await ws.changedFiles(workdir, baseSha)).toEqual([])
   })
 
+  it('gives the diff since a commit, cut at the limit with a note', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    await write(workdir, 'a.txt', 'one\n'); await ws.commit(workdir, 'c')
+    const full = await ws.diff(workdir, baseSha, 100000)
+    expect(full).toContain('+++ b/a.txt'); expect(full).toContain('+one')
+    expect(full).not.toContain('[diff cut')
+    const cut = await ws.diff(workdir, baseSha, 20)
+    expect(cut).toBe(`${full.slice(0, 20)}\n[diff cut at 20 characters]`)
+    expect(await ws.diff(workdir, await ws.head(workdir), 100)).toBe('')
+  })
+
+  it('never runs an external diff program or a text conversion for the diff', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    const marker = path.join(root, 'ran')
+    // A repository config that names programs must not run them; the worktree's own attributes would select them.
+    await git(clone, 'config', 'diff.evil.command', `touch ${marker}; true`)
+    await git(clone, 'config', 'diff.evil.textconv', `touch ${marker}; cat`)
+    await write(workdir, '.gitattributes', '*.txt diff=evil\n'); await write(workdir, 'a.txt', 'one\n')
+    await ws.commit(workdir, 'c')
+    expect(await ws.diff(workdir, baseSha, 100000)).toContain('+one')
+    expect(existsSync(marker)).toBe(false)
+  })
+
   it('reports unusual file names exactly', async () => {
     const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     const names = ['.rumba/shop/é.md', `a b"c'.txt`, 'tab\there.txt', 'new\nline.txt']
@@ -145,6 +168,42 @@ describe('GitWorkspace', () => {
     const first = await ws.prepare('rumba/shop/1', { fresh: true })
     const again = await ws.prepare('rumba/shop/1', { fresh: false })
     expect(again).toEqual(first)
+  })
+
+  describe('syncToRemote', () => {
+    /** A branch pushed to the remote, then a commit on it pushed by someone else; returns that commit. */
+    async function pushedByOthers(): Promise<{ workdir: string; theirs: string }> {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, 'a.txt', 'rumba'); await ws.commit(workdir, 'fix')
+      await git(clone, 'push', '-q', 'origin', 'refs/heads/rumba/shop/1')
+      await git(root, 'clone', '-q', '--branch', 'rumba/shop/1', path.join(root, 'remote.git'), 'other')
+      const other = path.join(root, 'other')
+      await write(other, 'b.txt', 'theirs'); await git(other, 'add', 'b.txt'); await git(other, 'commit', '-q', '-m', 'by a person')
+      await git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/rumba/shop/1')
+      return { workdir, theirs: await git(other, 'rev-parse', 'HEAD') }
+    }
+    it('puts the worktree at the remote head, with a commit someone else pushed', async () => {
+      const { workdir, theirs } = await pushedByOthers()
+      await ws.syncToRemote(workdir, 'rumba/shop/1', theirs)
+      expect(await ws.head(workdir)).toBe(theirs)
+      expect(await readFile(path.join(workdir, 'b.txt'), 'utf8')).toBe('theirs')
+      expect(await git(clone, 'rev-parse', 'refs/heads/rumba/shop/1')).toBe(theirs)
+    })
+    it('drops a local commit that was never pushed', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, 'a.txt', 'rumba'); const pushed = (await ws.commit(workdir, 'fix'))!
+      await git(clone, 'push', '-q', 'origin', 'refs/heads/rumba/shop/1')
+      await write(workdir, 'left.txt', 'from a killed run'); await ws.commit(workdir, 'unpushed')
+      await ws.syncToRemote(workdir, 'rumba/shop/1', pushed)
+      expect(await ws.head(workdir)).toBe(pushed)
+      expect(existsSync(path.join(workdir, 'left.txt'))).toBe(false)
+    })
+    it('refuses when the remote branch is not at the given commit, and leaves the worktree alone', async () => {
+      const { workdir, theirs } = await pushedByOthers()
+      const before = await ws.head(workdir)
+      await expect(ws.syncToRemote(workdir, 'rumba/shop/1', before)).rejects.toThrow(/rumba\/shop\/1/)
+      expect(await ws.head(workdir)).toBe(before); expect(before).not.toBe(theirs)
+    })
   })
 
   it('refuses to reuse a branch that does not exist', async () => {

@@ -47,15 +47,36 @@ function escapeHtml(text: string): string {
 /** The check's files; for a relocated check, also where each came from. */
 function fileCell(check: Check, relocation: Relocation | undefined): string {
   const original = relocation?.original?.find((c) => c.criterionId === check.criterionId)
-  return check.files.map((f) => {
+  const files = check.files.map((f) => {
     const from = (relocation?.moves ?? []).filter((m) => m.to === f && original?.files.includes(m.from)).map((m) => codeSpan(m.from))
     return from.length > 0 ? `${codeSpan(f)} (relocated from ${from.join(', ')})` : codeSpan(f)
   }).join(', ')
+  if (check.changedAfterReview !== true) return files
+  const asked = check.changeAskedIn !== undefined && /^https?:\/\//i.test(check.changeAskedIn) ? `, as asked in [feedback](${linkTarget(check.changeAskedIn)})` : ''
+  return `${files} (changed after review${asked})`
+}
+
+/** A url as a link target that cannot end the link or break the table: anything unusual is percent-encoded. */
+function linkTarget(url: string): string {
+  return url.replace(/[^A-Za-z0-9\-._~:/?#@!$&*+,;=%]/g, (c) => encodeURIComponent(c).replace(/[!'()*]/g, (x) => `%${x.charCodeAt(0).toString(16).toUpperCase()}`))
 }
 
 function verdict(results: CheckResult[] | undefined, criterionId: string): string {
   const r = results?.find((x) => x.criterionId === criterionId)
   return r === undefined ? '-' : r.passed ? 'pass' : 'fail'
+}
+
+/**
+ * Text an agent wrote, made inert for GitHub: no HTML, @-mentions broken so nobody is
+ * notified, issue references and issue links broken so a merge closes no other issue, and
+ * images broken so the page loads nothing.
+ */
+export function inertText(text: string): string {
+  return escapeHtml(text)
+    .replace(/@(?=\w)/g, '@\u200b')
+    .replace(/#(?=\d)/g, '#\u200b')
+    .replace(/\/(issues|pull)\//gi, '/$1\u200b/')
+    .replace(/!\[/g, '!\u200b[')
 }
 
 /** Well under GitHub's 65,536-character limit on a pull request body. */
@@ -86,15 +107,8 @@ function render(i: EvidenceInput, cap: number | null): string {
   const sections: string[] = []
 
   if (state.fixSummary) {
-    // The agent wrote it. It is quoted, and made inert: @-mentions are broken so nobody is
-    // notified, issue references and issue links so the merge closes no other issue, and
-    // images so the body loads nothing.
-    const inert = escapeHtml(state.fixSummary.trim())
-      .replace(/@(?=\w)/g, '@\u200b')
-      .replace(/#(?=\d)/g, '#\u200b')
-      .replace(/\/(issues|pull)\//gi, '/$1\u200b/')
-      .replace(/!\[/g, '!\u200b[')
-    const quoted = inert.split('\n').map((l) => `> ${l}`).join('\n')
+    // The agent wrote it, so it is quoted and made inert.
+    const quoted = inertText(state.fixSummary.trim()).split('\n').map((l) => `> ${l}`).join('\n')
     sections.push(`## Summary\n\n${quoted}`)
   }
   // A GitHub issue of this repository is closed by the merge; a Linear issue is linked.
@@ -119,6 +133,7 @@ function render(i: EvidenceInput, cap: number | null): string {
       '- It compared the moved checks with the ones it verified, line by line. Only their place, their imports, their test titles and their indentation changed. Every other line is as it was, in the same order, and no line was added.',
       "- Each moved check fails on the base commit and passes on the change, run again in the project's environment.", '',
       'In the table, Before is the check as Rumba wrote it, on the base commit, and After is the moved check, on the change.',
+      ...(state.checks.some((c) => c.changedAfterReview === true) ? ['For a check changed after review, Before is the changed check, on the base commit.'] : []),
     ].join('\n'))
   } else if (state.relocation?.status === 'rejected') {
     sections.push([
@@ -147,7 +162,9 @@ function render(i: EvidenceInput, cap: number | null): string {
         const r = results?.find((x) => x.criterionId === check.criterionId)
         return `${label}:\n\n${block(cleanOutput(r?.output ?? '', i.secrets, cap))}`
       }
-      const before = relocation ? 'Before (the check as Rumba wrote it, on the base commit)' : 'Before'
+      const before = check.changedAfterReview === true
+        ? 'Before (the check as changed after review, on the base commit)'
+        : relocation ? 'Before (the check as Rumba wrote it, on the base commit)' : 'Before'
       return `<details>\n<summary>${escapeHtml(check.criterionId)}: ${escapeHtml(check.command)}</summary>\n\n${part(before, state.before)}\n\n${part('After', state.after)}\n\n</details>`
     })
     sections.push(['## Check output', ...outputs].join('\n\n'))

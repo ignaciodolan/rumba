@@ -12,6 +12,17 @@ export interface Workspace {
   /** The commit the workdir's branch points at. */
   head(workdir: string): Promise<string>
   changedFiles(workdir: string, sinceSha: string): Promise<string[]>
+  /**
+   * The text of `git diff <sinceSha> HEAD`, with no external diff program, text conversion or
+   * filter run. Cut at `maxChars` characters, with a closing note that it was cut.
+   */
+  diff(workdir: string, sinceSha: string, maxChars: number): Promise<string>
+  /**
+   * Puts the workdir's branch at `sha`, the head of `branch` on the remote, fetched first, so
+   * that commits someone else pushed are kept and a local commit never pushed is dropped.
+   * Throws, changing nothing, when the remote branch is not at `sha`.
+   */
+  syncToRemote(workdir: string, branch: string, sha: string): Promise<void>
   hashFiles(workdir: string, files: string[]): Promise<Record<string, string>>
   /**
    * A file's text as commit `sha` holds it, read from the repository's objects, never from the

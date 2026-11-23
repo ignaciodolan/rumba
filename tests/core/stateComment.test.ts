@@ -18,12 +18,21 @@ describe('stateComment', () => {
     const s = {
       ...newState('shop', t0), state: 'changes_requested' as const, lastDurable: 'changes_requested' as const,
       pushedAt: '2026-01-01T00:00:00.000Z',
+      answeredAt: '2026-01-02T00:00:00.000Z',
       feedback: [
         { kind: 'review' as const, author: 'alice', url: 'https://github.com/acme/shop/pull/7#r1', at: '2026-01-02T00:00:00.000Z', text: 'Please add a test' },
         { kind: 'line' as const, author: 'alice', url: 'https://github.com/acme/shop/pull/7#r2', at: '2026-01-02T00:00:00.000Z', text: 'Rename this', path: 'src/a.ts', line: 12 },
       ],
     }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it('round-trips the review round count and a check changed after review', () => {
+    const s = { ...newState('shop', t0), reviewRounds: 1, checks: [{ criterionId: 'c1', command: 'npm test', files: ['a.test.ts'], changedAfterReview: true, changeAskedIn: 'https://example.test/pr/1#pullrequestreview-1' }] }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it.each([{ reviewRounds: -1 }, { reviewRounds: 1.5 }, { reviewRounds: '1' }])('rejects %o', (bad) => {
+    const comment = encodeStateComment(newState('shop', t0)).replace('"fixAttempts": 0,', `"fixAttempts": 0, "reviewRounds": ${JSON.stringify(Object.values(bad)[0])},`)
+    expect(decodeStateComment(comment)).toBeNull()
   })
   it('returns null for other comments and for broken json', () => {
     expect(decodeStateComment('looks good to me')).toBeNull()
@@ -66,6 +75,7 @@ describe('stateComment', () => {
       ['feedback with a negative line', { feedback: [{ ...entry, kind: 'line', line: -1 }] }],
       ['feedback with an unknown field', { feedback: [{ ...entry, extra: 1 }] }],
       ['a pushedAt that is not a string', { pushedAt: 3 }],
+      ['an answeredAt that is not a string', { answeredAt: 3 }],
     ])('refuses %s', (_name, patch) => {
       expect(decodeStateComment(forge(patch))).toBeNull()
     })
