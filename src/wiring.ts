@@ -144,7 +144,7 @@ export function redactingTracker(inner: Tracker, secrets: string[]): Tracker {
   const r = (text: string) => redact(text, secrets)
   return {
     ensureLabels: () => inner.ensureLabels(),
-    listCandidates: () => inner.listCandidates(),
+    listCandidates: (opts) => inner.listCandidates(opts),
     getTicket: (id) => inner.getTicket(id),
     readState: (t) => inner.readState(t),
     writeState: (t, s) => inner.writeState(t, redactDeep(s, secrets)),
