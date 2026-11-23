@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { DURABLE, STATE_NAMES } from './states.js'
 import { isValidRumbaName } from './labels.js'
+import { LESSON_REASON_MAX, LESSONS_KEPT } from './lessons.js'
 import type { TicketState } from './types.js'
 
 export const STATE_MARKER = 'rumba-state-v1'
@@ -39,6 +40,14 @@ const relocation = z.object({
   original: z.array(check).optional(),
   before: z.array(checkResult).optional(),
 })
+// Bounded, so the lessons alone can never push the comment over its limit.
+const lesson = z.object({
+  at: z.string(),
+  status: z.enum(['added', 'none', 'refused', 'failed']),
+  reason: z.string().max(LESSON_REASON_MAX).optional(),
+  commit: z.string().optional(),
+  pullRequestUrl: z.string().optional(),
+}).strict()
 
 // Tracker comments are untrusted input, so the decoded state is validated strictly.
 const ticketState = z.object({
@@ -65,6 +74,7 @@ const ticketState = z.object({
   attempts: z.array(attempt).optional(),
   fixSummary: z.string().optional(),
   relocation: relocation.optional(),
+  lessons: z.array(lesson).max(LESSONS_KEPT).optional(),
   lease: z.object({ runId: z.string(), at: z.string() }).optional(),
   history: z.array(z.object({ state: stateName, at: z.string(), note: z.string().optional() })),
 })
