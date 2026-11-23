@@ -24,9 +24,19 @@ function worthStoring(item: FeedbackItem): boolean {
  */
 export function selectFeedback(items: FeedbackItem[], secrets: string[]): Selection {
   const kept = items.filter((i) => i.canWrite && !i.self)
-  const requested = kept.some((i) => i.kind === 'review' && i.reviewState === 'changes_requested')
+  // GitHub counts only each reviewer's latest decision, so an earlier request that was later approved
+  // asks for nothing and its body is not passed on.
+  const latest = new Map<string, FeedbackItem>()
+  for (const i of kept) {
+    if (i.kind !== 'review' || (i.reviewState !== 'changes_requested' && i.reviewState !== 'approved')) continue
+    const seen = latest.get(i.author)
+    if (seen === undefined || Date.parse(i.at) >= Date.parse(seen.at)) latest.set(i.author, i)
+  }
+  const superseded = (i: FeedbackItem): boolean =>
+    i.kind === 'review' && i.reviewState === 'changes_requested' && latest.get(i.author) !== i
+  const requested = [...latest.values()].some((i) => i.reviewState === 'changes_requested')
   const newest = kept
-    .filter(worthStoring)
+    .filter((i) => worthStoring(i) && !superseded(i))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     .slice(-MAX_FEEDBACK)
   const feedback = newest.map((i): Feedback => ({

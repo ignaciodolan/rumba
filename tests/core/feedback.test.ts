@@ -43,4 +43,27 @@ describe('selectFeedback', () => {
     expect(r.feedback[0]?.text).toBe('c5')
     expect(r.feedback[19]?.text).toBe('c24')
   })
+  describe('the latest decision of each reviewer', () => {
+    const review = (author: string, reviewState: 'changes_requested' | 'approved' | 'commented', at: string, text = 'text') =>
+      item({ kind: 'review', author, reviewState, at, text })
+    it('asks for no round when the reviewer approved after requesting changes, and drops the old request', () => {
+      const r = selectFeedback([review('alice', 'changes_requested', '2026-11-22T09:00:00Z', 'fix it'), review('alice', 'approved', '2026-11-22T10:00:00Z', 'ok')], [])
+      expect(r).toEqual({ requested: false, feedback: [] })
+    })
+    it('asks for a round when the reviewer requested changes after approving', () => {
+      const r = selectFeedback([review('alice', 'approved', '2026-11-22T09:00:00Z', 'ok'), review('alice', 'changes_requested', '2026-11-22T10:00:00Z', 'wait')], [])
+      expect(r.requested).toBe(true)
+      expect(r.feedback.map((f) => f.text)).toEqual(['wait'])
+    })
+    it('keeps the request of one reviewer when another approves', () => {
+      const r = selectFeedback([review('bob', 'changes_requested', '2026-11-22T09:00:00Z', 'bob wants'), review('alice', 'approved', '2026-11-22T10:00:00Z')], [])
+      expect(r.requested).toBe(true)
+      expect(r.feedback.map((f) => f.text)).toEqual(['bob wants'])
+    })
+    it('does not let a later commented review undo a request', () => {
+      const r = selectFeedback([review('alice', 'changes_requested', '2026-11-22T09:00:00Z', 'fix it'), review('alice', 'commented', '2026-11-22T10:00:00Z', 'note')], [])
+      expect(r.requested).toBe(true)
+      expect(r.feedback.map((f) => f.text)).toEqual(['fix it', 'note'])
+    })
+  })
 })
