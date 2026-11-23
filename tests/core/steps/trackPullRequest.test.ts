@@ -87,6 +87,13 @@ describe('trackPullRequest feedback', () => {
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
     expect(s.feedback?.map((f) => f.kind).sort()).toEqual(['comment', 'line', 'review'])
   })
+  it('starts a round on alice\'s commented review with a body and three line comments', async () => {
+    const { d, start } = open()
+    d.codeHost.feedback.set(URL, [fb({ kind: 'review', reviewState: 'commented', text: 'Three things.' }), ...[1, 2, 3].map((n) => fb({ kind: 'line', path: 'src/orders/total.ts', line: n, text: `change ${n}` }))])
+    const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
+    expect(s.state).toBe('changes_requested')
+    expect(s.feedback).toHaveLength(4)
+  })
   it('changes nothing for comments alone, an approval, or feedback before the push', async () => {
     const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(), fb({ kind: 'review', reviewState: 'approved', text: 'ok' }), fb({ ...REQUEST, at: '2026-11-19T00:00:00Z' })])
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
@@ -211,12 +218,12 @@ describe('trackPullRequest when Rumba runs with the token of alice, who also rev
   const bob = { login: 'bob', type: 'User' }
 
   /** The real GitHub code host, as alice, over a stubbed pull request #42. */
-  function asAlice(o: { reviews?: object[]; comments?: object[]; events?: object[]; labels?: string[] }) {
+  function asAlice(o: { reviews?: object[]; lines?: object[]; comments?: object[]; events?: object[]; labels?: string[] }) {
     const removed: string[] = []
     const stub = stubOctokit([
       route('GET', /^\/repos\/o\/r\/pulls\/42$/, () => ({ state: 'open', merged: false, head: { sha: 'h' }, labels: (o.labels ?? []).map((name) => ({ name })) })),
       route('GET', /^\/repos\/o\/r\/pulls\/42\/reviews$/, (req) => paged(req, o.reviews ?? [])),
-      route('GET', /^\/repos\/o\/r\/pulls\/42\/comments$/, (req) => paged(req, [])),
+      route('GET', /^\/repos\/o\/r\/pulls\/42\/comments$/, (req) => paged(req, o.lines ?? [])),
       route('GET', /^\/repos\/o\/r\/issues\/42\/comments$/, (req) => paged(req, o.comments ?? [])),
       route('GET', /^\/repos\/o\/r\/issues\/42\/events$/, (req) => paged(req, o.events ?? [])),
       route('GET', /^\/repos\/o\/r\/collaborators\/([^/]+)\/permission$/, () => ({ permission: 'write' })),
@@ -248,6 +255,19 @@ describe('trackPullRequest when Rumba runs with the token of alice, who also rev
     const s = await trackPullRequest(deps, makeRumba(), makeTicket(), start)
     expect(s.feedback?.map((f) => f.author)).toEqual(['bob', 'bob'])
     expect(s.feedback?.at(-1)?.text).toContain('The test is still old.')
+  })
+
+  it('moves a ticket from before stage 2 on alice\'s commented review with line comments', async () => {
+    const review = { id: 2, user: alice, body: 'A few changes.', state: 'COMMENTED', submitted_at: '2026-11-21T10:00:00Z', html_url: `${PR}#pullrequestreview-2` }
+    const lines = [1, 2, 3].map((n) => ({ id: 10 + n, user: alice, body: `change ${n}`, path: 'src/orders/total.ts', line: n, pull_request_review_id: 2, created_at: '2026-11-21T09:59:00Z', html_url: `${PR}#discussion_r${n}` }))
+    const { d, deps, start } = asAlice({ reviews: [review], lines })
+    // A ticket from before stage 2 has none of the later fields, so the history time is the read-from time.
+    const { pushedAt: _p, ...old } = start
+    const opened = { ...old, history: [...old.history.slice(0, -1), { ...old.history.at(-1)!, at: '2026-11-20T00:00:00Z' }] }
+    const s = await trackPullRequest(deps, makeRumba(), makeTicket(), opened)
+    expect(s.state).toBe('changes_requested')
+    expect(s.feedback?.map((f) => f.text).sort()).toEqual(['A few changes.', 'change 1', 'change 2', 'change 3'])
+    expect(d.tracker.states.get('123')?.state).toBe('changes_requested')
   })
 
   it('starts nothing for Rumba\'s own reply alone', async () => {

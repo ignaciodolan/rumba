@@ -167,7 +167,9 @@ export class GitHubCodeHost implements CodeHost {
     // when it counts as written: otherwise one drafted before a push and submitted after it would look old.
     const submitted = new Map<number, string>()
     for (const r of reviews) if (r.submitted_at) submitted.set(r.id, r.submitted_at)
+    const dismissed = new Set(reviews.filter((r) => r.state === 'DISMISSED').map((r) => r.id))
     for (const c of lines) {
+      if (c.pull_request_review_id && dismissed.has(c.pull_request_review_id)) continue
       const line = c.line ?? c.original_line
       const at = (c.pull_request_review_id ? submitted.get(c.pull_request_review_id) : undefined) ?? c.created_at
       raw.push({ kind: 'line', author: c.user?.login ?? '', url: c.html_url, at, text: c.body, path: c.path, ...(line ? { line } : {}) })
