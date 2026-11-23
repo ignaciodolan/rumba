@@ -8,7 +8,7 @@ This is stage 2. Rumba takes a ticket from its label to an open pull request. Th
 
 - The package is not published to npm. `npx rumba-cli` and the generated workflow will work once it is; until then, build it from this repository (`npm install && npm run build`, then `node dist/cli.js` or `npm link`).
 - The sandbox image is not pushed to any registry. Rumba builds it locally from `sandbox/Dockerfile` the first time `rumba run` needs it, which takes a few minutes and counts toward that ticket's time. Its tag is `rumba-sandbox:node<version>-<hash of the Dockerfile>`, so another Node version or a newer Dockerfile builds a new image; old ones are not removed (`docker image prune` or `docker rmi`).
-- No live run against a real tracker or model has been made. The adapters are tested against fakes, stubs, local git and local Docker.
+- Live runs have been few so far. The adapters are tested mostly against fakes, stubs, local git and local Docker.
 
 ## Requirements
 

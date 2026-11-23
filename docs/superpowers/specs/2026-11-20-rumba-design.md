@@ -221,7 +221,7 @@ What starts a round **(changed: any feedback after the last push started one)**:
 - Or the revise label (`rumba-revise`, renamed with `labels.revise`), added to the pull request by a writer after that same point. Rumba removes it when the round starts. A label added before that point starts nothing, and Rumba removes it. A label added by someone without write access starts nothing, and stays.
 - Pull request comments alone do not start a round, since people discuss on pull requests. Once a round starts, they are collected with the rest.
 
-Rumba's own comments are never feedback. Every body Rumba writes on GitHub starts with a hidden marker line, `<!-- rumba:own -->`. A pull request comment is Rumba's own only when that line comes first and the account Rumba runs as wrote it. Rumba may run with a maintainer's own token, so the account alone is not enough. Reviews and line comments are always a person's, since Rumba writes none. **(changed: own comments are recognised by the marker line plus the account)**
+Rumba's own comments are never feedback. Every body Rumba writes on GitHub starts with a hidden marker line, `<!-- rumba:own -->`. A pull request comment is Rumba's own only when that line comes first and the account Rumba runs as wrote it. For replies Rumba posted before the marker existed, a comment by Rumba's account that starts with one of their fixed openings also counts as its own; a comment by anyone else that starts the same way never does. Rumba may run with a maintainer's own token, so the account alone is not enough. Reviews and line comments are always a person's, since Rumba writes none. **(changed: own comments are recognised by the marker line plus the account)**
 
 Revising:
 
