@@ -18,6 +18,18 @@ describe('renderPullRequestBody', () => {
     expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` (changed after review) | fail | pass |')
     expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: verified(d), outsideScope: [], secrets: [] })).not.toContain('changed after review')
   })
+  it('says the Before of a relocated check changed after review is the changed check, not the one Rumba wrote', () => {
+    const s = verified(d)
+    s.relocation = { status: 'relocated', from: 'sha2', sha: 'sha3', moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/cart.test.ts' }], original: s.checks }
+    const relocated = { criterionId: 'c1', command: 'npm test -- cart', files: ['tests/cart.test.ts'] }
+    s.checks = [relocated]
+    expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })).toContain('Before (the check as Rumba wrote it, on the base commit):')
+    s.checks = [{ ...relocated, changedAfterReview: true }]
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(body).toContain('Before (the check as changed after review, on the base commit):')
+    expect(body).not.toContain('Before (the check as Rumba wrote it, on the base commit):')
+    expect(body).toContain('For a check changed after review, Before is the changed check, on the base commit.')
+  })
   it('never prints a secret from check output', () => {
     const s = verified(d); s.after![0]!.output = 'Bearer sk-live-999'
     expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: ['sk-live-999'] })).not.toContain('sk-live-999')

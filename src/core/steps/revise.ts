@@ -6,7 +6,8 @@ import { timeLeft } from '../budget.js'
 import { inertText, renderPullRequestBody } from '../evidence.js'
 import { cleanOutput, redact } from '../redact.js'
 import { transition } from '../states.js'
-import type { AttemptRecord, Feedback, Ticket, TicketState } from '../types.js'
+import type { AttemptRecord, Check, CheckResult, Feedback, Ticket, TicketState } from '../types.js'
+import { onTheBase } from './baseRun.js'
 import {
   ATTEMPT_TAIL, brief, describe, execPrefixOf, type Failure, inertTitle, type Lock, protectedFailure, type Verdict, verify, verifyOnce,
 } from './build.js'
@@ -37,13 +38,35 @@ interface Round {
   startedAt: string
   /** The pull request's head when the round started. */
   start: string
+  /** The check files as they were when the round started. */
   lock: Lock
+  /** The check changes on the branch now, which Rumba accepted. */
+  accepted: Accepted
   feedback: Feedback[]
   attempts: AttemptRecord[]
 }
 
-/** How one attempt ended, before its verification. */
-type Tried = { result: Revised; tip: string } & ({ sha: string } | { failures: Failure[] } | { noChange: string })
+/**
+ * Checks the round changed, as the branch holds them now: each declared by the agent (or
+ * sharing a changed file with a declared one), and each failing on the base commit as changed.
+ */
+interface Accepted {
+  checks: Check[]
+  /** The reason the agent gave, for each declared criterion among `checks`, in the order of the checks. */
+  reasons: { criterionId: string; reason: string }[]
+  /** How the changed checks did on the base commit. */
+  before: CheckResult[]
+  /** The hashes of their files as changed. */
+  hashes: Record<string, string>
+}
+
+const NOTHING_ACCEPTED: Accepted = { checks: [], reasons: [], before: [], hashes: {} }
+
+/**
+ * How one attempt ended, before its verification. A commit comes with the checks whose files it
+ * changed, and the check changes declared so far.
+ */
+type Tried = { result: Revised; tip: string } & ({ sha: string; changed: Check[]; declared: Map<string, string> } | { failures: Failure[] } | { noChange: string })
 
 /** What the attempts of a round came to. */
 type Outcome =
@@ -75,7 +98,7 @@ export async function revise(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
   const { start, hashes } = await atPullRequestHead(deps, branch, url, files)
   const n = done + 1
   const r: Round = {
-    deps, rumba, ticket, n, start, startedAt: deps.clock().toISOString(), lock: { files, hashes, resetTo: start }, feedback: state.feedback ?? [], attempts: [],
+    deps, rumba, ticket, n, start, startedAt: deps.clock().toISOString(), lock: { files, hashes, resetTo: start }, accepted: NOTHING_ACCEPTED, feedback: state.feedback ?? [], attempts: [],
     current: { ...transition(state, 'building', deps.clock(), `review round ${n}`), reviewRounds: n, checkHashes: hashes },
   }
   // Counted and written before the agent runs, so a round that dies still counts.
@@ -121,9 +144,12 @@ async function attempts(r: Round): Promise<Outcome> {
     // A no-change answer on top of an earlier attempt's commit is verified once more as the
     // code stands, strictly, as building does.
     const noted = 'noChange' in tried ? { note: cleanOutput(`The agent said no change was needed: ${tried.noChange}`, deps.secrets, MAX_REASON) } : {}
-    const v: Verdict = 'noChange' in tried
-      ? await verifyOnce(deps, rumba, r.current, tried.tip, r.lock)
-      : 'sha' in tried ? await verify(deps, rumba, r.current, tried.sha, r.lock) : { kind: 'guard', failures: tried.failures }
+    let v: Verdict
+    if ('noChange' in tried) v = await verifyOnce(deps, rumba, r.current, tried.tip, lockOf(r))
+    else if ('failures' in tried) v = { kind: 'guard', failures: tried.failures }
+    else v = await acceptChanges(r, tried) ?? await verify(deps, rumba, r.current, tried.sha, lockOf(r))
+    // A rejected change leaves the branch where the round started, with no check changed.
+    if (v.kind === 'guard' && !('failures' in tried && tried.tip !== r.start)) r.accepted = NOTHING_ACCEPTED
 
     if (v.kind === 'infrastructure') {
       await record(r, { outcome: 'infrastructure', checks: brief(v.results), projectTests: v.projectTests, ...noted, tail: v.tail })
@@ -173,28 +199,78 @@ async function reviseOnce(r: Round, failures: Failure[], attempt: number): Promi
       if (result.noChangeNeeded !== undefined) return { noChange: result.noChangeNeeded, result, tip }
       return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }], result, tip }
     }
-    const guard = await protectedFailure(deps, rumba, workdir, r.start) ?? await checkChangeFailure(deps, workdir, r.start, r.lock, result.checkChanges ?? [])
-    if (guard !== null) {
+    const declared = declaredSoFar(r, result)
+    const checks = await protectedFailure(deps, rumba, workdir, r.start) ?? await changedChecks(deps, workdir, r, declared)
+    if (typeof checks === 'string') {
       await deps.workspace.reset(workdir, r.start)
-      return { failures: [{ criterionId: 'guard', output: guard }], result, tip: r.start }
+      return { failures: [{ criterionId: 'guard', output: checks }], result, tip: r.start }
     }
-    return { sha, result, tip: sha }
+    return { sha, result, tip: sha, changed: checks, declared }
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
 }
 
 /**
- * Locked check files the attempt changed since the round started. A check may change only when
- * the agent declares it and Rumba shows that the new check fails on the base and passes on the
- * change. Without that proof, a declared change is refused like an undeclared one.
+ * The check changes the agent declared: in its result, and in the earlier attempts of the round
+ * whose changes are still on the branch. A criterion without a check is ignored.
  */
-async function checkChangeFailure(
-  deps: Deps, workdir: string, since: string, lock: Lock, _declared: NonNullable<Revised['checkChanges']>,
-): Promise<string | null> {
-  const changed = new Set(await deps.workspace.changedFiles(workdir, since))
-  const edited = lock.files.filter((f) => changed.has(f))
-  return edited.length > 0 ? `The change edited check files, which must stay as written: ${edited.join(', ')}` : null
+function declaredSoFar(r: Round, result: Revised): Map<string, string> {
+  const declared = new Map(r.accepted.reasons.map((c) => [c.criterionId, c.reason]))
+  const now = new Map<string, string>()
+  for (const { criterionId, reason } of result.checkChanges ?? []) {
+    if (r.current.checks.some((c) => c.criterionId === criterionId) && !now.has(criterionId)) now.set(criterionId, reason)
+  }
+  return new Map([...declared, ...now])
+}
+
+/**
+ * The checks whose locked files the attempt changed since the round started. A check may
+ * change only when the agent declares its criterion: a changed check file that belongs to no
+ * declared criterion is refused, with the reason. A declared change exempts that criterion's
+ * check files and nothing else.
+ */
+async function changedChecks(deps: Deps, workdir: string, r: Round, declared: Map<string, string>): Promise<Check[] | string> {
+  const changed = new Set(await deps.workspace.changedFiles(workdir, r.start))
+  const edited = new Set(r.lock.files.filter((f) => changed.has(f)))
+  const allowed = new Set(r.current.checks.filter((c) => declared.has(c.criterionId)).flatMap((c) => c.files))
+  const undeclared = [...edited].filter((f) => !allowed.has(f))
+  if (undeclared.length > 0) return `The change edited check files, which must stay as written: ${undeclared.join(', ')}`
+  return r.current.checks.filter((c) => c.files.some((f) => edited.has(f)))
+}
+
+/**
+ * Runs the checks the attempt changed on the base commit, where each must fail, and accepts
+ * them for the round: verification then compares the check files with their changed hashes.
+ * A refused change is reset off the branch, and its reason goes to the next attempt.
+ */
+async function acceptChanges(r: Round, tried: Extract<Tried, { sha: string }>): Promise<Verdict | null> {
+  const { deps } = r
+  if (tried.changed.length === 0) {
+    r.accepted = NOTHING_ACCEPTED
+    return null
+  }
+  const branch = r.current.branch!
+  if (!r.current.checksSha) throw new Error('Cannot run a changed check on the base commit without a checks commit')
+  const proof = await onTheBase(deps, r.current, {
+    branch: `${branch}-review-base`, sha: tried.sha, checks: tried.changed, files: [...new Set(tried.changed.flatMap((c) => c.files))],
+    what: 'changed', message: 'test: the checks changed after review, on the base commit', keepFiles: true,
+  })
+  if ('reason' in proof) {
+    await resetBranch(deps, branch, r.start)
+    return { kind: 'guard', failures: [{ criterionId: proof.criterionId, output: proof.reason }] }
+  }
+  const reasons = tried.changed.flatMap((c) => {
+    const reason = tried.declared.get(c.criterionId)
+    return reason === undefined ? [] : [{ criterionId: c.criterionId, reason }]
+  })
+  r.accepted = { checks: tried.changed, reasons, before: proof.results, hashes: proof.hashes }
+  return null
+}
+
+/** The round's lock, with the check changes it accepted. */
+function lockOf(r: Round): Lock {
+  return { ...r.lock, hashes: { ...r.lock.hashes, ...r.accepted.hashes } }
 }
 
 /** Pushes the verified round to the same pull request, then updates its body and replies there. */
@@ -215,9 +291,14 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
 
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
+  const changed = new Set(r.accepted.checks.map((c) => c.criterionId))
   const verified = {
     ...transition(rest, 'verified', now), after: outcome.results, pushedAt: now.toISOString(), answeredAt: r.startedAt,
     fixSummary: cleanOutput(outcome.result.summary, deps.secrets, MAX_SUMMARY),
+    // A changed check is marked, and its result on the base commit is the new one.
+    checks: rest.checks.map((c) => changed.has(c.criterionId) ? { ...c, changedAfterReview: true } : c),
+    before: replaced(rest.before ?? [], r.accepted.before),
+    checkHashes: lockOf(r).hashes,
   }
   const next = transition(verified, 'pr_open', now, `review round ${r.n}`)
   // Written before the pull request calls, so a failure there cannot undo the round.
@@ -225,6 +306,7 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
   const body = renderPullRequestBody({ ticket, rumba, state: next, outsideScope: outside, secrets: deps.secrets })
   await quietly(() => deps.codeHost.updatePullRequest(url, { body }))
   const lines = r.feedback.length === 0 ? [`Revised as asked with the ${rumba.labels.revise} label.`] : feedbackLines(r, outcome.result)
+  for (const c of r.accepted.reasons) lines.push(`- Check for ${oneLine(c.criterionId, deps.secrets, 100)} changed: ${oneLine(c.reason, deps.secrets, MAX_REPLY)}`)
   await quietly(() => deps.codeHost.commentOnPullRequest(url, lines.join('\n')))
   return next
 }
@@ -281,6 +363,12 @@ function feedbackLines(r: Round, result: Revised): string[] {
     const author = oneLine(f.author.replace(/^@+/, ''), secrets, 100)
     return `- ${kindOf(f, secrets)} by ${author} (${f.url.replace(/\s/g, '')}): ${reply === undefined ? NO_REPLY : oneLine(reply, secrets, MAX_REPLY)}`
   })
+}
+
+/** `results` with each criterion that has a fresh result given that one instead, in place. */
+function replaced(results: CheckResult[], fresh: CheckResult[]): CheckResult[] {
+  const known = new Set(results.map((r) => r.criterionId))
+  return [...results.map((r) => fresh.find((f) => f.criterionId === r.criterionId) ?? r), ...fresh.filter((f) => !known.has(f.criterionId))]
 }
 
 function kindOf(f: Feedback, secrets: string[]): string {

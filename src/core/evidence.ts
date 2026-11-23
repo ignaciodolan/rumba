@@ -126,6 +126,7 @@ function render(i: EvidenceInput, cap: number | null): string {
       '- It compared the moved checks with the ones it verified, line by line. Only their place, their imports, their test titles and their indentation changed. Every other line is as it was, in the same order, and no line was added.',
       "- Each moved check fails on the base commit and passes on the change, run again in the project's environment.", '',
       'In the table, Before is the check as Rumba wrote it, on the base commit, and After is the moved check, on the change.',
+      ...(state.checks.some((c) => c.changedAfterReview === true) ? ['For a check changed after review, Before is the changed check, on the base commit.'] : []),
     ].join('\n'))
   } else if (state.relocation?.status === 'rejected') {
     sections.push([
@@ -154,7 +155,9 @@ function render(i: EvidenceInput, cap: number | null): string {
         const r = results?.find((x) => x.criterionId === check.criterionId)
         return `${label}:\n\n${block(cleanOutput(r?.output ?? '', i.secrets, cap))}`
       }
-      const before = relocation ? 'Before (the check as Rumba wrote it, on the base commit)' : 'Before'
+      const before = check.changedAfterReview === true
+        ? 'Before (the check as changed after review, on the base commit)'
+        : relocation ? 'Before (the check as Rumba wrote it, on the base commit)' : 'Before'
       return `<details>\n<summary>${escapeHtml(check.criterionId)}: ${escapeHtml(check.command)}</summary>\n\n${part(before, state.before)}\n\n${part('After', state.after)}\n\n</details>`
     })
     sections.push(['## Check output', ...outputs].join('\n\n'))

@@ -168,13 +168,154 @@ describe('revise', () => {
     expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: 'The fix changed protected paths, which the agent must not change: .github/workflows/ci.yml' }])
   })
 
-  it('rejects a changed check file, even one the agent declared', async () => {
+  it('rejects a changed check file the agent did not declare', async () => {
     const d = setup(); d.workspace.changedSince = { sha2: [CHECK] }
-    d.agent.script.revise = { ...revised, checkChanges: [{ criterionId: 'c1', reason: 'alice says the check is wrong' }] }
     const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
     expect(s.state).toBe('needs_human'); expect(d.environment.ups).toEqual([])
     expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: `The change edited check files, which must stay as written: ${CHECK}` }])
     expect(d.workspace.branchTip).toBe('sha2')
+  })
+
+  /** The round locks the check at h1; every later hash sees the check as the attempt changed it. */
+  function changedCheck(d: ReturnType<typeof setup>): void {
+    let n = 0
+    d.workspace.hashFiles = async (_w, files) => Object.fromEntries(files.map((f) => [f, n++ === 0 ? 'h1' : 'h2']))
+    d.workspace.changedSince = { sha2: [CHECK] }
+    d.agent.script.revise = { ...revised, checkChanges: [{ criterionId: 'c1', reason: 'alice says the check is wrong' }] }
+    // The attempt's commit, then the commit of the changed check on the base.
+    d.workspace.commitResults = ['sha3', 'base-c1', 'sha4', 'base-c1b']
+  }
+
+  it('accepts a declared check change that fails on the base and passes on the change, and says so on the pull request', async () => {
+    const d = setup(); changedCheck(d)
+    d.environment.checkResults = [{ passed: false, output: 'expected subtotal, got total' }]
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(s.state).toBe('pr_open'); expect(d.agent.calls).toHaveLength(1)
+    expect(d.environment.ups).toEqual([
+      { branch: 'rumba/shop/123-review-base', sha: 'base-c1', role: 'before' },
+      { branch: 'rumba/shop/123', sha: 'sha3', role: 'after' },
+    ])
+    const scratch = d.workspace.log.find((l) => l.startsWith('prepare rumba/shop/123-review-base'))!
+    expect(scratch).toMatch(/^prepare rumba\/shop\/123-review-base fresh like rumba\/shop\/123 /)
+    const dir = scratch.split(' ').at(-1)!
+    // The checks commit, with the check as the attempt changed it.
+    expect(d.workspace.log).toContain(`reset ${dir} sha1`)
+    expect(d.workspace.log).toContain(`checkout ${dir} sha3 ${CHECK}`)
+    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: false }])
+
+    expect(s.checks).toEqual([{ criterionId: 'c1', command: 'npm test -- c1', files: [CHECK], changedAfterReview: true }])
+    expect(s.before).toEqual([{ criterionId: 'c1', passed: false, exitCode: 1, output: 'expected subtotal, got total' }])
+    expect(s.checkHashes).toEqual({ [CHECK]: 'h2' })
+    expect(d.tracker.states.get('123')).toEqual(s)
+
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(d.codeHost.updates).toEqual([{ url: PR, body }])
+    expect(body).toContain(`\`${CHECK}\` (changed after review)`)
+    expect(body).toContain('expected subtotal, got total')
+    expect(d.codeHost.pullRequestComments).toEqual([{
+      url: PR,
+      body: [`- Review by alice (${PR}#pullrequestreview-1): Renamed it.`, '- Check for c1 changed: alice says the check is wrong'].join('\n'),
+    }])
+  })
+
+  it.each([
+    ['passes there', { passed: true }, 'The changed check for c1 passes on the base commit, so it no longer shows the problem.'],
+    ['cannot run there', { passed: false, exitCode: 127 }, 'The changed check for c1 could not run on the base commit (exit 127).'],
+    ['dies of the machine there', { passed: false, infrastructure: 'the machine ran out of memory' }, 'The changed check for c1 could not be judged on the base commit: the machine ran out of memory.'],
+  ])('rejects a declared check change whose check %s, and gives the reason to the next attempt', async (_what, base, reason) => {
+    const d = setup(); changedCheck(d)
+    d.environment.checkResults = [base, base]
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s.state).toBe('needs_human')
+    // Only the base runs: a change that is refused there is never verified.
+    expect(d.environment.ups.map((u) => u.role)).toEqual(['before', 'before'])
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'c1', output: reason }])
+    expect(s.attempts?.map((a) => a.outcome)).toEqual(['guard', 'guard'])
+    expect(s.attempts?.[0]?.note).toBe(reason)
+    expect(d.workspace.branchTip).toBe('sha2'); expect(d.codeHost.pushed).toEqual([])
+    expect(s.checks[0]!.changedAfterReview).toBeUndefined(); expect(s.checkHashes).toEqual({ [CHECK]: 'h1' })
+  })
+
+  it('rejects a declared check change that deletes the check file', async () => {
+    const d = setup(); changedCheck(d)
+    let n = 0
+    d.workspace.hashFiles = async (_w, files) => (n++ === 0 ? Object.fromEntries(files.map((f) => [f, 'h1'])) : {})
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s.state).toBe('needs_human'); expect(d.environment.ups).toEqual([])
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'c1', output: `The changed check for c1 lost its file ${CHECK}: a check may change, but not lose its files.` }])
+    expect(d.workspace.branchTip).toBe('sha2')
+  })
+
+  it('ignores a declared criterion that has no check: it exempts nothing and is not replied about', async () => {
+    const d = setup(); d.workspace.changedSince = { sha2: [CHECK] }
+    // c2 is a criterion without a check, c9 no criterion at all.
+    d.agent.script.revise = { ...revised, checkChanges: [{ criterionId: 'c2', reason: 'no check' }, { criterionId: 'c9', reason: 'made up' }] }
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s.state).toBe('needs_human'); expect(d.environment.ups).toEqual([])
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: `The change edited check files, which must stay as written: ${CHECK}` }])
+
+    const e = setup(); e.agent.script.revise = { ...revised, checkChanges: [{ criterionId: 'c9', reason: 'made up' }] }
+    const t = await revise(e, makeRumba(), makeTicket(), changesRequested(e))
+    expect(t.state).toBe('pr_open'); expect(e.environment.ups.map((u) => u.role)).toEqual(['after'])
+    expect(t.checks[0]!.changedAfterReview).toBeUndefined()
+    expect(e.codeHost.pullRequestComments[0]!.body).toBe(`- Review by alice (${PR}#pullrequestreview-1): Renamed it.`)
+  })
+
+  it("lets a declared change exempt only that criterion's check files, never another check's or a protected path", async () => {
+    const other = 'tests/rumba/c3.test.ts'
+    const withC3 = (d: ReturnType<typeof setup>) => {
+      const s = changesRequested(d)
+      return { ...s, criteria: [...s.criteria, { id: 'c3', text: 'C3', checkable: true }], checks: [...s.checks, { criterionId: 'c3', command: 'npm test -- c3', files: [other] }] }
+    }
+    const d = setup(); changedCheck(d); d.workspace.changedSince = { sha2: [CHECK, other] }
+    expect((await revise(d, makeRumba(), makeTicket(), withC3(d))).state).toBe('needs_human')
+    expect(d.environment.ups).toEqual([])
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: `The change edited check files, which must stay as written: ${other}` }])
+
+    const e = setup(); changedCheck(e); e.workspace.changedSince = { sha2: [CHECK, '.github/workflows/ci.yml'] }
+    expect((await revise(e, makeRumba(), makeTicket(), changesRequested(e))).state).toBe('needs_human')
+    expect(e.environment.ups).toEqual([])
+    expect(e.agent.calls[1]!.failures?.[0]?.output).toContain('.github/workflows/ci.yml')
+  })
+
+  it('runs on the base every check that shares a changed file with a declared one', async () => {
+    const shared = 'tests/cart.test.ts'
+    const d = setup(); changedCheck(d); d.workspace.changedSince = { sha2: [shared] }
+    const start = changesRequested(d)
+    const s = await revise(d, makeRumba(), makeTicket(), {
+      ...start,
+      criteria: [...start.criteria, { id: 'c3', text: 'C3', checkable: true }],
+      checks: [{ criterionId: 'c1', command: 'npm test -- cart -t c1', files: [shared] }, { criterionId: 'c3', command: 'npm test -- cart -t c3', files: [shared] }],
+      before: [...start.before!, { criterionId: 'c3', passed: false, exitCode: 1, output: 'old c3' }],
+    })
+    expect(s.state).toBe('pr_open')
+    expect(d.environment.checksRun.slice(0, 2)).toEqual(['c1', 'c3'])
+    expect(s.checks.map((c) => c.changedAfterReview)).toEqual([true, true])
+    expect(s.before?.map((r) => r.output)).toEqual(['check failed', 'check failed'])
+    expect(d.codeHost.pullRequestComments[0]!.body.split('\n').filter((l) => l.startsWith('- Check'))).toEqual(['- Check for c1 changed: alice says the check is wrong'])
+  })
+
+  it('makes the reason of a check change inert, on one line and at most 500 characters, also after the label line', async () => {
+    const d = setup(); changedCheck(d); d.secrets = ['s3cr3t']
+    d.agent.script.revise = { ...revised, checkChanges: [{ criterionId: 'c1', reason: `@alice said so, see #7\n<b>s3cr3t</b> ${'a'.repeat(600)}` }] }
+    await revise(d, makeRumba(), makeTicket(), changesRequested(d, []))
+    const [label, line] = d.codeHost.pullRequestComments[0]!.body.split('\n')
+    expect(label).toBe('Revised as asked with the rumba-revise label.')
+    const raw = `@alice said so, see #7 <b>[redacted]</b> ${'a'.repeat(600)}`.slice(0, 500)
+    expect(line).toBe(`- Check for c1 changed: ${raw.replace('@', '@\u200b').replace('#7', '#\u200b7').replace('<b>', '&lt;b&gt;').replace('</b>', '&lt;/b&gt;')}`)
+  })
+
+  it('takes a declared change made in an earlier attempt of the round as still declared, and proves it again', async () => {
+    const d = setup(); changedCheck(d)
+    // The first attempt's change fails on the change; the second keeps the changed check without declaring it again.
+    d.agent.script.revise = [{ ...revised, checkChanges: [{ criterionId: 'c1', reason: 'alice says the check is wrong' }] }, revised]
+    d.environment.checkResults = [{ passed: false }, { passed: false, output: 'still wrong' }, { passed: false, output: 'still wrong' }]
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s.state).toBe('pr_open')
+    expect(d.environment.ups.map((u) => `${u.role} ${u.sha}`)).toEqual(['before base-c1', 'after sha3', 'after sha3', 'before base-c1b', 'after sha4'])
+    expect(s.checks[0]!.changedAfterReview).toBe(true)
+    expect(d.codeHost.pullRequestComments[0]!.body).toContain('- Check for c1 changed: alice says the check is wrong')
   })
 
   it('locks the check files as the branch head holds them when the round starts', async () => {
