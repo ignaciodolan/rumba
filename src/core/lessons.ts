@@ -26,34 +26,47 @@ const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/
 // Lone surrogates and the replacement character: either would make lessons.md text that is not
 // valid UTF-8, which readFileAt refuses, and every later lesson of the rumba would fail.
 const BROKEN = /\p{Cs}|\uFFFD/gu
-// Format characters (zero-width spaces, bidi marks): invisible in lessons.md, and they could
-// split a quote of the feedback so that it passes the quote check.
-const FORMAT = /\p{Cf}/gu
+// Format and other default-ignorable code points (zero-width spaces, bidi marks, variation
+// selectors, fillers): invisible in lessons.md, and they could split a quote of the feedback
+// so that it passes the quote check.
+const FORMAT = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
 // Markdown that would give a line structure in every later agent's context, where lessons.md
 // is placed unfenced: a heading or quote marker at the start, an HTML comment, a code fence
 // (of backticks or of tildes).
 const LEADING_MARKS = /^(?:[#>]+\s*)+/
 const STRUCTURE = /<!--|-->|`{3,}|~{3,}/g
+// A line of only these makes a rule, or a heading of the line before it.
+const RULE_LINE = /^[-=*_\s]+$/
 
 type Distilled = Extract<AgentResult, { kind: 'distill-lesson' }>
 
 /**
  * The agent's lesson as Rumba writes it: each line made plain, valid text (see cleanLine);
- * empty lines dropped; at most three. Refused when nothing is left, or when it quotes the
+ * empty lines, and lines that would only make a rule or a heading, dropped; at most three. Refused when nothing is left, or when it quotes the
  * feedback (40 characters in a row of any feedback text, ignoring case, spacing, invisible
  * characters and compatibility forms): the lesson is read by every later ticket's agent, so
  * reviewer text must not reach it word for word.
  */
 export function cleanLesson(lines: string[], feedback: Feedback[], secrets: string[]): { lines: string[] } | { refused: string } {
-  const kept = lines.map((l) => cleanLine(l, secrets)).filter((l) => l !== '').slice(0, MAX_LINES)
+  const kept = lines.map((l) => cleanLine(l, secrets)).filter((l) => l !== '' && !RULE_LINE.test(l)).slice(0, MAX_LINES)
   if (kept.length === 0) return { refused: EMPTY }
   if (quotes(kept, feedback, secrets)) return { refused: QUOTED }
   return { lines: kept }
 }
 
-/** One line, as plainLine makes it, cut to MAX_LINE code points (never inside a character). */
+/** One line of the agent's lesson, as plainPieces makes it, cut to MAX_LINE code points (never inside a character). */
 function cleanLine(line: string, secrets: string[]): string {
-  return Array.from(plainLine(line, secrets)).slice(0, MAX_LINE).join('').trimEnd()
+  return Array.from(plainPieces(line, secrets)).slice(0, MAX_LINE).join('').trimEnd()
+}
+
+/**
+ * A text with line breaks, as one line: each piece between breaks cleaned as a line
+ * (plainLine), so a heading or quote marker that starts a piece goes, joined with a space,
+ * and redacted again (a secret a break split is whole there). Lessons and feedback are both
+ * read this way, so the quote check compares like with like.
+ */
+function plainPieces(text: string, secrets: string[]): string {
+  return redact(text.split(LINE_BREAK).map((l) => plainLine(l, secrets)).filter((l) => l !== '').join(' '), secrets)
 }
 
 /**
@@ -83,10 +96,10 @@ function normalize(text: string): string {
 /** True when the lesson, its lines read as one text, shares QUOTE_RUN characters in a row with a feedback text as cleaned. */
 function quotes(lines: string[], feedback: Feedback[], secrets: string[]): boolean {
   const lesson = normalize(lines.join(' '))
-  // Each feedback line is cleaned as a lesson line is, so the markup Rumba strips from the
+  // Each feedback text is cleaned as a lesson line is, so the markup Rumba strips from the
   // lesson cannot make a quoted sentence differ from what the reviewer wrote.
   const texts = feedback
-    .map((f) => normalize(f.text.split(LINE_BREAK).map((l) => plainLine(l, secrets)).join(' ')))
+    .map((f) => normalize(plainPieces(f.text, secrets)))
     .filter((t) => t.length >= QUOTE_RUN)
   for (let i = 0; i + QUOTE_RUN <= lesson.length; i++) {
     const run = lesson.slice(i, i + QUOTE_RUN)

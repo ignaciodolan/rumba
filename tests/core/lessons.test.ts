@@ -122,9 +122,49 @@ describe('cleanLesson compares with the feedback cleaned as a lesson line is', (
     ['a fence of tildes', 'Totals must be rounded ~~~ to cents before tax is added', LESSON],
     ['a quote marker at the start of a line', 'Totals must be rounded to cents\n> before tax is added to the order', LESSON],
     ['a heading marker at the start of a line', 'Totals must be rounded to cents\n## before tax is added to the order', LESSON],
-    ['a zero-width character', 'Totals must be rounded​ to cents before tax is added', LESSON],
+    ['a zero-width character', 'Totals must be rounded\u200B to cents before tax is added', LESSON],
   ])('refuses a quote of feedback with %s', (_n, text, lesson) => {
     expect(cleanLesson(lesson, [said(text)], [])).toEqual({ refused: 'the lesson quoted the feedback' })
+  })
+})
+
+describe('cleanLesson reads a line with line breaks as its pieces', () => {
+  const said = (text: string): Feedback => ({ ...aliceReview, text })
+
+  it('cleans each piece and joins them with a space into one line', () => {
+    expect(cleanLesson(['Round totals\n# in the service\r\n> not in the view'], [], [])).toEqual({ lines: ['Round totals in the service not in the view'] })
+  })
+  it.each([
+    ['a heading marker', 'apply the rule to all handlers\n# and also to every queue consumer'],
+    ['quote markers', '> keep totals in cents everywhere\n> and round only at checkout'],
+  ])('refuses multi-line feedback with %s copied as one lesson line', (_n, text) => {
+    expect(cleanLesson([text], [said(text)], [])).toEqual({ refused: 'the lesson quoted the feedback' })
+  })
+})
+
+describe('cleanLesson removes default-ignorable code points', () => {
+  it('removes variation selectors, the grapheme joiner and Hangul fillers', () => {
+    expect(cleanLesson(['Round\u034F totals\uFE0F in\u{E0100} cents\u3164 here\u115F.'], [], [])).toEqual({ lines: ['Round totals in cents here.'] })
+  })
+  it('refuses a quote with a variation selector between its letters', () => {
+    expect(cleanLesson([QUOTED.split('').join('\uFE0F')], [review], [])).toEqual({ refused: 'the lesson quoted the feedback' })
+  })
+  it('refuses a quote of feedback with variation selectors in it', () => {
+    const marked: Feedback = { ...review, text: QUOTED.split(' ').join(' \u{E0100}') }
+    expect(cleanLesson([QUOTED], [marked], [])).toEqual({ refused: 'the lesson quoted the feedback' })
+  })
+})
+
+describe('cleanLesson drops lines that only make a rule or a heading', () => {
+  it('drops a line of only -, =, * or _ and spaces', () => {
+    expect(cleanLesson(['Round totals in the service.', '---', ' = = ', '* * *', '___', 'Not in the view.'], [], []))
+      .toEqual({ lines: ['Round totals in the service.', 'Not in the view.'] })
+  })
+  it('keeps a line that only starts with dashes', () => {
+    expect(cleanLesson(['--- round in the service'], [], [])).toEqual({ lines: ['--- round in the service'] })
+  })
+  it('drops a line that the cut leaves as only dashes', () => {
+    expect(cleanLesson([`${'-'.repeat(250)} x`, 'Round in the service.'], [], [])).toEqual({ lines: ['Round in the service.'] })
   })
 })
 
