@@ -178,3 +178,30 @@ describe('readAgentResult', () => {
     await expect(readAgentResult(dir, 'triage')).rejects.toThrow(/notCheckable/)
   })
 })
+
+describe('readAgentResult distill-lesson', () => {
+  const lesson = ['Totals are rounded to cents in `src/orders/total.ts`; round there, not in the view.']
+
+  it('reads a lesson of one to three lines, or a reason for none', async () => {
+    await writeResult({ kind: 'distill-lesson', lesson }); expect(await readAgentResult(dir, 'distill-lesson')).toEqual({ kind: 'distill-lesson', lesson })
+    const three = { kind: 'distill-lesson', lesson: ['a', 'b', 'c'.repeat(200)] }
+    await writeResult(three); expect(await readAgentResult(dir, 'distill-lesson')).toEqual(three)
+    const none = { kind: 'distill-lesson', none: 'Alice only asked for a rename in this change.' }
+    await writeResult(none); expect(await readAgentResult(dir, 'distill-lesson')).toEqual(none)
+  })
+
+  it.each([
+    ['neither', { kind: 'distill-lesson' }],
+    ['both', { kind: 'distill-lesson', lesson: ['x'], none: 'y' }],
+    ['no lines', { kind: 'distill-lesson', lesson: [] }],
+    ['four lines', { kind: 'distill-lesson', lesson: ['a', 'b', 'c', 'd'] }],
+    ['an empty line', { kind: 'distill-lesson', lesson: [''] }],
+    ['a blank line', { kind: 'distill-lesson', lesson: ['  \n'] }],
+    ['a long line', { kind: 'distill-lesson', lesson: ['x'.repeat(201)] }],
+    ['a line that is not text', { kind: 'distill-lesson', lesson: [1] }],
+    ['an empty reason', { kind: 'distill-lesson', none: ' ' }],
+    ['a long reason', { kind: 'distill-lesson', none: 'x'.repeat(501) }],
+  ])('rejects %s', async (_n, value) => {
+    await writeResult(value); await expect(readAgentResult(dir, 'distill-lesson')).rejects.toThrow(AgentError)
+  })
+})
