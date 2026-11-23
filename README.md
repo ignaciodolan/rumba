@@ -228,7 +228,7 @@ Rules for whoever writes `rumba.yml` and the compose file:
 |---|---|
 | `RUMBA_GITHUB_TOKEN` | Always. Falls back to `GITHUB_TOKEN`. A fine-grained personal token or a GitHub App token with contents, issues and pull requests write access. |
 | `GITHUB_TOKEN` | Used when `RUMBA_GITHUB_TOKEN` is not set. In Actions this is the workflow's own token. |
-| `RUMBA_GITHUB_LOGIN` | Optional. The login of the account Rumba runs as. Set it when the token cannot look itself up (see below). In the workflow it is a repository variable, not a secret. |
+| `RUMBA_GITHUB_LOGIN` | Needed whenever the code host is GitHub and Rumba cannot look up its own account, for example with the Actions token; it is also read for the GitHub tracker. Otherwise optional. The login of the account Rumba runs as (see below). In the workflow it is a repository variable, not a secret. |
 | `ANTHROPIC_API_KEY` | The agent is `claude-code`, unless `CLAUDE_CODE_OAUTH_TOKEN` is set. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Instead of `ANTHROPIC_API_KEY`: a long-lived token from `claude setup-token`, which needs a Claude subscription. When both are set, Rumba passes only the API key, as Claude Code itself would prefer it. Either one is the only credential the agent container gets. |
 | `GEMINI_API_KEY` | The agent is `gemini-cli`. |
@@ -276,7 +276,7 @@ Ticket text, and anything the agent reads, is untrusted input, and the coding ag
 - After each agent call Rumba commits the change, checks the commit against the protected paths, and removes the agent's working copy. The commit under test is then checked out fresh, so a file the agent left out of the commit, such as a git-ignored `.env`, is not there. Each checkout sits alone in its own temporary folder.
 - Rumba refuses to commit a git repository inside the repository, or a symbolic link that really leads outside it, whichever links it passes through on the way.
 - Rumba reads state only from comments written by the account it runs as. Changing the token to one of another account makes open tickets start again from `queued`.
-- When Rumba runs with the Actions token and cannot look up its own login, set the repository variable `RUMBA_GITHUB_LOGIN` to `github-actions[bot]`. Without a known login Rumba stops with an error rather than trust comments from any account.
+- When Rumba runs with the Actions token and cannot look up its own login, set the repository variable `RUMBA_GITHUB_LOGIN` to `github-actions[bot]`. Without a known login Rumba stops the run with an error, for the GitHub tracker and for reading review feedback on pull requests, rather than trust comments from any account.
 - Do not run Rumba as root. The sandbox runs as the calling user, and Claude Code refuses to run without permission prompts as root.
 - Rumba never merges a pull request.
 

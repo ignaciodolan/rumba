@@ -81,8 +81,13 @@ labels: { opt_in: auto, approved: ok }
     expect(r.environment).toEqual({ kind: 'vercel-preview', projectId: 'prj_1', protected: [] })
     expect(r.verify).toEqual({ test: 'npm test' })
     expect(r.limits).toEqual({ maxTicketsPerRun: 5, minutesPerTicket: 10, maxFixAttempts: 2 })
-    expect(r.labels).toEqual({ optIn: 'auto', statePrefix: 'rumba-state:', approved: 'ok', retry: 'rumba-retry' })
+    expect(r.labels).toEqual({ optIn: 'auto', statePrefix: 'rumba-state:', approved: 'ok', retry: 'rumba-retry', revise: 'rumba-revise' })
     expect(r.context).toBe('')
+  })
+  it('lets rumba.yml rename the revise label', async () => {
+    await write('.rumba/shop/rumba.yml', minimal + 'labels: { revise: needs-work }\n')
+    const [r] = await loadRumbas(root)
+    expect(r.labels.revise).toBe('needs-work')
   })
   it('prefixes schema errors with the rumba name and YAML path', async () => {
     await write('.rumba/shop/rumba.yml', minimal.replace('claude-code', 'nope'))

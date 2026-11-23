@@ -2,7 +2,22 @@ import { realpath } from 'node:fs/promises'
 import type { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
 import { cleanOutput } from '../../core/redact.js'
-import type { CodeHost, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
+import { CodeHostIdentityError, type CodeHost, FeedbackItem, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
+
+const PER_PAGE = 100
+
+const UNKNOWN_LOGIN =
+  'Could not determine which GitHub account Rumba runs as. Set RUMBA_GITHUB_LOGIN to its login (for the GitHub Actions token: github-actions[bot]).'
+
+const WRITE_ROLES = new Set(['admin', 'maintain', 'write'])
+
+const REVIEW_STATES: Record<string, NonNullable<FeedbackItem['reviewState']>> = {
+  CHANGES_REQUESTED: 'changes_requested',
+  APPROVED: 'approved',
+  COMMENTED: 'commented',
+}
+
+type Author = { login: string; type: string } | null
 
 const HEADER_KEY = 'http.https://github.com/.extraheader'
 
@@ -37,17 +52,19 @@ export class GitHubCodeHost implements CodeHost {
   private readonly token: string
   private readonly repoRoot: string
   private readonly remoteUrl: string
+  private readonly login: string | undefined
 
   /**
    * `repoRoot` is the trusted main checkout the worktrees belong to. The agent can write to a
    * worktree, including its .git pointer, so no git command runs in or reads metadata from one.
    */
-  constructor(o: { octokit: Octokit; owner: string; repo: string; token: string; repoRoot: string; remoteUrl?: string }) {
+  constructor(o: { octokit: Octokit; owner: string; repo: string; token: string; repoRoot: string; remoteUrl?: string; login?: string }) {
     this.octokit = o.octokit
     this.owner = o.owner
     this.repo = o.repo
     this.token = o.token
     this.repoRoot = o.repoRoot
+    this.login = o.login
     this.remoteUrl = o.remoteUrl ?? `https://github.com/${o.owner}/${o.repo}.git`
   }
 
@@ -114,10 +131,78 @@ export class GitHubCodeHost implements CodeHost {
 
   async getPullRequest(url: string): Promise<PullRequestInfo> {
     const { data } = await this.octokit.rest.pulls.get({ ...this.where(), pull_number: this.pullNumber(url) })
-    const info: PullRequestInfo = { state: data.merged || data.merged_at ? 'merged' : data.state === 'closed' ? 'closed' : 'open', headSha: data.head.sha }
+    const info: PullRequestInfo = { state: data.merged || data.merged_at ? 'merged' : data.state === 'closed' ? 'closed' : 'open', headSha: data.head.sha, labels: data.labels.map((l) => l.name) }
     if (info.state === 'merged' && data.merged_at) info.mergedAt = data.merged_at
     if (info.state === 'closed' && data.closed_at) info.closedAt = data.closed_at
     return info
+  }
+
+  async listFeedback(url: string, since: string): Promise<FeedbackItem[]> {
+    const number = this.pullNumber(url)
+    const self = (await this.ownLogin()).toLowerCase()
+    const target = { ...this.where(), per_page: PER_PAGE }
+    const [reviews, lines, comments] = await Promise.all([
+      this.octokit.paginate(this.octokit.rest.pulls.listReviews, { ...target, pull_number: number }),
+      this.octokit.paginate(this.octokit.rest.pulls.listReviewComments, { ...target, pull_number: number }),
+      this.octokit.paginate(this.octokit.rest.issues.listComments, { ...target, issue_number: number }),
+    ])
+    const raw: Omit<FeedbackItem, 'canWrite' | 'self'>[] = []
+    for (const r of reviews) {
+      const reviewState = REVIEW_STATES[r.state]
+      // A pending review is not submitted yet and a dismissed one no longer counts.
+      if (reviewState && r.submitted_at) raw.push({ kind: 'review', author: r.user?.login ?? '', url: r.html_url, at: r.submitted_at, text: r.body ?? '', reviewState })
+    }
+    for (const c of lines) {
+      const line = c.line ?? c.original_line
+      raw.push({ kind: 'line', author: c.user?.login ?? '', url: c.html_url, at: c.created_at, text: c.body, path: c.path, ...(line ? { line } : {}) })
+    }
+    for (const c of comments) raw.push({ kind: 'comment', author: c.user?.login ?? '', url: c.html_url, at: c.created_at, text: c.body ?? '' })
+    const authors = new Map<string, Author>()
+    for (const r of [...reviews, ...lines, ...comments]) if (r.user) authors.set(r.user.login, r.user)
+    const writers = new Map<string, Promise<boolean>>()
+    const canWrite = (login: string) => {
+      if (!writers.has(login)) writers.set(login, this.canWrite(authors.get(login) ?? null))
+      return writers.get(login)!
+    }
+    const after = Date.parse(since)
+    const fresh = raw.filter((i) => Date.parse(i.at) > after)
+    return Promise.all(fresh.map(async (i) => ({ ...i, canWrite: await canWrite(i.author), self: i.author.toLowerCase() === self })))
+  }
+
+  /** Fails closed: a bot, an unknown author or any lookup that does not answer is not a writer. */
+  private async canWrite(user: Author): Promise<boolean> {
+    if (!user || user.type === 'Bot') return false
+    try {
+      const { data } = await this.octokit.rest.repos.getCollaboratorPermissionLevel({ ...this.where(), username: user.login })
+      return WRITE_ROLES.has(data.permission) || WRITE_ROLES.has(data.role_name)
+    } catch {
+      return false
+    }
+  }
+
+  async removeLabel(url: string, label: string): Promise<void> {
+    const number = this.pullNumber(url)
+    try {
+      await this.octokit.rest.issues.removeLabel({ ...this.where(), issue_number: number, name: label })
+    } catch (e) {
+      // The label is already gone.
+      if (httpStatus(e) !== 404) throw e
+    }
+  }
+
+  /** The login Rumba runs as: the one given, else GraphQL viewer, then REST GET /user. Never guessed. */
+  private async ownLogin(): Promise<string> {
+    if (this.login !== undefined) return this.login
+    try {
+      const r = await this.octokit.graphql<{ viewer: { login: string } }>('query { viewer { login } }')
+      return r.viewer.login
+    } catch {
+      try {
+        return (await this.octokit.rest.users.getAuthenticated()).data.login
+      } catch {
+        throw new CodeHostIdentityError(UNKNOWN_LOGIN)
+      }
+    }
   }
 
   /** The number in a pull request URL of this repository. Anything else is refused, so a stored URL cannot point a request elsewhere. */

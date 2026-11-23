@@ -163,6 +163,8 @@ export function redactingCodeHost(inner: CodeHost, secrets: string[]): CodeHost 
     pushBranch: (workdir, branch, opts) => inner.pushBranch(workdir, branch, opts),
     deleteBranch: (branch) => inner.deleteBranch(branch),
     getPullRequest: (url) => inner.getPullRequest(url),
+    listFeedback: (url, since) => inner.listFeedback(url, since),
+    removeLabel: (url, label) => inner.removeLabel(url, label),
     openPullRequest: (pr) => inner.openPullRequest({ ...pr, title: redact(pr.title, secrets), body: redact(pr.body, secrets) }),
   }
 }
@@ -179,6 +181,7 @@ export function buildDeps(
     throw new MissingKeyError('RUMBA_COMMIT_AUTHOR_NAME and RUMBA_COMMIT_AUTHOR_EMAIL must be set together.')
   }
   const octokit = new Octokit({ auth: token })
+  const login = value(env, 'RUMBA_GITHUB_LOGIN')
   const tracker = trackerFor(rumba, env, repo, () => octokit)
   // Always Rumba's own Dockerfile; the rumba chooses only the Node major version.
   const sandbox = new DockerSandbox({ dockerfileDir: SANDBOX_DIR, nodeVersion: rumba.sandbox.nodeVersion })
@@ -186,7 +189,7 @@ export function buildDeps(
   const runId = randomUUID()
   // Every agent call leaves a record under the run's folder, which `rumba run` prints at the end.
   const agent = recordingAgent(agentFor(rumba, env, sandbox), new FileRunRecords(recordsDirFor(runId, env)), secrets)
-  const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root })
+  const codeHost = new GitHubCodeHost({ octokit, owner: repo.owner, repo: repo.name, token, repoRoot: repo.root, ...(login === undefined ? {} : { login }) })
   const workspace = new GitWorkspace({
     repoRoot: repo.root, defaultBranch: repo.defaultBranch,
     author: () => resolveCommitAuthor(env, rumba.commitAuthor, () => githubAccount(octokit), () => cloneIdentity(repo.root)),

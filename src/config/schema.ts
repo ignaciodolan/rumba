@@ -61,6 +61,7 @@ export const rumbaFileSchema = z
         state_prefix: z.string().min(1).optional(),
         approved: z.string().min(1).optional(),
         retry: z.string().min(1).optional(),
+        revise: z.string().min(1).optional(),
       })
       .default({}),
   })
@@ -79,5 +80,6 @@ export function mergeLabels(defaults: LabelNames, o: LabelOverrides): LabelNames
     statePrefix: o.state_prefix ?? defaults.statePrefix,
     approved: o.approved ?? defaults.approved,
     retry: o.retry ?? defaults.retry,
+    revise: o.revise ?? defaults.revise,
   }
 }

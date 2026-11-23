@@ -1,7 +1,7 @@
 import type { LabelNames, StateName } from './types.js'
 
 export function defaultLabels(rumba: string): LabelNames {
-  return { optIn: `rumba:${rumba}`, statePrefix: 'rumba-state:', approved: 'rumba-approved', retry: 'rumba-retry' }
+  return { optIn: `rumba:${rumba}`, statePrefix: 'rumba-state:', approved: 'rumba-approved', retry: 'rumba-retry', revise: 'rumba-revise' }
 }
 
 export function stateLabel(l: LabelNames, s: StateName): string {

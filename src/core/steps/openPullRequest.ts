@@ -17,6 +17,7 @@ export async function openPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ti
   // into the project's tests is judged by its new place, like any other change.
   const outside = outsideScope(changed, rumba.paths, (state.relocation?.original ?? state.checks).flatMap((c) => c.files))
   await deps.codeHost.pushBranch(workdir, branch, { force: true })
+  const pushedAt = deps.clock()
 
   const url = await deps.codeHost.openPullRequest({
     title: `${inertTitle(ticket.title)} (${ticket.ref})`,
@@ -27,7 +28,7 @@ export async function openPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ti
   })
 
   // Record the pull request before commenting, so a failed comment cannot lead to a second one.
-  const next = { ...transition(state, 'pr_open', deps.clock()), pullRequestUrl: url }
+  const next = { ...transition(state, 'pr_open', deps.clock()), pullRequestUrl: url, pushedAt: pushedAt.toISOString() }
   await deps.tracker.writeState(ticket, next)
   await deps.tracker.comment(ticket, `Rumba opened a pull request: ${url}`)
   return next

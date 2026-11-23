@@ -125,6 +125,15 @@ describe('rumba', () => {
     expect(h.out).toEqual(['shop #13 queued Typo'])
   })
 
+  it('shows changes_requested for a closed ticket waiting for changes', async () => {
+    const deps = makeDeps()
+    deps.tracker.tickets.push({ id: '13', ref: '#13', title: 'Typo', body: '', url: 'u', labels: ['rumba:shop'] })
+    deps.tracker.closed.add('13')
+    deps.tracker.states.set('13', { ...newState('shop', deps.clock()), state: 'changes_requested', lastDurable: 'changes_requested' })
+    const h = harness({ buildTracker: () => deps.tracker })
+    await h.parse('status')
+    expect(h.out).toEqual(['shop #13 changes_requested Typo'])
+  })
   it('shows merged for a closed ticket whose pull request was merged', async () => {
     const deps = makeDeps()
     deps.tracker.tickets.push({ id: '13', ref: '#13', title: 'Typo', body: '', url: 'u', labels: ['rumba:shop'] })

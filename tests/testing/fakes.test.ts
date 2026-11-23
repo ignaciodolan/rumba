@@ -64,13 +64,28 @@ describe('FakeCodeHost.getPullRequest', () => {
   it('reports a pull request it opened as open', async () => {
     const host = new FakeCodeHost()
     const url = await host.openPullRequest({ title: 'T', body: 'B', head: 'h', base: 'main', draft: true })
-    expect(await host.getPullRequest(url)).toEqual({ state: 'open', headSha: 'head0' })
+    expect(await host.getPullRequest(url)).toEqual({ state: 'open', headSha: 'head0', labels: [] })
   })
 
   it('returns what the test set for a URL', async () => {
     const host = new FakeCodeHost()
     host.pullRequests.set('https://example.test/pr/9', { state: 'merged', headSha: 'x', mergedAt: '2026-01-01T00:00:00Z' })
     expect(await host.getPullRequest('https://example.test/pr/9')).toMatchObject({ state: 'merged' })
+  })
+
+  it('returns the labels of a pull request, and none by default', async () => {
+    const host = new FakeCodeHost()
+    host.pullRequests.set('https://example.test/pr/9', { state: 'open', headSha: 'x', labels: ['revise'] })
+    expect((await host.getPullRequest('https://example.test/pr/9')).labels).toEqual(['revise'])
+  })
+
+  it('lists feedback after since and records removed labels', async () => {
+    const host = new FakeCodeHost()
+    const item = (at: string) => ({ kind: 'comment' as const, author: 'alice', url: 'u', at, text: 't', canWrite: true, self: false })
+    host.feedback.set('https://example.test/pr/9', [item('2026-01-01T00:00:00Z'), item('2026-01-02T00:00:00Z')])
+    expect(await host.listFeedback('https://example.test/pr/9', '2026-01-01T00:00:00Z')).toEqual([item('2026-01-02T00:00:00Z')])
+    await host.removeLabel('https://example.test/pr/9', 'revise')
+    expect(host.labelsRemoved).toEqual([{ url: 'https://example.test/pr/9', label: 'revise' }])
   })
 
   it('throws for an unknown URL and when told to', async () => {

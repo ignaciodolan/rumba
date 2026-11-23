@@ -71,7 +71,7 @@ export class GitHubTracker implements Tracker {
     const existing = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, { ...this.where(), per_page: PER_PAGE })
     // GitHub label names are case-insensitive.
     const have = new Set(existing.map((l) => l.name.toLowerCase()))
-    const wanted = [this.labels.optIn, ...this.stateNames.map((s) => stateLabel(this.labels, s)), this.labels.approved, this.labels.retry]
+    const wanted = [this.labels.optIn, ...this.stateNames.map((s) => stateLabel(this.labels, s)), this.labels.approved, this.labels.retry, this.labels.revise]
     for (const name of wanted) {
       if (have.has(name.toLowerCase())) continue
       try {
