@@ -4,7 +4,7 @@ Date: 2026-11-20. Status: revision 2, waiting for approval. Revision 1 was appro
 
 Amended after stage 1 was built: sections 3 and 12 now say where the commands of the Docker environment run. The earlier text had them run in a checkout of the code under test, which let a file written by the agent be read or executed on the host.
 
-Amended after stage 2 was built: sections 7 and 9 now say what was built. Each difference from the earlier text is marked **(changed: …)**.
+Amended after stage 2 was built: sections 6, 7 and 9 now say what was built. Each difference from the earlier text is marked **(changed: …)**.
 
 Lines marked **(call)** are choices the assistant that wrote this design made, which the owner has not explicitly agreed to. Everything else was decided in conversation.
 
@@ -132,6 +132,7 @@ How names avoid collisions **(call)**:
 | Opt-in label, added by a person | `rumba:<name>` | `rumba:shop` |
 | State label, managed by Rumba | `rumba-state:<state>` | `rumba-state:building` |
 | Signals, added by a person | `rumba-approved`, `rumba-retry` | |
+| Review signal, added by a person on the pull request | `rumba-revise` | **(changed: added; see section 9)** |
 | Fix branch | `rumba/<name>/<ticket-id>` | `rumba/shop/123` |
 | Lesson branch | `rumba/<name>/lesson-<ticket-id>` | `rumba/shop/lesson-123` |
 
@@ -229,7 +230,7 @@ Revising:
 - A changed check must cite the feedback item that asked for it, and that item must name the check: its text holds the name of one of the check's files, or three words in a row of its criterion, or it is a line comment on one of the check's files. A change that cites no such item is rejected. **(changed: the citation rule is new)**
 - Rumba pushes to the same pull request, updates the evidence in its body, and replies on the pull request saying what changed.
 - An answer of "no change needed", with a reason, is posted as the reply and counts as a round. A round whose every attempt fails pushes nothing, puts the branch back where the round started, and moves the ticket to `needs_human`. **(changed: neither case was described)**
-- At most two review rounds per pull request (`max_review_rounds`, default 2). After that the ticket moves to `needs_human`. **(call)**
+- At most two review rounds per pull request (`max_review_rounds`, default 2). After that the ticket moves to `needs_human`. **(call)** It stays in `pr_open` after its last allowed round, and moves only when more feedback asks for another. **(changed: clarified)**
 
 Lessons:
 

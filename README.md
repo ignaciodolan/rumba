@@ -44,7 +44,7 @@ A rumba name uses lowercase letters, digits and hyphens. It is the folder name u
 
 ## How a ticket moves
 
-Labels are the interface. Rumba creates all of them, the opt-in label `rumba:<name>` included, the first time it runs.
+Labels are the interface. Rumba creates all of them, the opt-in label `rumba:<name>` included, when it runs. The one exception: with a Linear tracker, `rumba-revise` goes on the GitHub pull request and Rumba does not create it, so create it on GitHub by hand (see [What counts as feedback](#what-counts-as-feedback)).
 
 | Label | Added by | Meaning |
 |---|---|---|
@@ -65,7 +65,7 @@ On each run Rumba takes each opted-in ticket as far as it can:
 5. `env_ready` → `checks_failing`: the environment is up at the base commit, the agent writes one check per criterion, and every check fails there, as it should.
 6. `building` → `verified`: the agent changes the code on the branch `rumba/<name>/<ticket-id>` until every check passes, and the project's own tests too. Before each attempt the agent is told which checks pass, which fail, and whether only the project's tests failed. It may answer that no change is needed, with a reason; Rumba then verifies the code once more as it stands, and if it still does not pass, the ticket goes to `needs_human` with that reason.
 7. `pr_open`: the pull request is open, with a summary of the change written by the agent, `Closes #<n>` for a GitHub issue (a link for Linear), and for each criterion the check's command, its file, and its result before and after the change. Criteria that no command can check are listed as not verified, and the pull request is then opened as a draft. Just before it opens the pull request, Rumba moves its checks into the project's own tests, as described below.
-8. `changes_requested`: a reviewer asked for changes on the pull request. Rumba carries out a review round in the same run, and the ticket goes back to `pr_open`. The pull request can also end in `merged` or `rejected`. See [Review feedback and lessons](#review-feedback-and-lessons).
+8. `changes_requested`: a reviewer asked for changes on the pull request. Rumba carries out a review round in the same run, and the ticket goes back to `pr_open`, or to `needs_human`. The pull request can also end in `merged` or `rejected`. See [Review feedback and lessons](#review-feedback-and-lessons).
 
 ### Moving the checks into the project's tests
 
@@ -141,13 +141,15 @@ Rumba keeps the newest 20 pieces of feedback, each cut to 2,000 characters, with
 
 For example, in `acme/shop`, `alice` has write access and `mallory` does not. If `mallory` requests changes on ticket `#42`'s pull request, nothing happens, and her text appears nowhere. If `alice` leaves a line comment, a round starts, and a comment `mallory` wrote in the meantime is still left out.
 
-Rumba's own comments are never feedback. Every body Rumba writes on GitHub starts with a hidden line, `<!-- rumba:own -->`. A pull request comment is Rumba's own only when that line comes first and the account Rumba runs as wrote it. So Rumba can run with a maintainer's own token: that maintainer's reviews, line comments, comments and `rumba-revise` label count like any writer's.
+Rumba's own comments are never feedback. Every body Rumba writes on GitHub starts with a hidden line, `<!-- rumba:own -->`. A pull request comment is Rumba's own only when that line comes first (or, for replies from before the marker, one of their fixed openings) and the account Rumba runs as wrote it. So Rumba can run with a maintainer's own token: that maintainer's reviews, line comments, comments and `rumba-revise` label count like any writer's.
 
 ### The review round
 
 When a round starts, the ticket moves to `changes_requested`. Rumba comments on the ticket, without quoting the feedback:
 
 > Review feedback arrived on the pull request (2 comments). Rumba will revise the change: https://github.com/acme/shop/pull/7
+
+When only the label started the round, it says: "Rumba was asked to revise the change on the pull request and will do so: <url>".
 
 Rumba carries out the round in the same run. The round takes one place in `max_tickets_per_run`, like any ticket worked, and has the ticket's full `minutes_per_ticket`. When the run limit is already reached, the ticket waits in `changes_requested` for the next run. `rumba run` prints both moves:
 
@@ -182,7 +184,7 @@ Rumba asks the agent for a lesson:
 - After a review round that pushed a change, or answered that no change was needed. Not after a failed round.
 - After a pull request was closed without merging, from the writers' feedback since Rumba opened it.
 
-There is none after a merge. Without feedback, for example after a round started by the label alone, no agent is asked.
+There is none after a merge. Without feedback, for example after a round started by the label when no writer had written anything, no agent is asked.
 
 The agent says whether the feedback holds a general rule. If it does, it writes one to three short lines: what was wrong, and what to do next time. Rumba, never the agent, writes the lesson. Each line is made plain text, at most 200 characters, with known secrets redacted. A lesson that copies 40 characters in a row of any feedback is refused. Rumba appends it to `.rumba/<name>/lessons.md`, with a link to the pull request:
 
@@ -194,7 +196,7 @@ The agent says whether the feedback holds a general rule. If it does, it writes 
 - On an open pull request, the lesson is one more commit on the same branch, `docs: lesson from review of #42`, that changes only `lessons.md`. Rumba says so in a reply. Merging the pull request adds the lesson; drop the commit to leave it out.
 - After a closed pull request, Rumba commits the lesson on a new branch, `rumba/<name>/lesson-<ticket-id>`, made from the default branch. It opens a pull request of its own, not a draft, that changes only `lessons.md`: "Lesson from review of #42 for the shop rumba".
 
-A lesson takes effect only once a person merges it. Agents get `lessons.md` as it is in the clone Rumba runs from, which in the workflow is the default branch. A lesson waiting on a branch never reaches an agent, not even the one revising that branch.
+A lesson takes effect only once a person merges it. Agents get `lessons.md` as it is in the clone Rumba runs from, which in the workflow is the default branch. Rumba never puts a lesson waiting on a branch in an agent's context, nor in the change it shows the agent. In a later round on the same pull request, though, the lesson commit is on the fix branch, so `lessons.md` with that lesson is in the revising agent's working copy, where it can read it.
 
 The state comment keeps the latest 10 lesson records: `added`, with the commit and any lesson pull request; `none`, with the reason; `refused`, with why; or `failed`, with the error. A lesson that fails never undoes the round or the outcome. When less than a minute of the ticket's time is left after a round, no lesson is asked for, and the record says so.
 
@@ -354,7 +356,7 @@ Ticket text, and anything the agent reads, is untrusted input, and the coding ag
 - Review feedback is untrusted too. Only feedback from people with write access counts, and nothing from anyone else is stored or passed on. In the agent's prompt, feedback is fenced and marked as input from reviewers. What Rumba posts from the agent, such as its replies, is made inert: HTML is escaped, and mentions, issue references and images are broken.
 - Only Rumba writes a lesson, after cleaning it. The agent still may not change anything under `.rumba/`.
 - The agent runs in a throwaway container with only the working copy of the fix branch mounted. That container gets one model credential, the API key or the Claude Code token, and nothing else. Tracker, GitHub and Vercel tokens stay in the Rumba process, which does the pushing and commenting itself.
-- The container has network access, because the agent must reach its model and install packages. Restricting it is not part of stage 1.
+- The container has network access, because the agent must reach its model and install packages. Restricting it is not built.
 - A check container gets only what the check needs, such as the preview URL and the Vercel bypass secret. Rumba replaces known secret values with `[redacted]` in check output and error messages before posting or printing them. It keeps at most the last 4,000 characters of each check's output, less when a ticket has several checks, and drops the output altogether if the ticket comment or pull request body would otherwise be too long for the tracker.
 - The agent may not change anything under `.rumba/` or `.github/`, any file named `.env`, or any path in `environment.protected`. A change there fails verification.
 - What runs on the host, and what it reads. Rumba starts three kinds of process on the host: the docker environment's `up`, `exec` and `down`, `docker`, and `git`.
