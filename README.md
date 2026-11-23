@@ -149,7 +149,7 @@ When a round starts, the ticket moves to `changes_requested`. Rumba comments on 
 
 > Review feedback arrived on the pull request (2 comments). Rumba will revise the change: https://github.com/acme/shop/pull/7
 
-When only the label started the round, it says: "Rumba was asked to revise the change on the pull request and will do so: <url>".
+When the round has no feedback at all (only the label asked for it), it says: "Rumba was asked to revise the change on the pull request and will do so: <url>".
 
 Rumba carries out the round in the same run. The round takes one place in `max_tickets_per_run`, like any ticket worked, and has the ticket's full `minutes_per_ticket`. When the run limit is already reached, the ticket waits in `changes_requested` for the next run. `rumba run` prints both moves:
 
