@@ -6,7 +6,7 @@ import { InfrastructureError } from '../ports/environment.js'
 import { advanceTicket } from './engine.js'
 import { trackParkedPullRequest, trackPullRequest } from './steps/trackPullRequest.js'
 import { cleanOutput } from './redact.js'
-import { ENDS, isDurable, newState, transition } from './states.js'
+import { carriesOn, ENDS, isDurable, newState, transition } from './states.js'
 import type { StateName, Ticket, TicketState } from './types.js'
 
 export interface RunSummary {
@@ -130,6 +130,10 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
     return left(await recordError(deps, ticket, state, e, count))
   }
 
+  // A durable state a step wrote (pr_open after a review round) holds no lease, so another run may
+  // have moved the ticket on since; its state stands. When the read fails, the run's own is written.
+  const current = await deps.tracker.readState(ticket).catch(() => null)
+  if (current !== null && !carriesOn(current, result)) return left('moved by another run')
   await deps.tracker.writeState(ticket, withoutLease(result))
   if (result.state === 'awaiting_criteria') return left('awaiting criteria')
   count.worked += 1

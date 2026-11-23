@@ -6,10 +6,13 @@ import { redact } from './redact.js'
 import { cleanupQuietly } from './steps/teardown.js'
 import type { Feedback, LessonRecord, Ticket, TicketState } from './types.js'
 
-/** How many lesson records a ticket keeps, the latest. */
-export const LESSONS_KEPT = 10
-/** The most characters of a lesson record's reason. */
-export const LESSON_REASON_MAX = 500
+import { LESSON_REASON_MAX, LESSONS_KEPT } from './lessonLimits.js'
+
+export { LESSON_REASON_MAX, LESSONS_KEPT }
+
+/** Below this many milliseconds left on the ticket, no lesson is asked for: the agent could not finish. */
+const MIN_LESSON_MS = 60_000
+const NO_TIME = 'no time left for a lesson'
 
 const MAX_LINES = 3
 const MAX_LINE = 200
@@ -156,6 +159,8 @@ export interface LearnOptions {
 export async function learn(deps: Deps, rumba: RumbaConfig, ticket: Ticket, _state: TicketState, opts: LearnOptions): Promise<LessonRecord> {
   const at = deps.clock().toISOString()
   if (opts.feedback.length === 0) return { at, status: 'none', reason: NO_FEEDBACK }
+  const left = timeLeft(deps)
+  if (left !== undefined && left < MIN_LESSON_MS) return { at, status: 'failed', reason: NO_TIME }
   try {
     const answer = await distill(deps, rumba, ticket, opts.feedback)
     if (answer.none !== undefined) return { at, status: 'none', reason: lessonReason(answer.none, deps.secrets) }

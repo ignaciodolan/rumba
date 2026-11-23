@@ -5,6 +5,7 @@ import { runRumba } from '../../../src/core/runner.js'
 import { renderPullRequestBody } from '../../../src/core/evidence.js'
 import { revise } from '../../../src/core/steps/revise.js'
 import { trackPullRequest } from '../../../src/core/steps/trackPullRequest.js'
+import { transition } from '../../../src/core/states.js'
 import type { Feedback } from '../../../src/core/types.js'
 import { AgentError } from '../../../src/ports/agent.js'
 import { InfrastructureError } from '../../../src/ports/environment.js'
@@ -29,10 +30,10 @@ function setup() {
 
 describe('revise', () => {
   it('revises on the same branch and the same pull request, without opening another', async () => {
-    const d = setup(); const diffs: { since: string; max: number }[] = []
+    const d = setup(); const diffs: { since: string; max: number; exclude?: string[] }[] = []
     d.workspace.diffText = 'diff --git a/src/cart.ts b/src/cart.ts'
     const diff = d.workspace.diff.bind(d.workspace)
-    d.workspace.diff = async (w, since, max) => { diffs.push({ since, max }); return diff(w, since, max) }
+    d.workspace.diff = async (w, since, max, exclude) => { diffs.push({ since, max, exclude }); return diff(w, since, max, exclude) }
     const start = changesRequested(d)
     const s = await revise(d, makeRumba(), makeTicket(), start)
 
@@ -49,7 +50,8 @@ describe('revise', () => {
       kind: 'revise', feedback: [aliceReview], diff: 'diff --git a/src/cart.ts b/src/cart.ts', lockedFiles: [CHECK],
       criteria: start.criteria, checks: start.checks, failures: [], attempt: 1,
     })
-    expect(diffs).toEqual([{ since: 'base000', max: 30000 }])
+    // An unmerged lesson on the branch never reaches the agent: lessons come only from the default branch.
+    expect(diffs).toEqual([{ since: 'base000', max: 30000, exclude: ['.rumba/shop/lessons.md'] }])
     expect(d.tracker.states.get('123')).toEqual(s)
   })
 
@@ -608,6 +610,7 @@ describe('a lesson after a review round', () => {
   const RULE = 'Totals are named subtotal in src/cart.ts; keep that name in new code.'
   const BRANCH = 'rumba/shop/123'
   const AT = '2026-01-01T00:00:00.000Z'
+  const LESSON_REPLY = 'Rumba added a lesson from this review to `.rumba/shop/lessons.md` (commit file1). Merging this pull request adds it; drop the commit to leave it out.'
 
   /** A round whose distill-lesson agent answers `answer`. */
   function lessonSetup(answer: unknown = { kind: 'distill-lesson', lesson: [RULE] }) {
@@ -641,11 +644,95 @@ describe('a lesson after a review round', () => {
     d.agent.script.revise = { ...revised, noChangeNeeded: 'total is the name the API returns.' }
     const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
 
-    expect(s.state).toBe('pr_open')
-    expect(d.workspace.fileCommits.map((c) => c.path)).toEqual([FILE])
+    expect(s).toMatchObject({ state: 'pr_open', reviewRounds: 1, pushedAt: '2025-12-31T00:00:00.000Z' })
+    expect(d.agent.calls.map((c) => c.kind)).toEqual(['revise', 'distill-lesson'])
+    // On top of the pull request's head, which the round left as it was.
+    expect(d.workspace.fileCommits).toEqual([{
+      workdir: expect.stringContaining(BRANCH), path: FILE, content: `- ${RULE}\n  From ${PR}\n`, message: 'docs: lesson from review of #123',
+    }])
     expect(d.codeHost.pushed).toEqual([{ branch: BRANCH, force: false }])
+    expect(d.workspace.branchTip).toBe('file1')
     expect(s.lessons).toEqual([{ at: AT, status: 'added', commit: 'file1' }])
     expect(d.tracker.states.get('123')).toEqual(s)
+    expect(d.codeHost.pullRequestComments.map((c) => c.body)).toEqual([expect.stringContaining('Rumba made no change in this round.'), LESSON_REPLY])
+  })
+
+  it('records a lesson whose push is refused as failed, keeps the round and takes the commit off the local branch', async () => {
+    const d = lessonSetup()
+    const push = d.codeHost.pushBranch.bind(d.codeHost)
+    d.codeHost.pushBranch = async (w, branch, opts) => {
+      await push(w, branch, opts)
+      if (d.codeHost.pushed.length === 2) throw new Error('rejected: non-fast-forward')
+    }
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(s).toMatchObject({ state: 'pr_open', reviewRounds: 1, pushedAt: AT })
+    expect(d.codeHost.pushed).toEqual([{ branch: BRANCH, force: false }, { branch: BRANCH, force: false }])
+    expect(s.lessons).toEqual([{ at: AT, status: 'failed', reason: expect.stringContaining('rejected: non-fast-forward') }])
+    expect(d.workspace.resets.at(-1)).toBe('sha3'); expect(d.workspace.branchTip).toBe('sha3')
+    expect(d.tracker.states.get('123')).toEqual(s)
+    expect(d.codeHost.pullRequestComments).toHaveLength(1)
+  })
+
+  it('tells the pull request about an added lesson, and stays quiet otherwise', async () => {
+    const d = lessonSetup()
+    await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(d.codeHost.pullRequestComments.map((c) => c.body)).toEqual([`- Review by alice (${PR}#pullrequestreview-1): Renamed it.`, LESSON_REPLY])
+    const e = lessonSetup({ kind: 'distill-lesson', none: 'Nothing general.' })
+    await revise(e, makeRumba(), makeTicket(), changesRequested(e))
+    expect(e.codeHost.pullRequestComments).toHaveLength(1)
+  })
+
+  it('keeps the round when the lesson reply fails', async () => {
+    const d = lessonSetup()
+    const comment = d.codeHost.commentOnPullRequest.bind(d.codeHost)
+    d.codeHost.commentOnPullRequest = async (url, body) => { if (body.startsWith('Rumba added a lesson')) throw new Error('GitHub is down'); return comment(url, body) }
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s).toMatchObject({ state: 'pr_open', lessons: [{ status: 'added' }] })
+  })
+
+  it('keeps the round, and counts no error, when the lesson cannot be recorded', async () => {
+    const d = lessonSetup()
+    d.tracker.tickets.push(makeTicket())
+    d.tracker.states.set('123', changesRequested(d))
+    const write = d.tracker.writeState.bind(d.tracker)
+    d.tracker.writeState = async (t, st) => { if (st.lessons !== undefined) throw new Error('tracker down'); return write(t, st) }
+    const r = await runRumba(d, makeRumba())
+
+    expect(r).toEqual({ rumba: 'shop', advanced: [{ ticket: '123', from: 'changes_requested', to: 'pr_open' }], left: [] })
+    expect(d.tracker.states.get('123')).toMatchObject({ state: 'pr_open', reviewRounds: 1, errorCount: 0 })
+    expect(d.tracker.states.get('123')?.lessons).toBeUndefined()
+  })
+
+  describe('when another run moves the ticket while the lesson is drawn', () => {
+    /** The pull request was closed meanwhile, and another run recorded it. */
+    function movedDuringLesson(d: ReturnType<typeof lessonSetup>): void {
+      const run = d.agent.run.bind(d.agent)
+      d.agent.run = async (task, w) => {
+        if (task.kind === 'distill-lesson') {
+          const now = d.tracker.states.get('123')!
+          d.tracker.states.set('123', transition({ ...now, lease: undefined }, 'rejected', d.clock(), 'closed'))
+        }
+        return run(task, w)
+      }
+    }
+
+    it('leaves the newer state as it is', async () => {
+      const d = lessonSetup(); movedDuringLesson(d)
+      const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+      expect(s.state).toBe('pr_open')
+      expect(d.tracker.states.get('123')?.state).toBe('rejected')
+      expect(d.tracker.states.get('123')?.lessons).toBeUndefined()
+    })
+
+    it('is not overwritten by the run when the round ends', async () => {
+      const d = lessonSetup(); movedDuringLesson(d)
+      d.tracker.tickets.push(makeTicket())
+      d.tracker.states.set('123', changesRequested(d))
+      const r = await runRumba(d, makeRumba())
+      expect(d.tracker.states.get('123')?.state).toBe('rejected')
+      expect(r.left).toEqual([{ ticket: '123', why: 'moved by another run' }])
+    })
   })
 
   it('commits and pushes nothing when the agent finds no general rule, and says why on the state', async () => {

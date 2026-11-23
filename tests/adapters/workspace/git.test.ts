@@ -84,6 +84,17 @@ describe('GitWorkspace', () => {
     expect(await ws.diff(workdir, await ws.head(workdir), 100)).toBe('')
   })
 
+  it('leaves out of the diff the files it is told to, by their exact path', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    await write(workdir, 'a.txt', 'one\n'); await write(workdir, '.rumba/shop/lessons.md', '- unmerged\n')
+    await write(workdir, '.rumba/shop/context.md', 'kept\n'); await write(workdir, '[ab].txt', 'brackets\n')
+    await ws.commit(workdir, 'c')
+    const diff = await ws.diff(workdir, baseSha, 100000, ['.rumba/shop/lessons.md', '[ab].txt'])
+    expect(diff).toContain('+++ b/a.txt'); expect(diff).toContain('+++ b/.rumba/shop/context.md')
+    expect(diff).not.toContain('lessons.md'); expect(diff).not.toContain('unmerged'); expect(diff).not.toContain('brackets')
+    expect(await ws.diff(workdir, baseSha, 100000)).toContain('+- unmerged')
+  })
+
   it('never runs an external diff program or a text conversion for the diff', async () => {
     const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     const marker = path.join(root, 'ran')

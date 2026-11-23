@@ -273,6 +273,21 @@ describe('learn', () => {
     expect(d.workspace.log).toEqual([])
   })
 
+  it('records a failure without asking the agent when the ticket has under a minute left', async () => {
+    const { d, state, rumba, ticket } = setup()
+    d.deadline = new Date(d.clock().getTime() + 59_000)
+    expect(await learn(d, rumba, ticket, state, opts)).toEqual({ at: AT, status: 'failed', reason: 'no time left for a lesson' })
+    expect(d.agent.calls).toEqual([]); expect(d.workspace.log).toEqual([])
+  })
+
+  it('asks the agent with a minute left, or with no budget running', async () => {
+    const { d, state, rumba, ticket } = setup()
+    d.deadline = new Date(d.clock().getTime() + 60_000)
+    expect((await learn(d, rumba, ticket, state, opts)).status).toBe('added')
+    const e = setup()
+    expect((await learn(e.d, e.rumba, e.ticket, e.state, opts)).status).toBe('added')
+  })
+
   it('refuses a lesson that quotes the feedback, and writes nothing', async () => {
     const { d, state, rumba, ticket } = setup({ kind: 'distill-lesson', lesson: [QUOTED] })
     expect(await learn(d, rumba, ticket, state, opts)).toEqual({ at: AT, status: 'refused', reason: 'the lesson quoted the feedback' })

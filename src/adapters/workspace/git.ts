@@ -325,10 +325,12 @@ export class GitWorkspace implements Workspace {
     return out.split('\0').filter((p) => p !== '')
   }
 
-  async diff(workdir: string, sinceSha: string, maxChars: number): Promise<string> {
+  async diff(workdir: string, sinceSha: string, maxChars: number, exclude: string[] = []): Promise<string> {
     const wt = await this.worktree(workdir)
+    // Each excluded path is matched literally from the top, so a name with glob characters leaves out only itself.
+    const paths = exclude.length === 0 ? [] : ['--', ':(top)', ...exclude.map((f) => `:(top,literal,exclude)${f}`)]
     // --no-ext-diff and --no-textconv: a diff must never run a program the repository names.
-    const text = (await this.inWorktree(wt, workdir, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', sinceSha, 'HEAD'])).stdout
+    const text = (await this.inWorktree(wt, workdir, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', sinceSha, 'HEAD', ...paths])).stdout
     return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n[diff cut at ${maxChars} characters]`
   }
 

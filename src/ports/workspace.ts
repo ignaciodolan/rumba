@@ -22,9 +22,10 @@ export interface Workspace {
   changedFiles(workdir: string, sinceSha: string): Promise<string[]>
   /**
    * The text of `git diff <sinceSha> HEAD`, with no external diff program, text conversion or
-   * filter run. Cut at `maxChars` characters, with a closing note that it was cut.
+   * filter run. Cut at `maxChars` characters, with a closing note that it was cut. The files at
+   * `exclude`, exact paths from the repository root, are left out.
    */
-  diff(workdir: string, sinceSha: string, maxChars: number): Promise<string>
+  diff(workdir: string, sinceSha: string, maxChars: number, exclude?: string[]): Promise<string>
   /**
    * Puts the workdir's branch at `sha`, the head of `branch` on the remote, fetched first, so
    * that commits someone else pushed are kept and a local commit never pushed is dropped.

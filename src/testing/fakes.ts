@@ -342,7 +342,7 @@ export class FakeWorkspace implements Workspace {
   /** What diff returns, whatever the arguments. */
   diffText = ''
 
-  async diff(_workdir: string, _sinceSha: string, _maxChars: number): Promise<string> {
+  async diff(_workdir: string, _sinceSha: string, _maxChars: number, _exclude?: string[]): Promise<string> {
     return this.diffText
   }
 

@@ -3,15 +3,18 @@ import { inertTitle } from './build.js'
 import type { Deps } from '../../ports/deps.js'
 import { hasUnverified, renderPullRequestBody } from '../evidence.js'
 import { outsideScope } from '../guards.js'
+import { lessonsPath } from '../lessons.js'
 import { transition } from '../states.js'
 import type { Ticket, TicketState } from '../types.js'
 
 /** The files the branch in `workdir` changed outside the rumba's paths, for the pull request body. */
 export async function outsideScopeOf(deps: Deps, rumba: RumbaConfig, state: TicketState, workdir: string): Promise<string[]> {
   const changed = await deps.workspace.changedFiles(workdir, state.baseSha!)
-  // Only the files Rumba wrote its checks in are left out of the scope warning: a check moved
-  // into the project's tests is judged by its new place, like any other change.
-  return outsideScope(changed, rumba.paths, (state.relocation?.original ?? state.checks).flatMap((c) => c.files))
+  // Only the files Rumba wrote its checks in, and the lessons file a review round's lesson adds to,
+  // are left out of the scope warning: a check moved into the project's tests is judged by its new
+  // place, like any other change.
+  const rumbasOwn = [...(state.relocation?.original ?? state.checks).flatMap((c) => c.files), lessonsPath(rumba.name)]
+  return outsideScope(changed, rumba.paths, rumbasOwn)
 }
 
 export async function openPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState): Promise<TicketState> {

@@ -163,6 +163,24 @@ describe('encodeStateComment size', () => {
     expect(body.length).toBeLessThanOrEqual(60_000)
     expect(decodeStateComment(body)!.lessons).toEqual(lessons)
   })
+  it('cuts lesson reasons, keeping their start, before giving up', () => {
+    // Each backtick is stored as six characters, so ten such reasons take half the comment.
+    const lessons = Array.from({ length: 10 }, (_, i) => ({ at: '2026-01-02T00:00:00.000Z', status: 'none' as const, reason: `R${i}${'`'.repeat(498)}`, commit: `c${i}` }))
+    const criteria = Array.from({ length: 60 }, (_, i) => ({ id: `c${i}`, text: 'x'.repeat(500), checkable: true }))
+    const s = { ...newState('shop', t0), criteria, lessons }
+    expect(JSON.stringify(s).length).toBeLessThan(60_000)
+    const copy = structuredClone(s)
+    const body = encodeStateComment(s)
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(s).toEqual(copy)
+    const back = decodeStateComment(body)!
+    expect(back.criteria).toEqual(criteria)
+    back.lessons!.forEach((l, i) => {
+      expect(l.reason!.startsWith(`R${i}\``)).toBe(true)
+      expect(l.reason!.length).toBeLessThan(500)
+      expect(l).toMatchObject({ status: 'none', commit: `c${i}` })
+    })
+  })
   it('throws, with the size, when the state does not fit even without output', () => {
     const criteria = Array.from({ length: 200 }, (_, i) => ({ id: `c${i}`, text: 'x'.repeat(500), checkable: true }))
     expect(() => encodeStateComment({ ...newState('shop', t0), criteria })).toThrow(/too large to store: \d+ characters/)
