@@ -94,7 +94,7 @@ When you find that no change is needed, change no file and add "noChangeNeeded":
 }
 "item" is the number of the feedback item, as listed above. Give at most one reply per item.
 When no change is needed, change no file and add "noChangeNeeded": "why".
-Only when a reviewer says a check or criterion is wrong, add "checkChanges": [{ "criterionId": "c1", "reason": "why" }] naming each one you changed.`,
+Only when a reviewer says a check or criterion is wrong, add "checkChanges": [{ "criterionId": "c1", "item": 1, "reason": "why" }] naming each one you changed, with the number of the feedback item that asked for it.`,
   'relocate-checks': `{
   "kind": "relocate-checks",
   "moves": [{ "from": "tests/rumba/c1.test.ts", "to": "test/profile.test.ts" }],
@@ -218,14 +218,14 @@ function situation(task: AgentTask): string[] {
 function fixRules(task: AgentTask): string {
   const rules = [
     task.kind === 'revise'
-      ? '- Do not edit the check files, and do not change what the checks test, unless a reviewer says a check or criterion is wrong. Then change only that check, and declare it in "checkChanges" with the reason.'
+      ? '- Do not edit the check files, and do not change what the checks test, unless a reviewer says a check or criterion is wrong. Then change only that check, and declare it in "checkChanges" with the reason and the number of the feedback item that asked for it; that item must name the check\'s file or its criterion.'
       : '- Do not edit the check files, and do not change what the checks test.',
     ...situation(task),
   ]
   const locked = task.lockedFiles ?? []
   if (locked.length > 0) {
     const lockedLine = task.kind === 'revise'
-      ? 'These files are locked. Do not change them, unless a reviewer says that a check or its criterion is wrong: then change only that criterion\'s check files and declare it in "checkChanges" with the reason. Never move or delete them:'
+      ? 'These files are locked. Do not change them, unless a reviewer says that a check or its criterion is wrong: then change only that criterion\'s check files and declare it in "checkChanges" with the reason and the number of the feedback item that asked for it; that item must name the check\'s file or its criterion. Never move or delete them:'
       : 'These files are locked. You must not change, move or delete them:'
     rules.push('', lockedLine, ...locked.map((f) => `- ${f}`))
   }

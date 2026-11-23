@@ -27,7 +27,7 @@ describe('stateComment', () => {
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
   it('round-trips the review round count and a check changed after review', () => {
-    const s = { ...newState('shop', t0), reviewRounds: 1, checks: [{ criterionId: 'c1', command: 'npm test', files: ['a.test.ts'], changedAfterReview: true }] }
+    const s = { ...newState('shop', t0), reviewRounds: 1, checks: [{ criterionId: 'c1', command: 'npm test', files: ['a.test.ts'], changedAfterReview: true, changeAskedIn: 'https://example.test/pr/1#pullrequestreview-1' }] }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
   it.each([{ reviewRounds: -1 }, { reviewRounds: 1.5 }, { reviewRounds: '1' }])('rejects %o', (bad) => {

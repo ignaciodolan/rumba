@@ -51,7 +51,14 @@ function fileCell(check: Check, relocation: Relocation | undefined): string {
     const from = (relocation?.moves ?? []).filter((m) => m.to === f && original?.files.includes(m.from)).map((m) => codeSpan(m.from))
     return from.length > 0 ? `${codeSpan(f)} (relocated from ${from.join(', ')})` : codeSpan(f)
   }).join(', ')
-  return check.changedAfterReview === true ? `${files} (changed after review)` : files
+  if (check.changedAfterReview !== true) return files
+  const asked = check.changeAskedIn !== undefined && /^https?:\/\//i.test(check.changeAskedIn) ? `, as asked in [feedback](${linkTarget(check.changeAskedIn)})` : ''
+  return `${files} (changed after review${asked})`
+}
+
+/** A url as a link target that cannot end the link or break the table: anything unusual is percent-encoded. */
+function linkTarget(url: string): string {
+  return url.replace(/[^A-Za-z0-9\-._~:/?#@!$&*+,;=%]/g, (c) => encodeURIComponent(c).replace(/[!'()*]/g, (x) => `%${x.charCodeAt(0).toString(16).toUpperCase()}`))
 }
 
 function verdict(results: CheckResult[] | undefined, criterionId: string): string {

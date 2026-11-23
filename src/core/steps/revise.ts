@@ -3,6 +3,7 @@ import type { AgentResult } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
 import { InfrastructureError } from '../../ports/environment.js'
 import { timeLeft } from '../budget.js'
+import { namesCheck } from '../citation.js'
 import { inertText, renderPullRequestBody } from '../evidence.js'
 import { MAX_FEEDBACK, selectFeedback } from '../feedback.js'
 import { cleanOutput, redact } from '../redact.js'
@@ -54,21 +55,24 @@ interface Round {
  */
 interface Accepted {
   checks: Check[]
-  /** The reason the agent gave, for each declared criterion among `checks`, in the order of the checks. */
-  reasons: { criterionId: string; reason: string }[]
+  /** The declaration of each of `checks`, in their order: the reason, and the feedback item that asked for the change. */
+  asked: Declaration[]
   /** How the changed checks did on the base commit. */
   before: CheckResult[]
   /** The hashes of their files as changed. */
   hashes: Record<string, string>
 }
 
-const NOTHING_ACCEPTED: Accepted = { checks: [], reasons: [], before: [], hashes: {} }
+const NOTHING_ACCEPTED: Accepted = { checks: [], asked: [], before: [], hashes: {} }
+
+/** A check change the agent declared: why, and the feedback item that asked for it (1-based, as the prompt numbers them). */
+interface Declaration { criterionId: string; reason: string; item?: number }
 
 /**
  * How one attempt ended, before its verification. A commit comes with the checks whose files it
  * changed, and the check changes declared so far.
  */
-type Tried = { result: Revised; tip: string } & ({ sha: string; changed: Check[]; declared: Map<string, string>; workdir: string } | { failures: Failure[] } | { noChange: string })
+type Tried = { result: Revised; tip: string } & ({ sha: string; changed: Check[]; declared: Map<string, Declaration>; workdir: string } | { failures: Failure[] } | { noChange: string })
 
 /** What the attempts of a round came to. */
 type Outcome =
@@ -223,7 +227,8 @@ async function reviseOnce(r: Round, failures: Failure[], attempt: number): Promi
       return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }], result, tip }
     }
     const declared = declaredSoFar(r, result)
-    const checks = await protectedFailure(deps, rumba, workdir, r.start) ?? await changedChecks(deps, workdir, r, declared)
+    const found = await protectedFailure(deps, rumba, workdir, r.start) ?? await changedChecks(deps, workdir, r, declared)
+    const checks = typeof found === 'string' ? found : uncited(r, found, declared) ?? found
     if (typeof checks === 'string') {
       await deps.workspace.reset(workdir, r.start)
       return { failures: [{ criterionId: 'guard', output: checks }], result, tip: r.start }
@@ -238,13 +243,30 @@ async function reviseOnce(r: Round, failures: Failure[], attempt: number): Promi
  * The check changes the agent declared: in its result, and in the earlier attempts of the round
  * whose changes are still on the branch. A criterion without a check is ignored.
  */
-function declaredSoFar(r: Round, result: Revised): Map<string, string> {
-  const declared = new Map(r.accepted.reasons.map((c) => [c.criterionId, c.reason]))
-  const now = new Map<string, string>()
-  for (const { criterionId, reason } of result.checkChanges ?? []) {
-    if (r.current.checks.some((c) => c.criterionId === criterionId) && !now.has(criterionId)) now.set(criterionId, reason)
+function declaredSoFar(r: Round, result: Revised): Map<string, Declaration> {
+  const declared = new Map(r.accepted.asked.map((d) => [d.criterionId, d]))
+  const now = new Map<string, Declaration>()
+  for (const d of result.checkChanges ?? []) {
+    if (r.current.checks.some((c) => c.criterionId === d.criterionId) && !now.has(d.criterionId)) now.set(d.criterionId, d)
   }
   return new Map([...declared, ...now])
+}
+
+/**
+ * Why a changed check's declaration does not hold up, or null: each must cite an item of the
+ * round's feedback, and that item must name the check's file or its criterion (see namesCheck).
+ */
+function uncited(r: Round, changed: Check[], declared: Map<string, Declaration>): string | null {
+  for (const check of changed) {
+    const { item } = declared.get(check.criterionId)!
+    const id = check.criterionId
+    if (item === undefined || !Number.isInteger(item)) return `The check for ${id} changed, but its declaration cites no feedback item that asked for it.`
+    const asked = item >= 1 ? r.feedback[item - 1] : undefined
+    if (asked === undefined) return `The check for ${id} changed citing feedback item ${item}, but there is no such item.`
+    const criterion = r.current.criteria.find((c) => c.id === id)?.text ?? ''
+    if (!namesCheck(asked.text, check.files, criterion)) return `The check for ${id} changed citing feedback item ${item}, which names neither the check's file nor its criterion.`
+  }
+  return null
 }
 
 /**
@@ -253,7 +275,7 @@ function declaredSoFar(r: Round, result: Revised): Map<string, string> {
  * declared criterion, or also to a criterion not declared, is refused, with the reason. A
  * declared change exempts that criterion's check files and nothing else.
  */
-async function changedChecks(deps: Deps, workdir: string, r: Round, declared: Map<string, string>): Promise<Check[] | string> {
+async function changedChecks(deps: Deps, workdir: string, r: Round, declared: Map<string, Declaration>): Promise<Check[] | string> {
   const changed = new Set(await deps.workspace.changedFiles(workdir, r.start))
   const edited = new Set(r.lock.files.filter((f) => changed.has(f)))
   // A file of an undeclared check stays locked, even when a declared check shares it.
@@ -292,11 +314,8 @@ async function acceptChanges(r: Round, tried: Extract<Tried, { sha: string }>): 
     await resetBranch(deps, branch, r.start)
     return { kind: 'guard', failures: [{ criterionId: proof.criterionId, output: proof.reason }] }
   }
-  const reasons = tried.changed.flatMap((c) => {
-    const reason = tried.declared.get(c.criterionId)
-    return reason === undefined ? [] : [{ criterionId: c.criterionId, reason }]
-  })
-  r.accepted = { checks: tried.changed, reasons, before: proof.results, hashes: proof.hashes }
+  // Every changed check is declared: changedChecks refuses any other.
+  r.accepted = { checks: tried.changed, asked: tried.changed.map((c) => tried.declared.get(c.criterionId)!), before: proof.results, hashes: proof.hashes }
   return null
 }
 
@@ -323,12 +342,12 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
 
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
-  const changed = new Set(r.accepted.checks.map((c) => c.criterionId))
+  const askedIn = new Map(r.accepted.asked.map((d) => [d.criterionId, askedUrl(r, d)]))
   const verified = {
     ...transition(rest, 'verified', now), reviewRounds: r.n, after: outcome.results, pushedAt: now.toISOString(), answeredAt: r.startedAt,
     fixSummary: cleanOutput(outcome.result.summary, deps.secrets, MAX_SUMMARY),
     // A changed check is marked, and its result on the base commit is the new one.
-    checks: rest.checks.map((c) => changed.has(c.criterionId) ? { ...c, changedAfterReview: true } : c),
+    checks: rest.checks.map((c) => askedIn.has(c.criterionId) ? { ...c, changedAfterReview: true, changeAskedIn: askedIn.get(c.criterionId)! } : c),
     before: replaced(rest.before ?? [], r.accepted.before),
     checkHashes: lockOf(r).hashes,
   }
@@ -338,7 +357,9 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
   const body = renderPullRequestBody({ ticket, rumba, state: next, outsideScope: outside, secrets: deps.secrets })
   await quietly(() => deps.codeHost.updatePullRequest(url, { body }))
   const lines = r.feedback.length === 0 ? [`Revised as asked with the ${rumba.labels.revise} label.`] : feedbackLines(r, outcome.result)
-  for (const c of r.accepted.reasons) lines.push(`- Check for ${oneLine(c.criterionId, deps.secrets, 100)} changed: ${oneLine(c.reason, deps.secrets, MAX_REPLY)}`)
+  for (const d of r.accepted.asked) {
+    lines.push(`- Check for ${oneLine(d.criterionId, deps.secrets, 100)} changed, as asked in ${askedUrl(r, d)}: ${oneLine(d.reason, deps.secrets, MAX_REPLY)}`)
+  }
   await quietly(() => deps.codeHost.commentOnPullRequest(url, lines.join('\n')))
   return next
 }
@@ -395,6 +416,11 @@ function feedbackLines(r: Round, result: Revised): string[] {
     const author = oneLine(f.author.replace(/^@+/, ''), secrets, 100)
     return `- ${kindOf(f, secrets)} by ${author} (${f.url.replace(/\s/g, '')}): ${reply === undefined ? NO_REPLY : oneLine(reply, secrets, MAX_REPLY)}`
   })
+}
+
+/** The url of the feedback item an accepted check change cites, which `uncited` found in the round's feedback. */
+function askedUrl(r: Round, d: Declaration): string {
+  return r.feedback[d.item! - 1]!.url.replace(/\s/g, '')
 }
 
 /** `results` with each criterion that has a fresh result given that one instead, in place. */

@@ -30,6 +30,17 @@ describe('renderPullRequestBody', () => {
     expect(body).not.toContain('Before (the check as Rumba wrote it, on the base commit):')
     expect(body).toContain('For a check changed after review, Before is the changed check, on the base commit.')
   })
+  it('links a check changed after review to the feedback that asked for it, with a url that cannot break the table or the link', () => {
+    const s = verified(d); s.checks[0] = { ...s.checks[0]!, changedAfterReview: true, changeAskedIn: 'https://example.test/pr/1#pullrequestreview-1' }
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` (changed after review, as asked in [feedback](https://example.test/pr/1#pullrequestreview-1)) | fail | pass |')
+    s.checks[0] = { ...s.checks[0]!, changeAskedIn: 'https://example.test/pr/1#x|y) z\n<b>[w]' }
+    const odd = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(odd).toContain('(changed after review, as asked in [feedback](https://example.test/pr/1#x%7Cy%29%20z%0A%3Cb%3E%5Bw%5D)) | fail | pass |')
+    s.checks[0] = { ...s.checks[0]!, changeAskedIn: 'javascript:alert(1)' }
+    const script = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(script).toContain('`tests/rumba/c1.test.ts` (changed after review) | fail | pass |'); expect(script).not.toContain('javascript')
+  })
   it('never prints a secret from check output', () => {
     const s = verified(d); s.after![0]!.output = 'Bearer sk-live-999'
     expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: ['sk-live-999'] })).not.toContain('sk-live-999')

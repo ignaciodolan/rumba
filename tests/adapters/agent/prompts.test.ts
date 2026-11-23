@@ -171,7 +171,9 @@ describe('buildPrompt', () => {
 
     it('lets the reviser change a locked check file only for a declared criterion, and never move or delete one', () => {
       const p = buildPrompt({ ...base, feedback, lockedFiles: ['tests/rumba/c1.test.ts'] })
-      expect(p).toContain('These files are locked. Do not change them, unless a reviewer says that a check or its criterion is wrong: then change only that criterion\'s check files and declare it in "checkChanges" with the reason. Never move or delete them:\n- tests/rumba/c1.test.ts')
+      expect(p).toContain('These files are locked. Do not change them, unless a reviewer says that a check or its criterion is wrong: then change only that criterion\'s check files and declare it in "checkChanges" with the reason and the number of the feedback item that asked for it; that item must name the check\'s file or its criterion. Never move or delete them:\n- tests/rumba/c1.test.ts')
+      expect(p).toContain('declare it in "checkChanges" with the reason and the number of the feedback item that asked for it; that item must name the check\'s file or its criterion.')
+      expect(p).toContain('"checkChanges": [{ "criterionId": "c1", "item": 1, "reason": "why" }]')
       expect(p).not.toContain('You must not change, move or delete them')
     })
 

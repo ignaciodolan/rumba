@@ -18,7 +18,9 @@ const attempt = z.object({
   tail: z.string(),
 })
 
-const check = z.object({ criterionId: z.string(), command: z.string(), files: z.array(z.string()), changedAfterReview: z.boolean().optional() })
+const check = z.object({
+  criterionId: z.string(), command: z.string(), files: z.array(z.string()), changedAfterReview: z.boolean().optional(), changeAskedIn: z.string().optional(),
+})
 const feedback = z.object({
   kind: z.enum(['review', 'line', 'comment']),
   author: z.string(),

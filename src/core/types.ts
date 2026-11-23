@@ -7,8 +7,11 @@ export type StateName =
 export interface Ticket { id: string; ref: string; title: string; body: string; url: string; labels: string[] }
 /** `reason`: why a criterion is not checkable, when triage said so. */
 export interface Criterion { id: string; text: string; checkable: boolean; reason?: string }
-/** `changedAfterReview`: a review round changed this check's files; the pull request says so. */
-export interface Check { criterionId: string; command: string; files: string[]; changedAfterReview?: boolean }
+/**
+ * `changedAfterReview`: a review round changed this check's files; the pull request says so.
+ * `changeAskedIn`: the url of the feedback item that asked for that change.
+ */
+export interface Check { criterionId: string; command: string; files: string[]; changedAfterReview?: boolean; changeAskedIn?: string }
 /** `infrastructure`: set by the environment when the run died of the machine (out of memory, full disk, a timeout), not of the code. */
 export interface CheckResult { criterionId: string; passed: boolean; exitCode: number; output: string; infrastructure?: string }
 /** How the project's own tests went in one attempt. */

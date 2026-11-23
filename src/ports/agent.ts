@@ -63,8 +63,11 @@ export type AgentResultBody =
     replies: { item: number; reply: string }[]
     /** Set when the agent found no change was needed; the reason. */
     noChangeNeeded?: string
-    /** Checks a reviewer showed to be wrong, each with the reason. */
-    checkChanges?: { criterionId: string; reason: string }[]
+    /**
+     * Checks a reviewer showed to be wrong, each with the reason and `item`, the 1-based position
+     * in the feedback list of the item that asked for the change.
+     */
+    checkChanges?: { criterionId: string; item: number; reason: string }[]
   }
 
 export interface Agent {
