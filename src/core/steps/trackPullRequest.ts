@@ -52,7 +52,7 @@ async function endTicket(deps: Deps, ticket: Ticket, state: TicketState, url: st
  * answered it whether it pushed or not, or else Rumba's push when it opened the pull request.
  * Not a round's push: feedback written while the round ran is still to be answered.
  */
-function dealtWithUntil(state: TicketState): string {
+export function dealtWithUntil(state: TicketState): string {
   if (state.answeredAt !== undefined) return state.answeredAt
   if (state.pushedAt) return state.pushedAt
   const opened = state.history.findLast((h) => h.state === 'pr_open')

@@ -4,6 +4,7 @@ import type { Deps } from '../../ports/deps.js'
 import { InfrastructureError } from '../../ports/environment.js'
 import { timeLeft } from '../budget.js'
 import { inertText, renderPullRequestBody } from '../evidence.js'
+import { MAX_FEEDBACK, selectFeedback } from '../feedback.js'
 import { cleanOutput, redact } from '../redact.js'
 import { transition } from '../states.js'
 import type { AttemptRecord, Check, CheckResult, Feedback, Ticket, TicketState } from '../types.js'
@@ -13,6 +14,7 @@ import {
 } from './build.js'
 import { outsideScopeOf } from './openPullRequest.js'
 import { cleanupQuietly } from './teardown.js'
+import { dealtWithUntil } from './trackPullRequest.js'
 
 type Revised = Extract<AgentResult, { kind: 'revise' }>
 
@@ -93,15 +95,19 @@ export async function revise(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
     return next
   }
 
+  // The round answers everything written before it started, which is when it is taken as answered.
+  const startedAt = deps.clock().toISOString()
+  const feedback = await feedbackUntil(deps, state, url, startedAt)
   // The checks as they stand now (after a relocation, the moved files) are locked for the round.
   const files = [...new Set(state.checks.flatMap((c) => c.files))]
   const { start, hashes } = await atPullRequestHead(deps, branch, url, files)
   const n = done + 1
   const r: Round = {
-    deps, rumba, ticket, n, start, startedAt: deps.clock().toISOString(), lock: { files, hashes, resetTo: start }, accepted: NOTHING_ACCEPTED, feedback: state.feedback ?? [], attempts: [],
-    current: { ...transition(state, 'building', deps.clock(), `review round ${n}`), reviewRounds: n, checkHashes: hashes },
+    deps, rumba, ticket, n, start, startedAt, lock: { files, hashes, resetTo: start }, accepted: NOTHING_ACCEPTED, feedback, attempts: [],
+    current: { ...transition(state, 'building', deps.clock(), `review round ${n}`), checkHashes: hashes },
   }
-  // Counted and written before the agent runs, so a round that dies still counts.
+  // The round counts only when it ends, in the same write as its outcome: one that stops with
+  // an error (a refused push, the machine, a crash) is not counted, and the next run tries again.
   await deps.tracker.writeState(ticket, r.current)
 
   let outcome: Outcome
@@ -115,6 +121,23 @@ export async function revise(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
   if (outcome.kind === 'passed') return succeed(r, outcome)
   if (outcome.kind === 'no-change') return answerWithoutChange(r, outcome)
   return fail(r, outcome.failures)
+}
+
+/**
+ * The feedback the round answers: what was stored when the ticket entered `changes_requested`,
+ * and what was written since the ticket's read-from time and before the round started, which
+ * would otherwise be taken as answered unread. The same selection as when it was stored, no
+ * piece twice (by url), in the order written, at most the newest MAX_FEEDBACK.
+ */
+async function feedbackUntil(deps: Deps, state: TicketState, url: string, startedAt: string): Promise<Feedback[]> {
+  const until = Date.parse(startedAt)
+  // What is written after the round started is left for the next round to read.
+  const items = (await deps.codeHost.listFeedback(url, dealtWithUntil(state))).filter((i) => Date.parse(i.at) <= until)
+  const stored = state.feedback ?? []
+  const known = new Set(stored.map((f) => f.url))
+  const fresh = selectFeedback(items, deps.secrets).feedback.filter((f) => !known.has(f.url))
+  if (fresh.length === 0) return stored
+  return [...stored, ...fresh].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(-MAX_FEEDBACK)
 }
 
 /**
@@ -302,7 +325,7 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
   const { feedback: _answered, ...rest } = r.current
   const changed = new Set(r.accepted.checks.map((c) => c.criterionId))
   const verified = {
-    ...transition(rest, 'verified', now), after: outcome.results, pushedAt: now.toISOString(), answeredAt: r.startedAt,
+    ...transition(rest, 'verified', now), reviewRounds: r.n, after: outcome.results, pushedAt: now.toISOString(), answeredAt: r.startedAt,
     fixSummary: cleanOutput(outcome.result.summary, deps.secrets, MAX_SUMMARY),
     // A changed check is marked, and its result on the base commit is the new one.
     checks: rest.checks.map((c) => changed.has(c.criterionId) ? { ...c, changedAfterReview: true } : c),
@@ -328,7 +351,7 @@ async function answerWithoutChange(r: Round, outcome: Extract<Outcome, { kind: '
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
   // The answer deals with the feedback from before the round, though nothing was pushed.
-  const next = { ...transition(transition(rest, 'verified', now, 'no change needed'), 'pr_open', now, `review round ${r.n}: no change needed`), answeredAt: r.startedAt }
+  const next = { ...transition(transition(rest, 'verified', now, 'no change needed'), 'pr_open', now, `review round ${r.n}: no change needed`), reviewRounds: r.n, answeredAt: r.startedAt }
   await deps.tracker.writeState(ticket, next)
 
   const reason = inertText(redact(outcome.reason, deps.secrets).trim().slice(0, MAX_REASON)).split('\n').map((l) => `> ${l}`).join('\n')
@@ -354,7 +377,7 @@ async function fail(r: Round, failures: Failure[]): Promise<TicketState> {
     ...r.attempts.map((a) => `- Attempt ${a.n}: ${describe(a)}`), '',
     'Last failures:', '', failures.map((f) => `${f.criterionId}:\n${f.output}`).join('\n\n'),
   ].join('\n'))
-  const next = transition(r.current, 'needs_human', deps.clock(), `review round ${r.n} failed: ${what} still fail after ${count} attempts`)
+  const next = { ...transition(r.current, 'needs_human', deps.clock(), `review round ${r.n} failed: ${what} still fail after ${count} attempts`), reviewRounds: r.n }
   await deps.tracker.writeState(ticket, next)
   return next
 }
