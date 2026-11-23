@@ -4,6 +4,7 @@ import { advanceTicket } from '../../../src/core/engine.js'
 import { runRumba } from '../../../src/core/runner.js'
 import { renderPullRequestBody } from '../../../src/core/evidence.js'
 import { revise } from '../../../src/core/steps/revise.js'
+import { trackPullRequest } from '../../../src/core/steps/trackPullRequest.js'
 import type { Feedback } from '../../../src/core/types.js'
 import { AgentError } from '../../../src/ports/agent.js'
 import { InfrastructureError } from '../../../src/ports/environment.js'
@@ -35,7 +36,7 @@ describe('revise', () => {
 
     expect(s.state).toBe('pr_open'); expect(s.pullRequestUrl).toBe(PR)
     expect(d.codeHost.prs).toHaveLength(0)
-    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: true }])
+    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: false }])
     expect(d.workspace.log.filter((l) => l.startsWith('prepare')).every((l) => l.startsWith('prepare rumba/shop/123 existing'))).toBe(true)
     expect(s.history.slice(-3).map((h) => h.state)).toEqual(['building', 'verified', 'pr_open'])
     expect(s).toMatchObject({ reviewRounds: 1, pushedAt: '2026-01-01T00:00:00.000Z', fixSummary: 'Renamed total to subtotal.', after: [expect.objectContaining({ criterionId: 'c1', passed: true })] })
@@ -212,12 +213,48 @@ describe('revise', () => {
     expect(s.state).toBe('pr_open'); expect(d.tracker.states.get('123')?.state).toBe('pr_open')
   })
 
-  it('records when the round answered, on success and on a no-change answer', async () => {
-    const d = setup()
-    expect((await revise(d, makeRumba(), makeTicket(), changesRequested(d))).answeredAt).toBe('2026-01-01T00:00:00.000Z')
-    const e = setup(); e.workspace.commitResults = [null]
+  /** A round that starts at 10:00 and whose agent runs until 11:00. */
+  function timed(d: ReturnType<typeof setup>): void {
+    let now = new Date('2026-01-01T10:00:00Z'); d.clock = () => now
+    const run = d.agent.run.bind(d.agent)
+    d.agent.run = async (task, w) => { now = new Date('2026-01-01T11:00:00Z'); return run(task, w) }
+  }
+
+  it("records the round's start as the time it answered, on success and on a no-change answer", async () => {
+    const d = setup(); timed(d)
+    expect(await revise(d, makeRumba(), makeTicket(), changesRequested(d))).toMatchObject({ answeredAt: '2026-01-01T10:00:00.000Z', pushedAt: '2026-01-01T11:00:00.000Z' })
+    const e = setup(); timed(e); e.workspace.commitResults = [null]
     e.agent.script.revise = { ...revised, noChangeNeeded: 'total is the name the API returns.' }
-    expect((await revise(e, makeRumba(), makeTicket(), changesRequested(e))).answeredAt).toBe('2026-01-01T00:00:00.000Z')
+    expect((await revise(e, makeRumba(), makeTicket(), changesRequested(e))).answeredAt).toBe('2026-01-01T10:00:00.000Z')
+  })
+
+  it('starts the next round on a review written while the round ran', async () => {
+    const d = setup(); timed(d)
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    d.codeHost.feedback.set(PR, [{ ...aliceReview, reviewState: 'changes_requested', at: '2026-01-01T10:30:00Z', text: 'One more thing.', canWrite: true, self: false }])
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), s)).state).toBe('changes_requested')
+  })
+
+  it('takes a revise label added while the round ran as a new request, not as stale', async () => {
+    const d = setup(); timed(d)
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'sha3', labels: ['rumba-revise'] })
+    // A label from someone without write access starts nothing, and is not removed as stale either.
+    d.codeHost.labelEvents.set(PR, { by: 'tess', at: '2026-01-01T10:30:00Z', canWrite: false, self: false })
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), s)).state).toBe('pr_open')
+    expect(d.codeHost.labelsRemoved).toEqual([])
+    d.codeHost.labelEvents.set(PR, { by: 'alice', at: '2026-01-01T10:30:00Z', canWrite: true, self: false })
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), s)).state).toBe('changes_requested')
+  })
+
+  it('pushes without force, and leaves the ticket for the next run when the remote moved', async () => {
+    const d = setup(); d.tracker.tickets.push(makeTicket()); d.tracker.states.set('123', changesRequested(d))
+    d.codeHost.pushBranch = async (_w, branch, opts) => { d.codeHost.pushed.push({ branch, force: opts?.force ?? false }); throw new Error('rejected: non-fast-forward') }
+    const r = await runRumba(d, makeRumba())
+    expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: false }])
+    expect(r.left).toEqual([{ ticket: '123', why: 'error: rejected: non-fast-forward' }])
+    expect(d.tracker.states.get('123')).toMatchObject({ state: 'changes_requested', errorCount: 1, reviewRounds: 1 })
+    expect(d.codeHost.updates).toEqual([]); expect(d.codeHost.pullRequestComments).toEqual([])
   })
 
   it('does not start another round on the review a no-change answer answered, but does on a newer one', async () => {

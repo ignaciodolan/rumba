@@ -175,7 +175,7 @@ describe('trackPullRequest feedback', () => {
     await trackPullRequest(d, makeRumba(), makeTicket(), start)
     expect(order).toEqual(['write', 'label', 'comment'])
   })
-  it('reads feedback since the later of the last push and the last answer', async () => {
+  it('reads feedback since the start of the last round, once a round has run', async () => {
     const { d, start } = open(); const answered = { ...start, answeredAt: '2026-11-22T00:00:00Z' }
     d.codeHost.feedback.set(URL, [fb({ ...REQUEST, at: '2026-11-21T00:00:00Z' })])
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), answered)).toEqual(answered)
@@ -188,10 +188,10 @@ describe('trackPullRequest feedback', () => {
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), answered)).toEqual(answered)
     expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
   })
-  it('keeps reading since the push when it is later than the answer', async () => {
+  it("reads feedback written while a round ran, between its start and its push", async () => {
     const { d, start } = open(); const answered = { ...start, answeredAt: '2026-11-19T00:00:00Z' }
     d.codeHost.feedback.set(URL, [fb({ ...REQUEST, at: '2026-11-19T12:00:00Z' })])
-    expect(await trackPullRequest(d, makeRumba(), makeTicket(), answered)).toEqual(answered)
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), answered)).state).toBe('changes_requested')
   })
   it('uses the pr_open history time when there is no pushedAt', async () => {
     const d = makeDeps(); d.codeHost.pullRequests.set(URL, { state: 'open', headSha: 'h' })

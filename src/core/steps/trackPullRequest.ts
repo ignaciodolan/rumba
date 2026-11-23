@@ -48,13 +48,15 @@ async function endTicket(deps: Deps, ticket: Ticket, state: TicketState, url: st
 }
 
 /**
- * The later of Rumba's last push and its last answer to a review round: feedback older than
- * that was already dealt with, including feedback a round answered without pushing.
+ * Feedback older than this was already dealt with: the start of the last review round, which
+ * answered it whether it pushed or not, or else Rumba's push when it opened the pull request.
+ * Not a round's push: feedback written while the round ran is still to be answered.
  */
 function dealtWithUntil(state: TicketState): string {
+  if (state.answeredAt !== undefined) return state.answeredAt
+  if (state.pushedAt) return state.pushedAt
   const opened = state.history.findLast((h) => h.state === 'pr_open')
-  const pushed = state.pushedAt ?? (opened ? opened.at : new Date(0).toISOString())
-  return state.answeredAt !== undefined && Date.parse(state.answeredAt) > Date.parse(pushed) ? state.answeredAt : pushed
+  return opened ? opened.at : new Date(0).toISOString()
 }
 
 /** Whether the revise label counts: added after the feedback was dealt with, by a writer who is not Rumba's own account. */
@@ -69,7 +71,7 @@ async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state:
   const { requested, feedback } = selectFeedback(await deps.codeHost.listFeedback(url, since), deps.secrets)
   const added = labels.includes(label) ? await deps.codeHost.labelAdded(url, label) : null
   const asked = labelStartsRound(added, since)
-  // A label from before the push or the answer was dealt with by it; one from a non-writer is left for a writer to judge.
+  // A label from before then was dealt with already; one from a non-writer is left for a writer to judge.
   const stale = added !== null && Date.parse(added.at) <= Date.parse(since)
   if (!asked && !requested) {
     if (stale) await dropLabel(deps, url, label)

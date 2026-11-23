@@ -177,11 +177,13 @@ describe('runRumba', () => {
     })
     it('restarts on rumba-retry and clears the feedback', async () => {
       const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
-      d.tracker.states.set('1', parked(d, { errorCount: 2 }))
+      d.tracker.states.set('1', parked(d, { errorCount: 2, answeredAt: '2026-01-01T00:00:00.000Z' }))
       const r = await runRumba(d, makeRumba())
       expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' }); expect(t.labels).not.toContain('rumba-retry')
       expect(d.tracker.states.get('1')).toMatchObject({ errorCount: 0 })
       expect(d.tracker.states.get('1')).not.toHaveProperty('feedback')
+      // The new pull request's feedback is read since its own push, not since an old round.
+      expect(d.tracker.states.get('1')).not.toHaveProperty('answeredAt')
     })
   })
   it('lists a ticket that stays in awaiting_criteria as left, with no lease', async () => {

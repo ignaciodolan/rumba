@@ -33,6 +33,8 @@ interface Round {
   current: TicketState
   /** Which round this is, from 1. */
   n: number
+  /** When the round started: the feedback it answers is what was written before then. */
+  startedAt: string
   /** The pull request's head when the round started. */
   start: string
   lock: Lock
@@ -73,7 +75,7 @@ export async function revise(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
   const { start, hashes } = await atPullRequestHead(deps, branch, url, files)
   const n = done + 1
   const r: Round = {
-    deps, rumba, ticket, n, start, lock: { files, hashes, resetTo: start }, feedback: state.feedback ?? [], attempts: [],
+    deps, rumba, ticket, n, start, startedAt: deps.clock().toISOString(), lock: { files, hashes, resetTo: start }, feedback: state.feedback ?? [], attempts: [],
     current: { ...transition(state, 'building', deps.clock(), `review round ${n}`), reviewRounds: n, checkHashes: hashes },
   }
   // Counted and written before the agent runs, so a round that dies still counts.
@@ -204,7 +206,9 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
   let outside: string[]
   try {
     outside = await outsideScopeOf(deps, rumba, r.current, workdir)
-    await deps.codeHost.pushBranch(workdir, branch, { force: true })
+    // A fast-forward on top of the head the round started from, never a force push: a commit a
+    // person pushed while the round ran makes this fail, and the next run starts from it.
+    await deps.codeHost.pushBranch(workdir, branch, { force: false })
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
@@ -212,7 +216,7 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
   const verified = {
-    ...transition(rest, 'verified', now), after: outcome.results, pushedAt: now.toISOString(), answeredAt: now.toISOString(),
+    ...transition(rest, 'verified', now), after: outcome.results, pushedAt: now.toISOString(), answeredAt: r.startedAt,
     fixSummary: cleanOutput(outcome.result.summary, deps.secrets, MAX_SUMMARY),
   }
   const next = transition(verified, 'pr_open', now, `review round ${r.n}`)
@@ -232,8 +236,8 @@ async function answerWithoutChange(r: Round, outcome: Extract<Outcome, { kind: '
   await record(r, { outcome: 'no-change', checks: [], projectTests: 'not-run', note: cleanOutput(`The agent said no change was needed: ${outcome.reason}`, deps.secrets, MAX_REASON), tail: '' })
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
-  // The answer marks the feedback as dealt with, though nothing was pushed: the next run reads only newer feedback.
-  const next = { ...transition(transition(rest, 'verified', now, 'no change needed'), 'pr_open', now, `review round ${r.n}: no change needed`), answeredAt: now.toISOString() }
+  // The answer deals with the feedback from before the round, though nothing was pushed.
+  const next = { ...transition(transition(rest, 'verified', now, 'no change needed'), 'pr_open', now, `review round ${r.n}: no change needed`), answeredAt: r.startedAt }
   await deps.tracker.writeState(ticket, next)
 
   const reason = inertText(redact(outcome.reason, deps.secrets).trim().slice(0, MAX_REASON)).split('\n').map((l) => `> ${l}`).join('\n')
