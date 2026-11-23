@@ -133,7 +133,11 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   // A durable state a step wrote (pr_open after a review round) holds no lease, so another run may
   // have moved the ticket on since; its state stands. When the read fails, the run's own is written.
   const current = await deps.tracker.readState(ticket).catch(() => null)
-  if (current !== null && !carriesOn(current, result)) return left('moved by another run')
+  if (current !== null && !carriesOn(current, result)) {
+    // The engine worked the ticket all the same, so it counts toward the run limit.
+    count.worked += 1
+    return left('moved by another run')
+  }
   await deps.tracker.writeState(ticket, withoutLease(result))
   if (result.state === 'awaiting_criteria') return left('awaiting criteria')
   count.worked += 1
