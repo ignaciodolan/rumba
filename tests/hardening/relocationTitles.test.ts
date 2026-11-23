@@ -179,3 +179,53 @@ describe('a line that may leave a template open', () => {
     expect(judge(file("'c2: ships'"), file("'ships an order'"))).toBeNull()
   })
 })
+
+// Found by the automated review: titles are read by the rules of each file's own language.
+describe('titles in other languages and in JSX', () => {
+  /** Judges a move of a check file `from` → `to`, with the same bodies as `judge`. */
+  function judgeFile(from: string, to: string, before: string, after: string): string | null {
+    return judgeRelocation({
+      original: [{ criterionId: 'c1', command: `run ${from}`, files: [from] }],
+      moves: [{ from, to }],
+      relocated: [{ criterionId: 'c1', command: `run ${to}`, files: [to] }],
+      changed: [from, to],
+      before: { [from]: before, [to]: null },
+      after: { [from]: null, [to]: after },
+      protectedGlobs: [],
+    })
+  }
+  const PY = ['tests/rumba/test_c1.py', 'tests/orders/test_fulfil.py'] as const
+  const GO = ['orders/rumba/c1_test.go', 'orders/fulfil_test.go'] as const
+  const TSX = ['tests/rumba/c1.test.tsx', 'tests/orders/receipt.test.tsx'] as const
+
+  it('does not read a JavaScript title in a Python file, where test(...) is an ordinary call', () => {
+    const py = (arg: string) => `from app.orders import test\n\ndef test_c1():\n    assert test(${arg}) == 1\n`
+    expect(judgeFile(...PY, py("'ship'"), py("'never'"))).not.toBeNull()
+  })
+
+  it('does not rename a Python test name written inside a triple-quoted string', () => {
+    const fixture = (name: string, open = 'source = """') => `def test_c1():\n    ${open}\ndef ${name}():\n    pass\n"""\n    assert run(source)\n`
+    expect(judgeFile(...PY, fixture('test_inner'), fixture('test_renamed'))).not.toBeNull()
+    expect(judgeFile(...PY, fixture('test_inner', `source = '"""' + """`), fixture('test_renamed', `source = '"""' + """`))).not.toBeNull()
+  })
+
+  it('still renames Python tests after a one-line docstring', () => {
+    const py = (name: string) => `def test_c1():\n    """Ships an order."""\n    assert True\n\ndef ${name}():\n    assert True\n`
+    expect(judgeFile(...PY, py('test_c2'), py('test_ships_twice'))).toBeNull()
+  })
+
+  it('does not rename a Go test name written inside a raw string', () => {
+    const go = (name: string) => `package orders\n\nimport "testing"\n\nfunc TestC1(t *testing.T) {\n\tsrc := \`\nfunc ${name}(t *testing.T) {}\n\`\n\trun(src)\n}\n`
+    expect(judgeFile(...GO, go('TestInner'), go('TestRenamed'))).not.toBeNull()
+  })
+
+  it('does not let quotes in JSX text hide a template that opens', () => {
+    const tsx = (title: string) => `it('c1', () => {\n  render(<p>'</p>{\`<p>'</p>)\ntest(${title}, () => {})\n\`}\n})\n`
+    expect(judgeFile(...TSX, tsx("'inner'"), tsx("'${process.exit(0)}'"))).not.toBeNull()
+  })
+
+  it('still renames a later title after JSX without quotes', () => {
+    const tsx = (title: string) => `it('c1', () => {\n  render(<Receipt id={1} />)\n})\n\nit(${title}, () => {\n  expect(1).toBe(1)\n})\n`
+    expect(judgeFile(...TSX, tsx("'c2: prints'"), tsx("'prints a receipt'"))).toBeNull()
+  })
+})

@@ -127,7 +127,7 @@ export function judgeRelocation(i: RelocationInput): string | null {
     const text = i.before[move.from] ?? ''
     // A command that picks tests by title would run fewer of them once a title changed.
     const bare = original.files.reduce((c, f) => c.split(f).join(' '), original.command)
-    const keepTitles = NAME_FILTER.test(bare) || titlesIn(text).some((t) => t.length > 0 && bare.includes(t))
+    const keepTitles = NAME_FILTER.test(bare) || titlesIn(move.from, text).some((t) => t.length > 0 && bare.includes(t))
     const reason = sameFile(move.to, i.before[move.to] ?? null, i.after[move.to]!, [{ file: move.from, text }], keepTitles, renames)
     if (reason !== null) return reason
   }
@@ -135,15 +135,10 @@ export function judgeRelocation(i: RelocationInput): string | null {
 }
 
 /** The test titles a file gives: the strings and names the title rules would replace. */
-function titlesIn(text: string): string[] {
+function titlesIn(file: string, text: string): string[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim())
   // A JavaScript title's text, each piece between expressions on its own when it says something.
-  const js = jsTitles(lines).titles.flatMap((pieces) => (pieces.length === 1 ? pieces : pieces.map((p) => p.trim()).filter((p) => p.length >= 3)))
-  const named = lines.flatMap((line) => {
-    const m = /^(?:async\s+)?def\s+(test_\w*)/.exec(line) ?? /^class\s+(Test\w*)/.exec(line) ?? /^func\s+((?:Test|Benchmark|Example|Fuzz)\w*)/.exec(line)
-    return m ? [m[1]!] : []
-  })
-  return [...js, ...named]
+  return maskTitles(file, lines).titles.flatMap((pieces) => (pieces.length === 1 ? pieces : pieces.map((p) => p.trim()).filter((p) => p.length >= 3)))
 }
 
 /** A command option that picks tests by name: a renamed test could fall out of it. */
@@ -364,10 +359,52 @@ function parse(file: string, text: string, keepTitles = false): Parsed {
     out.body.push({ indent, text: line })
   }
   if (!keepTitles) {
-    const masked = jsTitles(out.body.map((l) => l.text)).lines
-    out.body = out.body.map((l, k) => ({ indent: l.indent, text: TITLES.reduce((t, [p, mark]) => t.replace(p, mark), masked[k]!) }))
+    const masked = maskTitles(file, out.body.map((l) => l.text)).lines
+    out.body = out.body.map((l, k) => ({ indent: l.indent, text: masked[k]! }))
   }
   return out
+}
+
+/** The language whose titles a file holds, by its extension; null for any other file, whose lines are compared as written. */
+function languageOf(file: string): 'js' | 'jsx' | 'py' | 'go' | null {
+  if (/\.[cm]?[jt]sx$/.test(file)) return 'jsx'
+  if (/\.[cm]?[jt]s$/.test(file)) return 'js'
+  if (file.endsWith('.py')) return 'py'
+  if (file.endsWith('.go')) return 'go'
+  return null
+}
+
+/**
+ * Every test title in `lines` (trimmed), replaced by its mark, by the rules of the file's own
+ * language, and the titles' text. In each language, once a line may leave a string open,
+ * nothing more is masked: a title-like line inside a string is text, not a test.
+ */
+function maskTitles(file: string, lines: string[]): { lines: string[]; titles: string[][] } {
+  const language = languageOf(file)
+  if (language === 'js' || language === 'jsx') return jsTitles(lines, language === 'jsx')
+  if (language === null) return { lines, titles: [] }
+  const rules = language === 'py' ? TITLES.slice(0, 2) : TITLES.slice(2)
+  const leaves = language === 'py' ? pyLeavesOpen : (line: string) => line.includes('`')
+  const out = [...lines]
+  const titles: string[][] = []
+  for (let k = 0; k < out.length; k++) {
+    for (const [p, mark] of rules) {
+      const m = p.exec(out[k]!)
+      if (m) { titles.push([m[0].slice(m[1]!.length)]); out[k] = out[k]!.replace(p, mark) }
+    }
+    if (leaves(lines[k]!)) break
+  }
+  return { lines: out, titles }
+}
+
+/**
+ * Whether a Python line may leave a string open: it ends in a backslash, or it holds a triple
+ * quote other than one docstring that opens and closes on the line.
+ */
+function pyLeavesOpen(line: string): boolean {
+  if (line.endsWith('\\')) return true
+  if (!line.includes('"""') && !line.includes("'''")) return false
+  return !/^(["']{3})(?:(?!["']).)*\1$/.test(line)
 }
 
 /**
@@ -484,7 +521,7 @@ function expressionEnd(s: string, from: number): number | null {
  * or, for `.each`, the first argument of the call that follows the table, on the line where
  * the table closes.
  */
-function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
+function jsTitles(lines: string[], jsx = false): { lines: string[]; titles: string[][] } {
   const out = [...lines]
   const titles: string[][] = []
   // A line ending in `it(`: its title may be alone on the next line.
@@ -503,7 +540,8 @@ function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
   for (let k = 0; k < out.length; k++) {
     const line = out[k]!
     if (open) continue
-    open = leavesOpen(line)
+    // In JSX, text between tags may hold quotes that are not strings: such a line counts as open.
+    open = leavesOpen(line) || (jsx && /<[A-Za-z>/]/.test(line) && /[`'"]|\/\*/.test(line))
     if (next) {
       next = false
       mask(k, 0, /^\s*,/)
