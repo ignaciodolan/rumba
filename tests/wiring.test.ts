@@ -82,7 +82,7 @@ describe('parseRemote', () => {
   })
   it('refuses remotes that are not on github.com', () => {
     for (const url of ['https://gitlab.com/acme/shop.git', 'git@github.example.com:acme/shop.git', '/srv/git/shop.git', 'https://github.com/acme']) {
-      expect(() => parseRemote(url)).toThrow(/supports GitHub remotes only/)
+      expect(() => parseRemote(url)).toThrow(/^Rumba supports GitHub remotes only/)
     }
   })
 })

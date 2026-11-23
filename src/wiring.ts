@@ -68,7 +68,7 @@ export function parseRemote(url: string): { owner: string; name: string } {
     const m = pattern.exec(url.trim())
     if (m && GITHUB_SEGMENT.test(m[1]) && GITHUB_SEGMENT.test(m[2])) return { owner: m[1], name: m[2] }
   }
-  throw new Error('Rumba stage 1 supports GitHub remotes only: the origin remote must be a github.com repository, over https or ssh.')
+  throw new Error('Rumba supports GitHub remotes only: the origin remote must be a github.com repository, over https or ssh.')
 }
 
 function githubToken(rumba: RumbaConfig, env: Env): string {
