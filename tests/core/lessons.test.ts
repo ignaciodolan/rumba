@@ -57,6 +57,67 @@ describe('cleanLesson', () => {
   })
 })
 
+describe('cleanLesson keeps lessons.md valid UTF-8 text', () => {
+  const wellFormed = (out: ReturnType<typeof cleanLesson>) => 'lines' in out && out.lines.every((l) => !/\p{Cs}|\uFFFD/u.test(l))
+
+  it('cuts at 200 code points, never inside an emoji', () => {
+    const out = cleanLesson([`${'a'.repeat(199)}\u{1F600}\u{1F600}b`], [], [])
+    expect(out).toEqual({ lines: [`${'a'.repeat(199)}\u{1F600}`] })
+    expect(wellFormed(out)).toBe(true)
+  })
+  it('removes a lone surrogate', () => {
+    expect(cleanLesson(['Round\uD800 totals\uDC00 in cents'], [], [])).toEqual({ lines: ['Round totals in cents'] })
+  })
+  it('removes the replacement character', () => {
+    expect(cleanLesson(['Round\uFFFD totals'], [], [])).toEqual({ lines: ['Round totals'] })
+  })
+})
+
+describe('cleanLesson removes invisible characters', () => {
+  it('removes bidi and other format characters', () => {
+    expect(cleanLesson(['Round \u202Etotals\u202C in cents \u2066here\u2069\u200B\uFEFF.'], [], []))
+      .toEqual({ lines: ['Round totals in cents here.'] })
+  })
+  it('refuses a quote split by zero-width characters', () => {
+    const split = QUOTED.split('').join('\u200B')
+    expect(cleanLesson([split], [review], [])).toEqual({ refused: 'the lesson quoted the feedback' })
+  })
+  it('refuses a quote written in compatibility forms', () => {
+    // Fullwidth letters fold to plain ones under NFKC.
+    const wide = 'ROUND THE ORDER TOTAL'.replace(/[A-Z]/g, (c) => String.fromCodePoint(c.codePointAt(0)! + 0xFEE0))
+    expect(cleanLesson([`${wide} to cents in the service, never`], [review], [])).toEqual({ refused: 'the lesson quoted the feedback' })
+  })
+})
+
+describe('cleanLesson keeps each line plain text', () => {
+  it.each([
+    ['a heading', '# Rules: round in the service', 'Rules: round in the service'],
+    ['a run of headings and quotes', '>> ## > Round in the service', 'Round in the service'],
+    ['a code fence', '```js round in the service', 'js round in the service'],
+    ['a longer fence inside the line', 'Round ```` in the service', 'Round  in the service'],
+    ['a comment', '<!-- Round in the service -->', 'Round in the service'],
+    ['a comment hidden in a comment', 'Round <!<!---->-- in the service', 'Round  in the service'],
+  ])('strips %s', (_n, line, want) => {
+    expect(cleanLesson([line], [], [])).toEqual({ lines: [want] })
+  })
+  it('keeps single backticks, a # inside the line and a lone >', () => {
+    const line = 'Round in `src/orders/total.ts` (see #42); totals > 0.'
+    expect(cleanLesson([line], [], [])).toEqual({ lines: [line] })
+  })
+  it('drops a line that was only structure', () => {
+    expect(cleanLesson(['###', '```', 'Round in the service.'], [], [])).toEqual({ lines: ['Round in the service.'] })
+  })
+})
+
+describe('cleanLesson redacts the line as cleaned', () => {
+  it('catches a secret with a space that a newline split', () => {
+    expect(cleanLesson(['Never log order\nkey 42 anywhere.'], [], ['order key 42'])).toEqual({ lines: ['Never log [redacted] anywhere.'] })
+  })
+  it('catches a secret split by a zero-width character', () => {
+    expect(cleanLesson(['Never log s3cr3t\u200B-order-key.'], [], ['s3cr3t-order-key'])).toEqual({ lines: ['Never log [redacted].'] })
+  })
+})
+
 describe('lessonEntry and appendLesson', () => {
   const entry = lessonEntry(['Round totals in the service.', 'Not in the view.'], 'https://example.test/pr/1')
 
