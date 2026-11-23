@@ -110,7 +110,7 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   }
   // The outcome first: a pull request that has ended moves the ticket at no limit cost. One
   // still open goes on to the engine for its review round, like any other workable ticket.
-  if (state.state === 'changes_requested' && !(await checkPullRequest(deps, ticket, state, summary, count, () => trackParkedPullRequest(deps, ticket, state), null))) return
+  if (state.state === 'changes_requested' && !(await checkPullRequest(deps, ticket, state, summary, count, () => trackParkedPullRequest(deps, rumba, ticket, state), null))) return
   if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 
   const from = state.state

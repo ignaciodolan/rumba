@@ -158,14 +158,14 @@ export async function learn(deps: Deps, rumba: RumbaConfig, ticket: Ticket, _sta
   if (opts.feedback.length === 0) return { at, status: 'none', reason: NO_FEEDBACK }
   try {
     const answer = await distill(deps, rumba, ticket, opts.feedback)
-    if (answer.none !== undefined) return { at, status: 'none', reason: bounded(answer.none, deps.secrets) }
+    if (answer.none !== undefined) return { at, status: 'none', reason: lessonReason(answer.none, deps.secrets) }
     const cleaned = cleanLesson(answer.lesson ?? [], opts.feedback, deps.secrets)
     if ('refused' in cleaned) return { at, status: 'refused', reason: cleaned.refused }
     const commit = await commitLesson(deps, rumba, ticket, lessonEntry(cleaned.lines, opts.url), opts)
     return { at, status: 'added', commit }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
-    return { at, status: 'failed', reason: bounded(`The lesson could not be drawn: ${message}`, deps.secrets) }
+    return { at, status: 'failed', reason: lessonReason(`The lesson could not be drawn: ${message}`, deps.secrets) }
   }
 }
 
@@ -208,7 +208,7 @@ async function commitLesson(deps: Deps, rumba: RumbaConfig, ticket: Ticket, entr
 }
 
 /** Redacted and cut to LESSON_REASON_MAX characters, keeping the start, which says what went wrong. */
-function bounded(text: string, secrets: string[]): string {
+export function lessonReason(text: string, secrets: string[]): string {
   const clean = redact(text, secrets).replace(CONTROL, ' ').trim()
   return clean.length > LESSON_REASON_MAX ? `${clean.slice(0, LESSON_REASON_MAX - 1)}…` : clean
 }

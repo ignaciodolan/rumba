@@ -39,11 +39,12 @@ describe('revise', () => {
     expect(s.state).toBe('pr_open'); expect(s.pullRequestUrl).toBe(PR)
     expect(d.codeHost.prs).toHaveLength(0)
     expect(d.codeHost.pushed).toEqual([{ branch: 'rumba/shop/123', force: false }])
-    expect(d.workspace.log.filter((l) => l.startsWith('prepare')).every((l) => l.startsWith('prepare rumba/shop/123 existing'))).toBe(true)
+    // Every checkout of the round is of the fix branch; the lesson's agent has a scratch checkout of its own.
+    expect(d.workspace.log.filter((l) => l.startsWith('prepare') && !l.includes('/distill-')).every((l) => l.startsWith('prepare rumba/shop/123 existing'))).toBe(true)
     expect(s.history.slice(-3).map((h) => h.state)).toEqual(['building', 'verified', 'pr_open'])
     expect(s).toMatchObject({ reviewRounds: 1, pushedAt: '2026-01-01T00:00:00.000Z', fixSummary: 'Renamed total to subtotal.', after: [expect.objectContaining({ criterionId: 'c1', passed: true })] })
     expect(s).not.toHaveProperty('feedback')
-    expect(d.agent.calls).toHaveLength(1)
+    expect(d.agent.calls.filter((c) => c.kind === 'revise')).toHaveLength(1)
     expect(d.agent.calls[0]).toMatchObject({
       kind: 'revise', feedback: [aliceReview], diff: 'diff --git a/src/cart.ts b/src/cart.ts', lockedFiles: [CHECK],
       criteria: start.criteria, checks: start.checks, failures: [], attempt: 1,
@@ -193,7 +194,7 @@ describe('revise', () => {
     d.environment.checkResults = [{ passed: false, output: 'expected subtotal, got total' }]
     const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d, ASKED))
 
-    expect(s.state).toBe('pr_open'); expect(d.agent.calls).toHaveLength(1)
+    expect(s.state).toBe('pr_open'); expect(d.agent.calls.filter((c) => c.kind === 'revise')).toHaveLength(1)
     expect(d.environment.ups).toEqual([
       { branch: 'rumba/shop/123-review-base', sha: 'base-c1', role: 'before' },
       { branch: 'rumba/shop/123', sha: 'sha3', role: 'after' },
@@ -423,7 +424,7 @@ describe('revise', () => {
     // While the round runs, the ticket still shows only the rounds that ended.
     const running = setup(); const seen: unknown[] = []
     const run = running.agent.run.bind(running.agent)
-    running.agent.run = async (task, w) => { seen.push(running.tracker.states.get('123')?.reviewRounds); return run(task, w) }
+    running.agent.run = async (task, w) => { if (task.kind === 'revise') seen.push(running.tracker.states.get('123')?.reviewRounds); return run(task, w) }
     await revise(running, makeRumba(), makeTicket(), { ...changesRequested(running), reviewRounds: 1 })
     expect(seen).toEqual([1])
   })
@@ -599,5 +600,106 @@ describe('revise', () => {
     const d = setup()
     const s = await advanceTicket(d, makeRumba(), makeTicket(), changesRequested(d))
     expect(s.state).toBe('pr_open'); expect(d.codeHost.pushed).toHaveLength(1)
+  })
+})
+
+describe('a lesson after a review round', () => {
+  const FILE = '.rumba/shop/lessons.md'
+  const RULE = 'Totals are named subtotal in src/cart.ts; keep that name in new code.'
+  const BRANCH = 'rumba/shop/123'
+  const AT = '2026-01-01T00:00:00.000Z'
+
+  /** A round whose distill-lesson agent answers `answer`. */
+  function lessonSetup(answer: unknown = { kind: 'distill-lesson', lesson: [RULE] }) {
+    const d = setup()
+    d.agent.script['distill-lesson'] = answer as never
+    return d
+  }
+
+  it("adds a commit to the same pull request after the round's push, changing only lessons.md, with the lesson and the link", async () => {
+    const d = lessonSetup()
+    d.workspace.files = { sha3: { [FILE]: '- Earlier lesson.\n  From https://example.test/pr/0\n' } }
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(s.state).toBe('pr_open'); expect(d.codeHost.prs).toHaveLength(0)
+    expect(d.agent.calls.map((c) => c.kind)).toEqual(['revise', 'distill-lesson'])
+    expect(d.agent.calls[1]).toMatchObject({ feedback: [aliceReview] })
+    expect(d.workspace.fileCommits).toEqual([{
+      workdir: expect.stringContaining(BRANCH), path: FILE,
+      content: `- Earlier lesson.\n  From https://example.test/pr/0\n\n- ${RULE}\n  From ${PR}\n`,
+      message: 'docs: lesson from review of #123',
+    }])
+    // The round's push, then the lesson's, both without force, on the fix branch.
+    expect(d.codeHost.pushed).toEqual([{ branch: BRANCH, force: false }, { branch: BRANCH, force: false }])
+    expect(d.workspace.branchTip).toBe('file1')
+    expect(s.lessons).toEqual([{ at: AT, status: 'added', commit: 'file1' }])
+    expect(d.tracker.states.get('123')).toEqual(s)
+  })
+
+  it('adds the lesson after a no-change answer, as the only push', async () => {
+    const d = lessonSetup(); d.workspace.commitResults = [null]
+    d.agent.script.revise = { ...revised, noChangeNeeded: 'total is the name the API returns.' }
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(s.state).toBe('pr_open')
+    expect(d.workspace.fileCommits.map((c) => c.path)).toEqual([FILE])
+    expect(d.codeHost.pushed).toEqual([{ branch: BRANCH, force: false }])
+    expect(s.lessons).toEqual([{ at: AT, status: 'added', commit: 'file1' }])
+    expect(d.tracker.states.get('123')).toEqual(s)
+  })
+
+  it('commits and pushes nothing when the agent finds no general rule, and says why on the state', async () => {
+    const d = lessonSetup({ kind: 'distill-lesson', none: 'The review was about this change only.' })
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(d.workspace.fileCommits).toEqual([]); expect(d.codeHost.pushed).toEqual([{ branch: BRANCH, force: false }])
+    expect(d.codeHost.prs).toHaveLength(0)
+    expect(s.lessons).toEqual([{ at: AT, status: 'none', reason: 'The review was about this change only.' }])
+    expect(d.tracker.states.get('123')).toEqual(s)
+  })
+
+  it('asks no agent for a round asked for with the label alone, and records that there was no feedback', async () => {
+    const d = lessonSetup()
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d, []))
+
+    expect(d.agent.calls.map((c) => c.kind)).toEqual(['revise'])
+    expect(d.workspace.fileCommits).toEqual([])
+    expect(s.lessons).toEqual([{ at: AT, status: 'none', reason: 'There was no feedback to learn from.' }])
+  })
+
+  it('records a refused lesson and writes nothing', async () => {
+    const quoted: Feedback = { ...aliceReview, text: 'Please rename total to subtotal everywhere in the cart module, it confuses people.' }
+    const d = lessonSetup({ kind: 'distill-lesson', lesson: ['Rename total to subtotal everywhere in the cart module, it confuses people.'] })
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d, [quoted]))
+
+    expect(d.workspace.fileCommits).toEqual([]); expect(d.codeHost.pushed).toEqual([{ branch: BRANCH, force: false }])
+    expect(s.lessons).toEqual([{ at: AT, status: 'refused', reason: 'the lesson quoted the feedback' }])
+  })
+
+  it('keeps the round when the lesson fails, and records the failure', async () => {
+    const d = lessonSetup(new AgentError('the agent timed out'))
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(s).toMatchObject({ state: 'pr_open', reviewRounds: 1, pushedAt: AT })
+    expect(s.lessons).toEqual([{ at: AT, status: 'failed', reason: expect.stringContaining('the agent timed out') }])
+    expect(d.tracker.states.get('123')).toEqual(s)
+    expect(d.codeHost.pullRequestComments).toHaveLength(1)
+  })
+
+  it('learns nothing from a round that failed', async () => {
+    const d = lessonSetup(); d.environment.passes = () => false
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s.state).toBe('needs_human')
+    expect(d.agent.calls.map((c) => c.kind)).not.toContain('distill-lesson')
+    expect(s.lessons).toBeUndefined()
+  })
+
+  it("still rejects the agent's own change to lessons.md in a round as a protected path", async () => {
+    const d = lessonSetup(); d.workspace.changedSince = { sha2: [FILE] }
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
+
+    expect(s.state).toBe('needs_human')
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: `The fix changed protected paths, which the agent must not change: ${FILE}` }])
+    expect(d.workspace.fileCommits).toEqual([]); expect(d.codeHost.pushed).toEqual([])
   })
 })

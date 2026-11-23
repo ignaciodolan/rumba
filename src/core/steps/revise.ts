@@ -6,6 +6,7 @@ import { timeLeft } from '../budget.js'
 import { asksAbout } from '../citation.js'
 import { inertText, renderPullRequestBody } from '../evidence.js'
 import { MAX_FEEDBACK, selectFeedback } from '../feedback.js'
+import { learn, withLesson } from '../lessons.js'
 import { cleanOutput, redact } from '../redact.js'
 import { transition } from '../states.js'
 import type { AttemptRecord, Check, CheckResult, Feedback, Ticket, TicketState } from '../types.js'
@@ -362,7 +363,7 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
     lines.push(`- Check for ${oneLine(d.criterionId, deps.secrets, 100)} changed, as asked in ${askedUrl(r, d)}: ${oneLine(d.reason, deps.secrets, MAX_REPLY)}`)
   }
   await quietly(() => deps.codeHost.commentOnPullRequest(url, lines.join('\n')))
-  return next
+  return withRoundLesson(r, next)
 }
 
 /** The agent found nothing to change: its reason and replies go on the pull request, and nothing is pushed. */
@@ -380,6 +381,19 @@ async function answerWithoutChange(r: Round, outcome: Extract<Outcome, { kind: '
   const lines = feedbackLines(r, outcome.result)
   const reply = ["Rumba made no change in this round. The agent's reason:", '', reason, ...(lines.length > 0 ? ['', ...lines] : [])]
   await quietly(() => deps.codeHost.commentOnPullRequest(url, reply.join('\n')))
+  return withRoundLesson(r, next)
+}
+
+/**
+ * Draws a lesson from the round's feedback and commits it on the fix branch, on top of what the
+ * round left there, pushed without force like the round. Runs once the round is recorded and
+ * replied to, and learn never throws: a lesson that fails is recorded and the round stands.
+ */
+async function withRoundLesson(r: Round, state: TicketState): Promise<TicketState> {
+  const { deps, rumba, ticket } = r
+  const record = await learn(deps, rumba, ticket, state, { feedback: r.feedback, url: state.pullRequestUrl!, branch: state.branch!, push: { force: false } })
+  const next = withLesson(state, record)
+  await deps.tracker.writeState(ticket, next)
   return next
 }
 
