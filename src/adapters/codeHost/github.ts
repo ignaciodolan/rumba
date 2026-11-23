@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises'
 import type { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
 import { cleanOutput } from '../../core/redact.js'
-import { CodeHostIdentityError, type CodeHost, FeedbackItem, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
+import { CodeHostIdentityError, type CodeHost, FeedbackItem, LabelAdded, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
 
 const PER_PAGE = 100
 
@@ -152,9 +152,14 @@ export class GitHubCodeHost implements CodeHost {
       // A pending review is not submitted yet and a dismissed one no longer counts.
       if (reviewState && r.submitted_at) raw.push({ kind: 'review', author: r.user?.login ?? '', url: r.html_url, at: r.submitted_at, text: r.body ?? '', reviewState })
     }
+    // A line comment drafted with a review is shown to others only when the review is submitted, so that is
+    // when it counts as written: otherwise one drafted before a push and submitted after it would look old.
+    const submitted = new Map<number, string>()
+    for (const r of reviews) if (r.submitted_at) submitted.set(r.id, r.submitted_at)
     for (const c of lines) {
       const line = c.line ?? c.original_line
-      raw.push({ kind: 'line', author: c.user?.login ?? '', url: c.html_url, at: c.created_at, text: c.body, path: c.path, ...(line ? { line } : {}) })
+      const at = (c.pull_request_review_id ? submitted.get(c.pull_request_review_id) : undefined) ?? c.created_at
+      raw.push({ kind: 'line', author: c.user?.login ?? '', url: c.html_url, at, text: c.body, path: c.path, ...(line ? { line } : {}) })
     }
     for (const c of comments) raw.push({ kind: 'comment', author: c.user?.login ?? '', url: c.html_url, at: c.created_at, text: c.body ?? '' })
     const authors = new Map<string, Author>()
@@ -167,6 +172,22 @@ export class GitHubCodeHost implements CodeHost {
     const after = Date.parse(since)
     const fresh = raw.filter((i) => Date.parse(i.at) > after)
     return Promise.all(fresh.map(async (i) => ({ ...i, canWrite: await canWrite(i.author), self: i.author.toLowerCase() === self })))
+  }
+
+  async labelAdded(url: string, label: string): Promise<LabelAdded | null> {
+    const number = this.pullNumber(url)
+    const events = await this.octokit.paginate(this.octokit.rest.issues.listEvents, { ...this.where(), issue_number: number, per_page: PER_PAGE })
+    let latest: (typeof events)[number] | undefined
+    for (const e of events) {
+      if (e.event !== 'labeled' || !('label' in e) || e.label?.name !== label) continue
+      if (latest === undefined || Date.parse(e.created_at) >= Date.parse(latest.created_at)) latest = e
+    }
+    if (!latest) return null
+    // Untrusted like feedback: the actor's permission is looked up, and failing closed means not a writer.
+    const actor = latest.actor ? { login: latest.actor.login, type: latest.actor.type } : null
+    const self = (await this.ownLogin()).toLowerCase()
+    const by = actor?.login ?? ''
+    return { by, at: latest.created_at, canWrite: await this.canWrite(actor), self: by.toLowerCase() === self }
   }
 
   /** Fails closed: a bot, an unknown author or any lookup that does not answer is not a writer. */

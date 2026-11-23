@@ -164,6 +164,7 @@ export function redactingCodeHost(inner: CodeHost, secrets: string[]): CodeHost 
     deleteBranch: (branch) => inner.deleteBranch(branch),
     getPullRequest: (url) => inner.getPullRequest(url),
     listFeedback: (url, since) => inner.listFeedback(url, since),
+    labelAdded: (url, label) => inner.labelAdded(url, label),
     removeLabel: (url, label) => inner.removeLabel(url, label),
     openPullRequest: (pr) => inner.openPullRequest({ ...pr, title: redact(pr.title, secrets), body: redact(pr.body, secrets) }),
   }

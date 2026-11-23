@@ -1,5 +1,5 @@
 import type { RumbaConfig } from '../../config/load.js'
-import type { PullRequestInfo } from '../../ports/codeHost.js'
+import type { LabelAdded, PullRequestInfo } from '../../ports/codeHost.js'
 import type { Deps } from '../../ports/deps.js'
 import { selectFeedback } from '../feedback.js'
 import { transition } from '../states.js'
@@ -53,24 +53,29 @@ function lastPush(state: TicketState): string {
   return opened ? opened.at : new Date(0).toISOString()
 }
 
+/** Whether the revise label counts: added after the last push by a writer who is not Rumba's own account. */
+function labelStartsRound(added: LabelAdded | null, pushedAt: string): boolean {
+  return added !== null && Date.parse(added.at) > Date.parse(pushedAt) && added.canWrite && !added.self
+}
+
 /** Starts a revision round when a writer asked for changes or put the revise label on; otherwise changes nothing. */
 async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, url: string, labels: string[]): Promise<TicketState> {
   const label = rumba.labels.revise
-  const hasLabel = labels.includes(label)
-  const { requested, feedback } = selectFeedback(await deps.codeHost.listFeedback(url, lastPush(state)), deps.secrets)
-  if (!hasLabel && !requested) return state
+  const pushedAt = lastPush(state)
+  const { requested, feedback } = selectFeedback(await deps.codeHost.listFeedback(url, pushedAt), deps.secrets)
+  const added = labels.includes(label) ? await deps.codeHost.labelAdded(url, label) : null
+  const asked = labelStartsRound(added, pushedAt)
+  // A label from before the push was dealt with by that push; one from a non-writer is left for a writer to judge.
+  const stale = added !== null && Date.parse(added.at) <= Date.parse(pushedAt)
+  if (!asked && !requested) {
+    if (stale) await dropLabel(deps, url, label)
+    return state
+  }
 
   const next = { ...transition(state, 'changes_requested', deps.clock(), 'review feedback'), feedback }
   // Write before touching the label or commenting, so a failure there cannot lose the round.
   await deps.tracker.writeState(ticket, next)
-  // The round is recorded. A throw here would reach the runner's error path, which counts an error and can
-  // overwrite changes_requested with needs_human. A failed removal just leaves the label on the pull request;
-  // a failed comment loses only the courtesy note.
-  try {
-    if (hasLabel) await deps.codeHost.removeLabel(url, label)
-  } catch {
-    // The label stays; the ticket has already left pr_open, so it is not read again as a new request.
-  }
+  if (asked || stale) await dropLabel(deps, url, label)
   const count = feedback.length === 1 ? '1 comment' : `${feedback.length} comments`
   const note = feedback.length === 0
     ? `Rumba was asked to revise the change on the pull request. It will do so on a later run: ${url}`
@@ -78,7 +83,16 @@ async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state:
   try {
     await deps.tracker.comment(ticket, note)
   } catch {
-    // Same reason: the state already shows the round.
+    // The state already shows the round; only the courtesy note is lost.
   }
   return next
+}
+
+/** Removes the revise label, ignoring errors: a throw would reach the runner's error path, which counts an error and can overwrite the state with needs_human. */
+async function dropLabel(deps: Deps, url: string, label: string): Promise<void> {
+  try {
+    await deps.codeHost.removeLabel(url, label)
+  } catch {
+    // The label stays; a later run tries again or a person removes it.
+  }
 }

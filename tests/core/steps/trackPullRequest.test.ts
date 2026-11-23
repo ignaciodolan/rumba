@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { trackPullRequest } from '../../../src/core/steps/trackPullRequest.js'
 import { makeDeps, makeRumba, makeTicket, verified } from '../../../src/testing/fakes.js'
-import type { FeedbackItem } from '../../../src/ports/codeHost.js'
+import type { FeedbackItem, LabelAdded } from '../../../src/ports/codeHost.js'
 import { transition } from '../../../src/core/states.js'
 
 const URL = 'https://example.test/pr/42'
@@ -59,6 +59,7 @@ describe('trackPullRequest', () => {
 function fb(over: Partial<FeedbackItem> = {}): FeedbackItem {
   return { kind: 'comment', author: 'alice', url: 'https://example.test/pr/42#c1', at: '2099-01-01T00:00:00Z', text: 'hi', canWrite: true, self: false, ...over }
 }
+const REQUEST_AT = '2099-01-01T00:00:00Z'
 const REQUEST = { kind: 'review', reviewState: 'changes_requested', text: 'please rename' } as const
 
 describe('trackPullRequest feedback', () => {
@@ -97,12 +98,43 @@ describe('trackPullRequest feedback', () => {
     const { d, start } = open(); d.codeHost.feedback.set(URL, [fb({ ...REQUEST, author: 'rumba-bot', self: true })])
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
   })
+  const added = (over: Partial<LabelAdded> = {}): LabelAdded => ({ by: 'alice', at: '2026-11-21T00:00:00Z', canWrite: true, self: false, ...over })
   it('starts a round from the revise label alone, with no feedback, and removes the label', async () => {
-    const { d, start } = open(['rumba-revise'])
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added())
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
     expect(s).toMatchObject({ state: 'changes_requested', feedback: [] })
     expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
     expect(d.tracker.comments.at(-1)?.body).toBe(`Rumba was asked to revise the change on the pull request. It will do so on a later run: ${URL}`)
+  })
+  it('starts nothing for a label from someone without write access, and leaves it on', async () => {
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'tess', canWrite: false }))
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    expect(d.codeHost.labelsRemoved).toEqual([]); expect(d.tracker.states.size).toBe(0)
+  })
+  it('starts nothing for a label the account Rumba runs as added', async () => {
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'rumba-bot', self: true }))
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    expect(d.codeHost.labelsRemoved).toEqual([])
+  })
+  it('starts nothing for a label added before the push, and removes it', async () => {
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ at: '2026-11-19T00:00:00Z' }))
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
+    expect(d.tracker.states.size).toBe(0); expect(d.tracker.comments).toHaveLength(0)
+  })
+  it('does not fail when removing a stale label fails', async () => {
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ at: '2026-11-19T00:00:00Z' }))
+    d.codeHost.removeLabel = async () => { throw new Error('label api down') }
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+  })
+  it('keeps the label of a non-writer when a writer asked for changes in a review', async () => {
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'tess', canWrite: false })); d.codeHost.feedback.set(URL, [fb(REQUEST)])
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), start)).state).toBe('changes_requested')
+    expect(d.codeHost.labelsRemoved).toEqual([])
+  })
+  it('keeps the line comments of a review submitted after the push', async () => {
+    const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(REQUEST), fb({ kind: 'line', path: 'a.ts', line: 7, text: 'here', at: REQUEST_AT })])
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), start)).feedback?.map((f) => f.kind).sort()).toEqual(['line', 'review'])
   })
   it('redacts secrets and cuts long text', async () => {
     const { d, start } = open(); d.secrets.push('s3cret')
@@ -125,7 +157,7 @@ describe('trackPullRequest feedback', () => {
     expect(s).toMatchObject({ state: 'changes_requested', errorCount: 2 }); expect(s.feedback).toHaveLength(1)
   })
   it('writes the state, then removes the label, then comments', async () => {
-    const { d, start } = open(['rumba-revise']); d.codeHost.feedback.set(URL, [fb(REQUEST)])
+    const { d, start } = open(['rumba-revise']); d.codeHost.feedback.set(URL, [fb(REQUEST)]); d.codeHost.labelEvents.set(URL, added())
     const order: string[] = []
     const write = d.tracker.writeState.bind(d.tracker); const comment = d.tracker.comment.bind(d.tracker); const remove = d.codeHost.removeLabel.bind(d.codeHost)
     d.tracker.writeState = async (...a) => { order.push('write'); return write(...a) }

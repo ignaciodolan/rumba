@@ -38,6 +38,17 @@ export interface FeedbackItem {
   self: boolean
 }
 
+/** The latest time a label was put on a pull request, and who did it. */
+export interface LabelAdded {
+  by: string
+  /** When, as an ISO timestamp. */
+  at: string
+  /** The actor has write access. False when that cannot be confirmed, and for a bot. */
+  canWrite: boolean
+  /** The actor is the account Rumba runs as. */
+  self: boolean
+}
+
 export interface CodeHost {
   defaultBranch(): Promise<string>
   /** Pushes the workdir's HEAD to the remote branch of that name. */
@@ -51,6 +62,8 @@ export interface CodeHost {
    * Throws when the account Rumba runs as cannot be determined, so nobody is wrongly taken for someone else.
    */
   listFeedback(url: string, since: string): Promise<FeedbackItem[]>
+  /** When and by whom `label` was last added to the pull request; null if it never was. Same URL check as the other reads. */
+  labelAdded(url: string, label: string): Promise<LabelAdded | null>
   /** Removes a label from a pull request. A label that is not there is not an error. */
   removeLabel(url: string, label: string): Promise<void>
 }
