@@ -159,3 +159,23 @@ describe('a command that picks tests by name', () => {
     }
   })
 })
+
+// Found by the automated review: lines whose end state a simple quote count misreads.
+describe('a line that may leave a template open', () => {
+  const inner = (opener: string, title: string, closer = '`)') => `it('c1', async () => {\n  ${opener}\ntest(${title}, () => {})\n${closer}\n})\n`
+
+  it('is read past a regex holding // or a backtick, failing closed', () => {
+    expect(judge(inner('const url = /^https:\\/\\//; await run(`', "'inner'"), inner('const url = /^https:\\/\\//; await run(`', "'${process.exit(0)}'"))).not.toBeNull()
+    expect(judge(inner('const tick = /`/; await run(`', "'inner'"), inner('const tick = /`/; await run(`', "'renamed'"))).not.toBeNull()
+  })
+
+  it('is read with templates nested in ${...}', () => {
+    expect(judge(inner("await run(`${f('`')}", "'inner'"), inner("await run(`${f('`')}", "'${process.exit(0)}'"))).not.toBeNull()
+    expect(judge(inner('await run(`${f(`a`)} ${g(', "'inner'", ')}`)'), inner('await run(`${f(`a`)} ${g(', "'${process.exit(0)}'", ')}`)'))).not.toBeNull()
+  })
+
+  it('still lets a later title be renamed after a line that closes everything it opens', () => {
+    const file = (title: string) => `it('c1', async () => {\n  await run(\`\${f(\`a\`)} done\`)\n})\n\nit(${title}, () => {\n  expect(fulfil('ship')).toBeDefined()\n})\n`
+    expect(judge(file("'c2: ships'"), file("'ships an order'"))).toBeNull()
+  })
+})

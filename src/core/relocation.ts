@@ -371,28 +371,54 @@ function parse(file: string, text: string, keepTitles = false): Parsed {
 }
 
 /**
- * Whether a line ends inside a template literal, a string or a block comment. Errs towards
- * open: a quote or a backtick it cannot place counts as one left open.
+ * Whether a line ends inside a template literal, a string or a block comment. Templates are
+ * followed through their `${...}` expressions, nested templates included. At a `/` outside a
+ * string, which may start a regex, a division or a comment, the rest of the line cannot be
+ * read safely: the line counts as open when anything after it could open a string, a template
+ * or a comment, or when a template is still open.
  */
 function leavesOpen(line: string): boolean {
   if (line.endsWith('\\')) return true
-  let quote: string | null = null
-  for (let n = 0; n < line.length; n++) {
+  // Innermost last: 't' is a template's text, 'e' one of its expressions with its brace depth.
+  const stack: { kind: 't' | 'e'; depth: number }[] = []
+  let n = 0
+  while (n < line.length) {
     const c = line[n]!
-    if (c === '\\') { n += 1; continue }
-    if (quote !== null) {
-      if (c === quote) quote = null
+    const top = stack.at(-1)
+    if (top?.kind === 't') {
+      if (c === '\\') n += 2
+      else if (c === '`') { stack.pop(); n += 1 }
+      else if (c === '$' && line[n + 1] === '{') { stack.push({ kind: 'e', depth: 0 }); n += 2 }
+      else n += 1
       continue
     }
-    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
-    if (c === '/' && line[n + 1] === '/') return false
-    if (c === '/' && line[n + 1] === '*') {
-      const close = line.indexOf('*/', n + 2)
-      if (close === -1) return true
+    if (c === "'" || c === '"') {
+      let close = n + 1
+      while (close < line.length && line[close] !== c) close += line[close] === '\\' ? 2 : 1
+      if (close >= line.length) return true
       n = close + 1
+      continue
     }
+    if (c === '`') { stack.push({ kind: 't', depth: 0 }); n += 1; continue }
+    if (c === '/') {
+      if (line[n + 1] === '*') {
+        const close = line.indexOf('*/', n + 2)
+        if (close === -1) return true
+        n = close + 2
+        continue
+      }
+      return /[`'"]|\/\*/.test(line.slice(n + 1)) || stack.length > 0
+    }
+    if (top?.kind === 'e') {
+      if (c === '{') top.depth += 1
+      else if (c === '}') {
+        if (top.depth === 0) stack.pop()
+        else top.depth -= 1
+      }
+    }
+    n += 1
   }
-  return quote !== null
+  return stack.length > 0
 }
 
 /** A call that takes a test's title as its first argument: describe, it, test and the like, with any modifiers. */
