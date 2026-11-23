@@ -1,3 +1,9 @@
+/**
+ * The code host cannot tell which account Rumba runs as, so it cannot tell Rumba's own feedback from
+ * anyone else's. A setup error, not a ticket error: every ticket would fail the same way.
+ */
+export class CodeHostIdentityError extends Error {}
+
 export interface PullRequestDraft {
   title: string
   body: string

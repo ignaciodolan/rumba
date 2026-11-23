@@ -5,6 +5,7 @@ import path from 'node:path'
 import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { gitAuthEnv, GitHubCodeHost } from '../../../src/adapters/codeHost/github.js'
+import { CodeHostIdentityError } from '../../../src/ports/codeHost.js'
 import { httpError, paged, route, stubOctokit } from '../tracker/githubStub.js'
 
 const TOKEN = 'ghp_faketoken0123456789'
@@ -251,6 +252,7 @@ describe('GitHubCodeHost feedback and labels', () => {
   it('throws when the account cannot be determined, rather than marking nobody as self', async () => {
     const { host } = setup({ comments: [comment()], permissions: WRITE, viewerLogin: null, userLogin: null })
     await expect(host.listFeedback(URL7, '2026-01-01T00:00:00Z')).rejects.toThrow(/RUMBA_GITHUB_LOGIN/)
+    await expect(host.listFeedback(URL7, '2026-01-01T00:00:00Z')).rejects.toBeInstanceOf(CodeHostIdentityError)
   })
 
   it('reads every page of every list', async () => {

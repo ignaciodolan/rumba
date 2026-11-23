@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { runRumba, TrackerIdentityError } from '../../src/core/runner.js'
 import { newState, transition } from '../../src/core/states.js'
+import { CodeHostIdentityError } from '../../src/ports/codeHost.js'
 import { AgentError } from '../../src/ports/agent.js'
 import { failing, happyTriage, makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
 
@@ -221,6 +222,16 @@ describe('runRumba', () => {
     expect(err).toBeInstanceOf(TrackerIdentityError)
     expect((err as Error).message).toContain('RUMBA_GITHUB_LOGIN')
     expect(d.agent.calls).toHaveLength(0)
+  })
+  it('stops the run on CodeHostIdentityError without counting an error on any ticket', async () => {
+    const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+    d.tracker.states.set('1', prOpenState(d, 1)); d.tracker.states.set('2', prOpenState(d, 2))
+    d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
+    d.codeHost.listFeedback = async () => { throw new CodeHostIdentityError('Set RUMBA_GITHUB_LOGIN') }
+    const err = await runRumba(d, makeRumba()).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(CodeHostIdentityError)
+    expect(d.tracker.states.get('1')).toEqual(prOpenState(d, 1)); expect(d.tracker.states.get('2')).toEqual(prOpenState(d, 2))
+    expect(d.tracker.comments).toEqual([])
   })
   describe('pull requests in pr_open', () => {
     it('moves a ticket whose pull request was merged to merged, and says when', async () => {

@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises'
 import type { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
 import { cleanOutput } from '../../core/redact.js'
-import type { CodeHost, FeedbackItem, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
+import { CodeHostIdentityError, type CodeHost, FeedbackItem, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
 
 const PER_PAGE = 100
 
@@ -200,7 +200,7 @@ export class GitHubCodeHost implements CodeHost {
       try {
         return (await this.octokit.rest.users.getAuthenticated()).data.login
       } catch {
-        throw new Error(UNKNOWN_LOGIN)
+        throw new CodeHostIdentityError(UNKNOWN_LOGIN)
       }
     }
   }

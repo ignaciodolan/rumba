@@ -1,6 +1,7 @@
 import type { RumbaConfig } from '../config/load.js'
 import type { Deps } from '../ports/deps.js'
 import { LEASE_MARGIN_MINUTES } from './budget.js'
+import { CodeHostIdentityError } from '../ports/codeHost.js'
 import { InfrastructureError } from '../ports/environment.js'
 import { advanceTicket } from './engine.js'
 import { trackPullRequest } from './steps/trackPullRequest.js'
@@ -60,7 +61,7 @@ export async function runRumba(deps: Deps, rumba: RumbaConfig, opts: { ticketId?
     try {
       await handle(deps, rumba, ticket, summary, count)
     } catch (e) {
-      if (e instanceof TrackerIdentityError) throw e
+      if (e instanceof TrackerIdentityError || e instanceof CodeHostIdentityError) throw e
       summary.left.push({ ticket: ticket.id, why: `error: ${cleanOutput(messageOf(e), deps.secrets)}` })
     }
   }
@@ -141,6 +142,8 @@ async function checkPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ticket, 
     if (next.state === state.state) summary.left.push({ ticket: ticket.id, why: 'pull request open' })
     else summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
   } catch (e) {
+    // A setup error, not the ticket's: it stops the run and counts against no ticket.
+    if (e instanceof CodeHostIdentityError) throw e
     summary.left.push({ ticket: ticket.id, why: await recordError(deps, ticket, state, e, count) })
   }
 }
