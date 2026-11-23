@@ -2,7 +2,7 @@ import type { RumbaConfig } from '../config/load.js'
 import { defaultLabels } from '../core/labels.js'
 import { newState, transition } from '../core/states.js'
 import type {
-  Check, CheckResult, Criterion, LabelNames, LinkedDocument, Ticket, TicketState,
+  Check, CheckResult, Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
 } from '../core/types.js'
 import type { Agent, AgentResult, AgentTask, AgentTaskKind } from '../ports/agent.js'
 import type { CodeHost, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
@@ -48,8 +48,14 @@ export class FakeTracker implements Tracker {
 
   async ensureLabels(): Promise<void> {}
 
-  async listCandidates(): Promise<Ticket[]> {
-    return this.tickets.filter((t) => t.labels.includes(this.labels.optIn) && !this.closed.has(t.id))
+  async listCandidates(opts: { closedIn?: StateName[] } = {}): Promise<Ticket[]> {
+    const closedIn = opts.closedIn ?? []
+    return this.tickets.filter((t) => {
+      if (!t.labels.includes(this.labels.optIn)) return false
+      if (!this.closed.has(t.id)) return true
+      const state = this.states.get(t.id)?.state
+      return state !== undefined && closedIn.includes(state)
+    })
   }
 
   async getTicket(id: string): Promise<Ticket> {

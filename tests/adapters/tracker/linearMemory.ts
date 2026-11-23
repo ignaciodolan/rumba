@@ -82,9 +82,9 @@ export class MemoryLinearGateway implements LinearGateway {
     return this.viewer
   }
 
-  async issues(o: { team: string; project?: string; label: string }): Promise<LinearIssue[]> {
+  async issues(o: { team: string; project?: string; label: string; closed?: boolean }): Promise<LinearIssue[]> {
     return [...this.issuesById.values()]
-      .filter((i) => i.team === o.team && (o.project === undefined || i.project === o.project))
+      .filter((i) => i.closed === (o.closed ?? false) && i.team === o.team && (o.project === undefined || i.project === o.project))
       .map((i) => this.toIssue(i))
       .filter((i) => i.labels.includes(o.label))
   }

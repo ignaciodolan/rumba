@@ -94,5 +94,29 @@ export function trackerContract(name: string, make: () => Promise<TrackerUnderTe
       await u.seedTicket(['rumba:other'])
       expect((await tracker.listCandidates()).map((t) => t.id)).toEqual([wanted.id])
     })
+
+    it('lists a closed ticket in a given state only when asked for that state', async () => {
+      const u = await make()
+      const { tracker } = u
+      const open = await u.seedTicket([LABELS.optIn])
+      const closed = await u.seedTicket([LABELS.optIn, stateLabel(LABELS, 'pr_open')], { closed: true })
+      expect((await tracker.listCandidates()).map((t) => t.id)).toEqual([open.id])
+      expect((await tracker.listCandidates({ closedIn: ['pr_open'] })).map((t) => t.id).sort()).toEqual([open.id, closed.id].sort())
+      expect((await tracker.listCandidates({ closedIn: ['merged'] })).map((t) => t.id)).toEqual([open.id])
+    })
+
+    it('does not list a closed ticket in another state', async () => {
+      const u = await make()
+      const { tracker } = u
+      await u.seedTicket([LABELS.optIn, stateLabel(LABELS, 'merged')], { closed: true })
+      expect(await tracker.listCandidates({ closedIn: ['pr_open'] })).toEqual([])
+    })
+
+    it('lists an open ticket once even when its state is in closedIn', async () => {
+      const u = await make()
+      const { tracker } = u
+      const t = await u.seedTicket([LABELS.optIn, stateLabel(LABELS, 'pr_open')])
+      expect((await tracker.listCandidates({ closedIn: ['pr_open', 'merged'] })).map((x) => x.id)).toEqual([t.id])
+    })
   })
 }
