@@ -9,7 +9,8 @@ import type { Tracker } from '../../ports/tracker.js'
 export interface LinearGateway {
   /** The id of the user the API key belongs to. */
   viewerId(): Promise<string>
-  issues(o: { team: string; project?: string; label: string }): Promise<LinearIssue[]>
+  /** Open issues, or with `closed` only the closed ones. */
+  issues(o: { team: string; project?: string; label: string; closed?: boolean }): Promise<LinearIssue[]>
   /** Takes the issue UUID or its identifier, such as ENG-12. */
   issue(id: string): Promise<LinearIssue>
   /** Every label an issue of the team can carry: team labels and workspace labels. */
@@ -67,11 +68,16 @@ export class LinearTracker implements Tracker {
     for (const name of wanted) if (idsNamed(existing, name).length === 0) await this.createLabel(name)
   }
 
-  async listCandidates(): Promise<Ticket[]> {
-    const issues = await this.gateway.issues({
-      team: this.team, ...(this.project === undefined ? {} : { project: this.project }), label: this.labels.optIn,
-    })
-    return issues.filter((i) => i.open && i.labels.includes(this.labels.optIn)).map((i) => this.remember(i))
+  async listCandidates(opts: { closedIn?: StateName[] } = {}): Promise<Ticket[]> {
+    const where = { team: this.team, ...(this.project === undefined ? {} : { project: this.project }), label: this.labels.optIn }
+    const tickets = (await this.gateway.issues(where)).filter((i) => i.open && i.labels.includes(this.labels.optIn))
+    const closedLabels = new Set((opts.closedIn ?? []).map((s) => stateLabel(this.labels, s)))
+    if (closedLabels.size > 0) {
+      const closed = await this.gateway.issues({ ...where, closed: true })
+      tickets.push(...closed.filter((i) => !i.open && i.labels.includes(this.labels.optIn) && i.labels.some((l) => closedLabels.has(l))))
+    }
+    const seen = new Set<string>()
+    return tickets.filter((i) => !seen.has(i.identifier) && seen.add(i.identifier)).map((i) => this.remember(i))
   }
 
   async getTicket(id: string): Promise<Ticket> {
@@ -216,13 +222,13 @@ export class SdkLinearGateway implements LinearGateway {
     return (await this.client.viewer).id
   }
 
-  async issues(o: { team: string; project?: string; label: string }): Promise<LinearIssue[]> {
+  async issues(o: { team: string; project?: string; label: string; closed?: boolean }): Promise<LinearIssue[]> {
     const issues = await allNodes(await this.client.issues({
       first: PAGE_SIZE,
       filter: {
         team: { key: { eq: o.team } },
         labels: { some: { name: { eq: o.label } } },
-        state: { type: { nin: CLOSED_STATE_TYPES } },
+        state: { type: o.closed ? { in: CLOSED_STATE_TYPES } : { nin: CLOSED_STATE_TYPES } },
         ...(o.project === undefined ? {} : { project: { name: { eq: o.project } } }),
       },
     }))

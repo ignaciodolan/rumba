@@ -3,6 +3,7 @@ import type { Deps } from '../ports/deps.js'
 import { LEASE_MARGIN_MINUTES } from './budget.js'
 import { InfrastructureError } from '../ports/environment.js'
 import { advanceTicket } from './engine.js'
+import { trackPullRequest } from './steps/trackPullRequest.js'
 import { cleanOutput } from './redact.js'
 import { ENDS, isDurable, newState, transition } from './states.js'
 import type { StateName, Ticket, TicketState } from './types.js'
@@ -23,7 +24,7 @@ const INTERRUPTED = 'Rumba was interrupted repeatedly while working on this tick
 export class TrackerIdentityError extends Error {}
 
 /** What the run has spent so far. */
-interface RunCount { errors: number }
+interface RunCount { errors: number; worked: number }
 
 function withoutLease(s: TicketState): TicketState {
   const { lease: _lease, ...rest } = structuredClone(s)
@@ -52,9 +53,9 @@ function optInPrefix(rumba: RumbaConfig): string {
 /** Lists the rumba's tickets and advances each one, within the run limits. */
 export async function runRumba(deps: Deps, rumba: RumbaConfig, opts: { ticketId?: string } = {}): Promise<RunSummary> {
   await deps.tracker.ensureLabels()
-  const tickets = opts.ticketId === undefined ? await deps.tracker.listCandidates() : [await deps.tracker.getTicket(opts.ticketId)]
+  const tickets = opts.ticketId === undefined ? await deps.tracker.listCandidates({ closedIn: ['pr_open'] }) : [await deps.tracker.getTicket(opts.ticketId)]
   const summary: RunSummary = { rumba: rumba.name, advanced: [], left: [] }
-  const count: RunCount = { errors: 0 }
+  const count: RunCount = { errors: 0, worked: 0 }
   for (const ticket of tickets) {
     try {
       await handle(deps, rumba, ticket, summary, count)
@@ -101,8 +102,9 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
     }
   }
 
-  if (ENDS.includes(state.state) || state.state === 'pr_open') return left(state.state)
-  if (summary.advanced.length + count.errors >= limits.maxTicketsPerRun) return left('run limit')
+  if (ENDS.includes(state.state)) return left(state.state)
+  if (state.state === 'pr_open') return await checkPullRequest(deps, rumba, ticket, state, summary, count)
+  if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 
   const from = state.state
   state = { ...state, lease: { runId: deps.runId, at: deps.clock().toISOString() } }
@@ -118,24 +120,44 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   try {
     result = await advanceTicket(deps, rumba, ticket, state)
   } catch (e) {
-    count.errors += 1
-    const message = cleanOutput(messageOf(e), deps.secrets)
-    const current = (await deps.tracker.readState(ticket)) ?? state
-    let next: TicketState = { ...withoutLease(current), state: current.lastDurable, errorCount: current.errorCount + 1 }
-    if (next.errorCount >= MAX_ERRORS) {
-      next = transition(next, 'needs_human', deps.clock(), 'repeated errors')
-      await deps.tracker.comment(ticket, `Rumba hit repeated errors on this ticket: ${message}`)
-    } else if (e instanceof InfrastructureError) {
-      // Say plainly that it was the machine, so nobody reads it as a problem with the change.
-      await deps.tracker.comment(ticket,
-        `Rumba stopped because of a problem with the machine, not with the change: ${message} ` +
-        `This counts as error ${next.errorCount} of ${MAX_ERRORS}, not as a fix attempt. The next run tries again.`)
-    }
-    await deps.tracker.writeState(ticket, next)
-    return left(`error: ${message}`)
+    return left(await recordError(deps, ticket, state, e, count))
   }
 
   await deps.tracker.writeState(ticket, withoutLease(result))
   if (result.state === 'awaiting_criteria') return left('awaiting criteria')
+  count.worked += 1
   summary.advanced.push({ ticket: ticket.id, from, to: result.state })
+}
+
+/**
+ * Reads the pull request of a ticket in `pr_open`. It needs no lease and no engine, so it does not
+ * count toward the run limit; only a failed read does, like any other error.
+ */
+async function checkPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, summary: RunSummary, count: RunCount): Promise<void> {
+  try {
+    const next = await trackPullRequest(deps, rumba, ticket, state)
+    if (next.state === state.state) summary.left.push({ ticket: ticket.id, why: 'pull request open' })
+    else summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
+  } catch (e) {
+    summary.left.push({ ticket: ticket.id, why: await recordError(deps, ticket, state, e, count) })
+  }
+}
+
+/** Counts one error on the ticket and returns it to its last durable state; returns the summary line. */
+async function recordError(deps: Deps, ticket: Ticket, state: TicketState, e: unknown, count: RunCount): Promise<string> {
+  count.errors += 1
+  const message = cleanOutput(messageOf(e), deps.secrets)
+  const current = (await deps.tracker.readState(ticket)) ?? state
+  let next: TicketState = { ...withoutLease(current), state: current.lastDurable, errorCount: current.errorCount + 1 }
+  if (next.errorCount >= MAX_ERRORS) {
+    next = transition(next, 'needs_human', deps.clock(), 'repeated errors')
+    await deps.tracker.comment(ticket, `Rumba hit repeated errors on this ticket: ${message}`)
+  } else if (e instanceof InfrastructureError) {
+    // Say plainly that it was the machine, so nobody reads it as a problem with the change.
+    await deps.tracker.comment(ticket,
+      `Rumba stopped because of a problem with the machine, not with the change: ${message} ` +
+      `This counts as error ${next.errorCount} of ${MAX_ERRORS}, not as a fix attempt. The next run tries again.`)
+  }
+  await deps.tracker.writeState(ticket, next)
+  return `error: ${message}`
 }

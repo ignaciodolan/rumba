@@ -144,7 +144,7 @@ export function redactingTracker(inner: Tracker, secrets: string[]): Tracker {
   const r = (text: string) => redact(text, secrets)
   return {
     ensureLabels: () => inner.ensureLabels(),
-    listCandidates: () => inner.listCandidates(),
+    listCandidates: (opts) => inner.listCandidates(opts),
     getTicket: (id) => inner.getTicket(id),
     readState: (t) => inner.readState(t),
     writeState: (t, s) => inner.writeState(t, redactDeep(s, secrets)),
@@ -162,6 +162,7 @@ export function redactingCodeHost(inner: CodeHost, secrets: string[]): CodeHost 
     defaultBranch: () => inner.defaultBranch(),
     pushBranch: (workdir, branch, opts) => inner.pushBranch(workdir, branch, opts),
     deleteBranch: (branch) => inner.deleteBranch(branch),
+    getPullRequest: (url) => inner.getPullRequest(url),
     openPullRequest: (pr) => inner.openPullRequest({ ...pr, title: redact(pr.title, secrets), body: redact(pr.body, secrets) }),
   }
 }

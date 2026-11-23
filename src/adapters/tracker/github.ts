@@ -83,11 +83,20 @@ export class GitHubTracker implements Tracker {
     }
   }
 
-  async listCandidates(): Promise<Ticket[]> {
-    const issues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
-      ...this.where(), state: 'open', labels: this.labels.optIn, per_page: PER_PAGE,
-    })
-    return issues.filter((i) => !i.pull_request).map((i) => toTicket(i))
+  async listCandidates(opts: { closedIn?: StateName[] } = {}): Promise<Ticket[]> {
+    const lists: { state: 'open' | 'closed'; labels: string }[] = [{ state: 'open', labels: this.labels.optIn }]
+    for (const s of new Set(opts.closedIn ?? [])) lists.push({ state: 'closed', labels: `${this.labels.optIn},${stateLabel(this.labels, s)}` })
+    const seen = new Set<number>()
+    const tickets: Ticket[] = []
+    for (const l of lists) {
+      const issues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, { ...this.where(), ...l, per_page: PER_PAGE })
+      for (const i of issues) {
+        if (i.pull_request || seen.has(i.number)) continue
+        seen.add(i.number)
+        tickets.push(toTicket(i))
+      }
+    }
+    return tickets
   }
 
   async getTicket(id: string): Promise<Ticket> {

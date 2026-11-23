@@ -4,14 +4,17 @@ export const STATE_NAMES = [
   'queued', 'triaged', 'awaiting_criteria', 'criteria_ready', 'env_ready',
   'checks_failing', 'building', 'verified', 'pr_open',
   'skipped', 'not_reproducible', 'needs_human', 'fix_failed',
+  'merged', 'rejected',
 ] as const satisfies readonly StateName[]
 
 export const DURABLE: readonly StateName[] = [
   'queued', 'awaiting_criteria', 'criteria_ready', 'pr_open',
   'skipped', 'not_reproducible', 'needs_human', 'fix_failed',
+  'merged', 'rejected',
 ]
 
-export const ENDS: readonly StateName[] = ['skipped', 'not_reproducible', 'needs_human', 'fix_failed']
+/** `merged` and `rejected` are how a pull request ends; like the others they wait for a retry label. */
+export const ENDS: readonly StateName[] = ['skipped', 'not_reproducible', 'needs_human', 'fix_failed', 'merged', 'rejected']
 
 const MOVES: Record<StateName, StateName[]> = {
   queued: ['triaged'],
@@ -22,11 +25,13 @@ const MOVES: Record<StateName, StateName[]> = {
   checks_failing: ['building'],
   building: ['verified', 'fix_failed', 'needs_human'],
   verified: ['pr_open'],
-  pr_open: [],
+  pr_open: ['merged', 'rejected'],
   skipped: [],
   not_reproducible: [],
   needs_human: [],
   fix_failed: [],
+  merged: [],
+  rejected: [],
 }
 
 export function isDurable(s: StateName): boolean {

@@ -2,10 +2,10 @@ import type { RumbaConfig } from '../config/load.js'
 import { defaultLabels } from '../core/labels.js'
 import { newState, transition } from '../core/states.js'
 import type {
-  Check, CheckResult, Criterion, LabelNames, LinkedDocument, Ticket, TicketState,
+  Check, CheckResult, Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
 } from '../core/types.js'
 import type { Agent, AgentResult, AgentTask, AgentTaskKind } from '../ports/agent.js'
-import type { CodeHost, PullRequestDraft } from '../ports/codeHost.js'
+import type { CodeHost, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
 import type { Deps } from '../ports/deps.js'
 import type { EnvHandle, EnvRef, Environment } from '../ports/environment.js'
 import type { Tracker } from '../ports/tracker.js'
@@ -48,8 +48,14 @@ export class FakeTracker implements Tracker {
 
   async ensureLabels(): Promise<void> {}
 
-  async listCandidates(): Promise<Ticket[]> {
-    return this.tickets.filter((t) => t.labels.includes(this.labels.optIn) && !this.closed.has(t.id))
+  async listCandidates(opts: { closedIn?: StateName[] } = {}): Promise<Ticket[]> {
+    const closedIn = opts.closedIn ?? []
+    return this.tickets.filter((t) => {
+      if (!t.labels.includes(this.labels.optIn)) return false
+      if (!this.closed.has(t.id)) return true
+      const state = this.states.get(t.id)?.state
+      return state !== undefined && closedIn.includes(state)
+    })
   }
 
   async getTicket(id: string): Promise<Ticket> {
@@ -186,6 +192,10 @@ export class FakeCodeHost implements CodeHost {
   pushed: { branch: string; force: boolean }[] = []
   deleted: string[] = []
   prs: PullRequestDraft[] = []
+  /** What getPullRequest returns for a URL. A URL openPullRequest returned and that is not set here is open. */
+  pullRequests = new Map<string, PullRequestInfo>()
+  pullRequestError: Error | null = null
+  private readonly opened = new Set<string>()
 
   async defaultBranch(): Promise<string> {
     return 'main'
@@ -201,7 +211,17 @@ export class FakeCodeHost implements CodeHost {
 
   async openPullRequest(pr: PullRequestDraft): Promise<string> {
     this.prs.push(pr)
-    return `https://example.test/pr/${this.prs.length}`
+    const url = `https://example.test/pr/${this.prs.length}`
+    this.opened.add(url)
+    return url
+  }
+
+  async getPullRequest(url: string): Promise<PullRequestInfo> {
+    if (this.pullRequestError) throw this.pullRequestError
+    const known = this.pullRequests.get(url)
+    if (known) return known
+    if (this.opened.has(url)) return { state: 'open', headSha: 'head0' }
+    throw new Error(`FakeCodeHost: no pull request at ${url}`)
   }
 }
 

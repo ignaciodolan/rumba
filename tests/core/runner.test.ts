@@ -4,6 +4,13 @@ import { newState, transition } from '../../src/core/states.js'
 import { AgentError } from '../../src/ports/agent.js'
 import { failing, happyTriage, makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
 
+const PR = 'https://example.test/pr/42'
+const oneTicket = makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } })
+
+function prOpenState(d: ReturnType<typeof makeDeps>, errorCount = 0) {
+  return { ...newState('shop', d.clock()), state: 'pr_open' as const, lastDurable: 'pr_open' as const, pullRequestUrl: PR, errorCount }
+}
+
 describe('runRumba', () => {
   it('advances a queued ticket and records it', async () => {
     const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1', labels: ['rumba:shop'] }))
@@ -87,14 +94,40 @@ describe('runRumba', () => {
     d.tracker.states.set('1', { ...failing(d), state: 'building', lastDurable: 'criteria_ready' })
     expect((await runRumba(d, makeRumba())).advanced[0]).toMatchObject({ from: 'criteria_ready' })
   })
-  it('leaves ended and pr_open tickets with the state name and no limit cost', async () => {
+  it('leaves ended tickets and one with an open pull request, at no limit cost', async () => {
     const d = makeDeps(); scriptHappyBug(d)
     d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }), makeTicket({ id: '3' }))
     d.tracker.states.set('1', transition(newState('shop', d.clock()), 'needs_human', d.clock()))
-    d.tracker.states.set('2', { ...newState('shop', d.clock()), state: 'pr_open', lastDurable: 'pr_open' })
+    d.tracker.states.set('2', prOpenState(d))
+    d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
     const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } }))
-    expect(r.left).toEqual([{ ticket: '1', why: 'needs_human' }, { ticket: '2', why: 'pr_open' }])
+    expect(r.left).toEqual([{ ticket: '1', why: 'needs_human' }, { ticket: '2', why: 'pull request open' }])
     expect(r.advanced.map(a => a.ticket)).toEqual(['3'])
+  })
+  it('does not spend a run-limit slot on a pull request that just ended', async () => {
+    const d = makeDeps(); scriptHappyBug(d)
+    d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+    d.tracker.states.set('1', prOpenState(d))
+    d.codeHost.pullRequests.set(PR, { state: 'merged', headSha: 'h' })
+    const r = await runRumba(d, oneTicket)
+    expect(r.advanced).toEqual([{ ticket: '1', from: 'pr_open', to: 'merged' }, { ticket: '2', from: 'queued', to: 'pr_open' }])
+    expect(r.left).toEqual([])
+  })
+  it.each(['merged', 'rejected'] as const)('leaves a %s ticket without the retry label alone, at no limit cost', async (name) => {
+    const d = makeDeps(); scriptHappyBug(d)
+    d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+    d.tracker.states.set('1', { ...newState('shop', d.clock()), state: name, lastDurable: name })
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    expect(r.left).toEqual([{ ticket: '1', why: name }])
+    expect(r.advanced.map(a => a.ticket)).toEqual(['2'])
+    expect(d.tracker.states.get('1')?.state).toBe(name)
+  })
+  it.each(['merged', 'rejected'] as const)('restarts a %s ticket on rumba-retry like fix_failed', async (name) => {
+    const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
+    d.tracker.states.set('1', { ...newState('shop', d.clock()), state: name, lastDurable: name, errorCount: 3, fixAttempts: 2 })
+    const r = await runRumba(d, makeRumba())
+    expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' }); expect(t.labels).not.toContain('rumba-retry')
+    expect(d.tracker.states.get('1')).toMatchObject({ fixAttempts: 0, errorCount: 0 })
   })
   it('lists a ticket that stays in awaiting_criteria as left, with no lease', async () => {
     const d = makeDeps(); scriptFeatureWithoutCriteria(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
@@ -164,6 +197,58 @@ describe('runRumba', () => {
     expect(err).toBeInstanceOf(TrackerIdentityError)
     expect((err as Error).message).toContain('RUMBA_GITHUB_LOGIN')
     expect(d.agent.calls).toHaveLength(0)
+  })
+  describe('pull requests in pr_open', () => {
+    it('moves a ticket whose pull request was merged to merged, and says when', async () => {
+      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', prOpenState(d))
+      d.codeHost.pullRequests.set(PR, { state: 'merged', headSha: 'h', mergedAt: '2026-11-20T10:00:00Z' })
+      const r = await runRumba(d, makeRumba())
+      expect(r.advanced).toEqual([{ ticket: '1', from: 'pr_open', to: 'merged' }])
+      expect(d.tracker.states.get('1')?.history.at(-1)?.note).toBe('merged at 2026-11-20T10:00:00Z')
+      expect(d.tracker.states.get('1')?.lease).toBeUndefined()
+    })
+    it('moves a ticket whose pull request was closed to rejected', async () => {
+      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', prOpenState(d))
+      d.codeHost.pullRequests.set(PR, { state: 'closed', headSha: 'h' })
+      expect((await runRumba(d, makeRumba())).advanced).toEqual([{ ticket: '1', from: 'pr_open', to: 'rejected' }])
+    })
+    it('finds a ticket the merge closed', async () => {
+      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.closed.add('1'); d.tracker.states.set('1', prOpenState(d))
+      d.codeHost.pullRequests.set(PR, { state: 'merged', headSha: 'h' })
+      expect((await runRumba(d, makeRumba())).advanced[0]).toMatchObject({ to: 'merged' })
+    })
+    it('open pull requests do not use up the run limit', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      for (const id of ['1', '2', '3']) { d.tracker.tickets.push(makeTicket({ id })); d.tracker.states.set(id, prOpenState(d)) }
+      d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
+      d.tracker.tickets.push(makeTicket({ id: '4' }))
+      const r = await runRumba(d, oneTicket)
+      expect(r.advanced).toEqual([{ ticket: '4', from: 'queued', to: 'pr_open' }])
+      expect(r.left.map((l) => l.why)).toEqual(['pull request open', 'pull request open', 'pull request open'])
+    })
+    it('moves a merged ticket even when the run limit is reached', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+      d.tracker.states.set('2', prOpenState(d))
+      d.codeHost.pullRequests.set(PR, { state: 'merged', headSha: 'h' })
+      const r = await runRumba(d, oneTicket)
+      expect(r.advanced.map((a) => a.ticket)).toEqual(['1', '2'])
+    })
+    it('counts a failed read as one error and keeps pr_open', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' })); d.tracker.states.set('1', prOpenState(d))
+      d.codeHost.pullRequestError = new Error('api down')
+      const r = await runRumba(d, oneTicket)
+      expect(d.tracker.states.get('1')).toMatchObject({ state: 'pr_open', errorCount: 1 })
+      expect(r.left).toEqual([{ ticket: '1', why: 'error: api down' }, { ticket: '2', why: 'run limit' }])
+    })
+    it('moves to needs_human on the third failed read', async () => {
+      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', prOpenState(d, 2))
+      d.codeHost.pullRequestError = new Error('api down')
+      await runRumba(d, makeRumba())
+      expect(d.tracker.states.get('1')?.state).toBe('needs_human')
+      expect(d.tracker.comments.at(-1)?.body).toBe('Rumba hit repeated errors on this ticket: api down')
+    })
   })
 })
 
