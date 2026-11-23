@@ -185,6 +185,14 @@ describe('runRumba', () => {
       // The new pull request's feedback is read since its own push, not since an old round.
       expect(d.tracker.states.get('1')).not.toHaveProperty('answeredAt')
     })
+    it('restarts the count of review rounds on rumba-retry, so the new pull request gets its own rounds', async () => {
+      const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
+      // Stopped at the round limit, then retried by a person.
+      d.tracker.states.set('1', transition(parked(d, { reviewRounds: 2 }), 'needs_human', d.clock(), 'review round limit'))
+      const r = await runRumba(d, makeRumba())
+      expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' })
+      expect(d.tracker.states.get('1')).not.toHaveProperty('reviewRounds')
+    })
   })
   it('lists a ticket that stays in awaiting_criteria as left, with no lease', async () => {
     const d = makeDeps(); scriptFeatureWithoutCriteria(d); d.tracker.tickets.push(makeTicket({ id: '1' }))

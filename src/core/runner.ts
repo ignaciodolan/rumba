@@ -83,8 +83,8 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   let state = stored !== null && stored.rumba === rumba.name ? stored : newState(rumba.name, deps.clock())
 
   if (ticket.labels.includes(labels.retry) && (ENDS.includes(state.state) || state.state === 'pr_open' || state.state === 'changes_requested')) {
-    // A retry starts the attempts again; the old ones would explain nothing about the new run.
-    const { attempts: _attempts, fixSummary: _summary, relocation: _relocation, feedback: _feedback, answeredAt: _answered, ...rest } = state
+    // A retry starts the attempts and the review rounds again; the old ones would explain nothing about the new run.
+    const { attempts: _attempts, fixSummary: _summary, relocation: _relocation, feedback: _feedback, answeredAt: _answered, reviewRounds: _rounds, ...rest } = state
     state = { ...transition(rest, 'queued', deps.clock()), fixAttempts: 0, errorCount: 0 }
     await deps.tracker.writeState(ticket, state)
     await deps.tracker.removeLabel(ticket, labels.retry)
