@@ -5,7 +5,7 @@ import type {
   Check, CheckResult, Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
 } from '../core/types.js'
 import type { Agent, AgentResult, AgentTask, AgentTaskKind } from '../ports/agent.js'
-import type { CodeHost, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
+import type { CodeHost, FeedbackItem, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
 import type { Deps } from '../ports/deps.js'
 import type { EnvHandle, EnvRef, Environment } from '../ports/environment.js'
 import type { Tracker } from '../ports/tracker.js'
@@ -193,7 +193,10 @@ export class FakeCodeHost implements CodeHost {
   deleted: string[] = []
   prs: PullRequestDraft[] = []
   /** What getPullRequest returns for a URL. A URL openPullRequest returned and that is not set here is open. */
-  pullRequests = new Map<string, PullRequestInfo>()
+  pullRequests = new Map<string, Omit<PullRequestInfo, 'labels'> & { labels?: string[] }>()
+  /** The feedback listFeedback returns for a URL, filtered by `since`. */
+  feedback = new Map<string, FeedbackItem[]>()
+  labelsRemoved: { url: string; label: string }[] = []
   pullRequestError: Error | null = null
   private readonly opened = new Set<string>()
 
@@ -219,9 +222,17 @@ export class FakeCodeHost implements CodeHost {
   async getPullRequest(url: string): Promise<PullRequestInfo> {
     if (this.pullRequestError) throw this.pullRequestError
     const known = this.pullRequests.get(url)
-    if (known) return known
-    if (this.opened.has(url)) return { state: 'open', headSha: 'head0' }
+    if (known) return { ...known, labels: known.labels ?? [] }
+    if (this.opened.has(url)) return { state: 'open', headSha: 'head0', labels: [] }
     throw new Error(`FakeCodeHost: no pull request at ${url}`)
+  }
+
+  async listFeedback(url: string, since: string): Promise<FeedbackItem[]> {
+    return (this.feedback.get(url) ?? []).filter((i) => Date.parse(i.at) > Date.parse(since))
+  }
+
+  async removeLabel(url: string, label: string): Promise<void> {
+    this.labelsRemoved.push({ url, label })
   }
 }
 

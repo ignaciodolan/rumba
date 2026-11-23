@@ -66,7 +66,7 @@ export interface StoredComment {
 export type Author = Pick<StoredComment, 'author_association' | 'user'>
 
 /** Pages a list the way GitHub does: per_page (default 30) and page, with a rel="next" Link header. */
-function paged<T>(req: StubRequest, items: T[]): { data: T[]; link: string } {
+export function paged<T>(req: StubRequest, items: T[]): { data: T[]; link: string } {
   const perPage = Number(req.query.get('per_page') ?? 30)
   const page = Number(req.query.get('page') ?? 1)
   const data = items.slice((page - 1) * perPage, page * perPage)
