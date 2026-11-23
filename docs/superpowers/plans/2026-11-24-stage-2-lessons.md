@@ -54,7 +54,7 @@ Files: `src/ports/workspace.ts`, `src/adapters/workspace/git.ts`, `src/testing/f
 
 Files: `src/ports/agent.ts`, `src/adapters/agent/prompts.ts`, `src/adapters/agent/result.ts`, tests.
 
-- As ruled. Task text: "Decide whether the reviewers' feedback below holds a general rule worth keeping for later tickets in this repository. If it does, write it in one to three short lines: what was wrong, and what to do next time. Do not quote the feedback. If the feedback only concerns this change, give the reason there is no general rule instead. Do not change any file." The reviewer-input rule and fenced feedback section as for `revise` (reuse it).
+- As ruled. Task text: "Decide whether the reviewers' feedback below holds a general rule worth keeping for later tickets in this repository. If it does, write it in one to three short lines: what was wrong, and what to do next time. Do not quote the feedback. If the feedback only concerns this change, give the reason there is no general rule instead. Do not change any file except the result file." The reviewer-input rule and fenced feedback section as for `revise` (reuse it).
 - Tests: schema (exactly one of `lesson`/`none`, bounds); prompt contains the reviewer-input warning and fenced feedback, and stays under the byte limit with large feedback (feedback cut last, never dropped silently, as for `revise`).
 
 ## Task 3: lessons in core

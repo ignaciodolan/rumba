@@ -57,7 +57,7 @@ const TASKS: Record<AgentTaskKind, string> = {
   'distill-lesson': [
     "Decide whether the reviewers' feedback below holds a general rule worth keeping for later tickets in this repository.",
     'If it does, write it in one to three short lines: what was wrong, and what to do next time. Do not quote the feedback.',
-    'If the feedback only concerns this change, give the reason there is no general rule instead. Do not change any file.',
+    'If the feedback only concerns this change, give the reason there is no general rule instead. Do not change any file except the result file.',
   ].join(' '),
   'relocate-checks': [
     "Move Rumba's checks into the project's own tests. The change for this ticket is done and the checks below pass on it,",
