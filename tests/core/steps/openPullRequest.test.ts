@@ -26,6 +26,12 @@ describe('openPullRequest', () => {
     await openPullRequest(d, makeRumba({ paths: ['src/**'] }), makeTicket(), verified(d))
     expect(d.codeHost.prs[0]!.body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
   })
+  it("never lists the rumba's lessons file, which a review round's lesson adds, as outside the paths", async () => {
+    const d = makeDeps(); d.workspace.changed = ['src/a.ts', '.rumba/shop/lessons.md', '.rumba/shop/context.md']
+    await openPullRequest(d, makeRumba({ paths: ['src/**'] }), makeTicket(), verified(d))
+    const outside = d.codeHost.prs[0]!.body.split("## Outside this rumba's scope")[1]!
+    expect(outside).not.toContain('lessons.md'); expect(outside).toContain('.rumba/shop/context.md')
+  })
   it('lists an undeclared file from the checks commit that is outside the paths', async () => {
     const d = makeDeps(); d.workspace.changed = ['apps/shop/x.ts', 'packages/ui/helper.ts', 'tests/rumba/c1.test.ts']
     const v = verified(d); v.checkHashes = { ...v.checkHashes, 'packages/ui/helper.ts': 'h2' }

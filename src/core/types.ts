@@ -50,6 +50,19 @@ export interface LinkedDocument { title: string; body: string }
 export interface LabelNames { optIn: string; statePrefix: string; approved: string; retry: string; revise: string }
 /** One piece of review feedback on the pull request; `path` and `line` are set for a comment on a line. */
 export interface Feedback { kind: 'review' | 'line' | 'comment'; author: string; url: string; at: string; text: string; path?: string; line?: number }
+/**
+ * What came of one attempt to draw a lesson from review feedback. `added`: committed, as
+ * `commit` (on its own pull request, `pullRequestUrl`, when the reviewed one was closed).
+ * `none`: no general rule, or no feedback, and why. `refused`: Rumba refused the agent's
+ * lesson, and why. `failed`: the agent or git failed, and how.
+ */
+export interface LessonRecord {
+  at: string
+  status: 'added' | 'none' | 'refused' | 'failed'
+  reason?: string
+  commit?: string
+  pullRequestUrl?: string
+}
 export interface TicketState {
   version: 1
   rumba: string
@@ -84,6 +97,8 @@ export interface TicketState {
   fixSummary?: string
   /** Set once Rumba tried to move the checks into the project's tests. */
   relocation?: Relocation
+  /** The latest lessons drawn from the ticket's reviews, oldest first. */
+  lessons?: LessonRecord[]
   lease?: { runId: string; at: string }
   history: { state: StateName; at: string; note?: string }[]
 }

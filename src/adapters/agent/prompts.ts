@@ -54,6 +54,11 @@ const TASKS: Record<AgentTaskKind, string> = {
     "Revise the change on this branch to answer the reviewers' feedback below. Weigh each item: make the change it asks for",
     'when it is right, and when it is not, leave the code as it is and say why in your reply. Answer each item you address in "replies".',
   ].join(' '),
+  'distill-lesson': [
+    "Decide whether the reviewers' feedback below holds a general rule worth keeping for later tickets in this repository.",
+    'If it does, write it in one to three short lines: what was wrong, and what to do next time. Do not quote the feedback.',
+    'If the feedback only concerns this change, give the reason there is no general rule instead. Do not change any file except the result file.',
+  ].join(' '),
   'relocate-checks': [
     "Move Rumba's checks into the project's own tests. The change for this ticket is done and the checks below pass on it,",
     "but they sit in files Rumba made for itself. Make them ordinary tests of this repository: put them where the project",
@@ -63,6 +68,12 @@ const TASKS: Record<AgentTaskKind, string> = {
 }
 
 const SHAPES: Record<AgentTaskKind, string> = {
+  'distill-lesson': `{
+  "kind": "distill-lesson",
+  "lesson": ["what was wrong, and what to do next time, in one short line"]
+}
+Give exactly one of "lesson" and "none". "lesson" is one to three lines of at most 200 characters each.
+When the feedback holds no general rule, leave "lesson" out and give "none": "why there is no general rule", in a sentence or two.`,
   triage: `{
   "kind": "triage",
   "workable": true,
@@ -266,12 +277,10 @@ function feedbackItem(f: Feedback, i: number, text: string): string {
 }
 
 /** The reviewer sections. Text is cut before it is fenced, so a cut never leaves a fence open. */
-function reviseSections(feedback: Feedback[], texts: string[], diff: string): string[] {
+function reviewerSections(feedback: Feedback[], texts: string[], diff: string | null): string[] {
   const items = feedback.map((f, i) => feedbackItem(f, i, texts[i] ?? f.text)).join('\n\n')
-  return [
-    `# Feedback from reviewers\n${UNTRUSTED_REVIEWERS}\n\n${items}`,
-    `# The change so far\n${fenced(diff)}`,
-  ]
+  const section = `# Feedback from reviewers\n${UNTRUSTED_REVIEWERS}\n\n${items}`
+  return diff === null ? [section] : [section, `# The change so far\n${fenced(diff)}`]
 }
 
 /** Rumba refuses a working directory that holds either; saying so saves the agent a wasted attempt. */
@@ -280,15 +289,16 @@ const NO_REPOSITORIES =
 
 /**
  * The prompt for one task, at most MAX_PROMPT_BYTES of UTF-8. When it would be longer, the
- * documents go first, then (for a revise task) the diff, then the context, then (revise) each
- * feedback item's text, and as a last resort for other tasks everything between the rules and
- * the result is cut. The task, the rules and the result shape are never cut. A revise task
- * never runs without its feedback: when that does not fit, this throws.
+ * documents go first, then (for a revise task) the diff, then the context, then (revise and
+ * distill-lesson) each feedback item's text, and as a last resort for other tasks everything
+ * between the rules and the result is cut. The task, the rules and the result shape are never
+ * cut. A task with feedback never runs without it: when it does not fit, this throws.
  */
 export function buildPrompt(task: AgentTask): string {
+  const hasFeedback = task.kind === 'revise' || task.kind === 'distill-lesson'
   const head = [
     `# Task\n${TASKS[task.kind]}`,
-    `# Rules\n- ${UNTRUSTED}\n${task.kind === 'revise' ? `- ${UNTRUSTED_REVIEWERS}\n` : ''}- Do not change anything under .rumba/.\n- ${NO_REPOSITORIES}`,
+    `# Rules\n- ${UNTRUSTED}\n${hasFeedback ? `- ${UNTRUSTED_REVIEWERS}\n` : ''}- Do not change anything under .rumba/.\n- ${NO_REPOSITORIES}`,
   ].join('\n\n')
   const result = `# Result\nWhen you are done, write this JSON to ${RESULT_PATH}, creating the folder if needed:\n${SHAPES[task.kind]}`
 
@@ -307,7 +317,7 @@ export function buildPrompt(task: AgentTask): string {
   if (task.kind === 'fix' || task.kind === 'revise') rest.push(`# How to fix\n${fixRules(task)}`)
   if (task.kind === 'relocate-checks') rest.push(`# How to move the checks\n${relocateRules(task)}`)
   if ((task.kind === 'write-checks' || task.kind === 'fix' || task.kind === 'revise' || task.kind === 'relocate-checks') && task.execPrefix !== undefined) rest.push(`# Where the checks run\n${whereChecksRun(task.execPrefix)}`)
-  const feedback = task.kind === 'revise' ? task.feedback ?? [] : []
+  const feedback = hasFeedback ? task.feedback ?? [] : []
   const fullDiff = cut(task.diff ?? '', MAX_DIFF, `[diff cut at ${MAX_DIFF} characters]`)
 
   // Last in the middle, so that the last-resort cut takes them first. Text is cut before fencing.
@@ -315,7 +325,7 @@ export function buildPrompt(task: AgentTask): string {
     const middle = [ticket]
     if (ctx !== null) middle.push(`# Context from the maintainers\n${ctx}`)
     if (docs !== null) middle.push(`# Linked documents\n${docs}`)
-    const late = task.kind === 'revise' ? reviseSections(feedback, texts, diff) : []
+    const late = hasFeedback ? reviewerSections(feedback, texts, task.kind === 'revise' ? diff : null) : []
     return [head, ...middle, ...rest, ...late, result].join('\n\n')
   }
   const fits = (p: string): boolean => bytes(p) <= MAX_PROMPT_BYTES
@@ -343,7 +353,7 @@ export function buildPrompt(task: AgentTask): string {
     if (fits(prompt)) return prompt
   }
 
-  if (task.kind === 'revise') return cutFeedback(feedback, (texts) => assemble(ctx, docs, diff, texts))
+  if (hasFeedback) return cutFeedback(feedback, (texts) => assemble(ctx, docs, diff, texts))
 
   // Last resort: cut what lies between the rules and the result.
   const before = `${head}\n\n`

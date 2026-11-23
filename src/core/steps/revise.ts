@@ -6,8 +6,9 @@ import { timeLeft } from '../budget.js'
 import { asksAbout } from '../citation.js'
 import { inertText, renderPullRequestBody } from '../evidence.js'
 import { MAX_FEEDBACK, selectFeedback } from '../feedback.js'
+import { learn, lessonsPath, withLesson } from '../lessons.js'
 import { cleanOutput, redact } from '../redact.js'
-import { transition } from '../states.js'
+import { carriesOn, transition } from '../states.js'
 import type { AttemptRecord, Check, CheckResult, Feedback, Ticket, TicketState } from '../types.js'
 import { onTheBase } from './baseRun.js'
 import {
@@ -212,8 +213,9 @@ async function reviseOnce(r: Round, failures: Failure[], attempt: number): Promi
   const { deps, rumba, ticket, current } = r
   const { workdir } = await deps.workspace.prepare(current.branch!, { fresh: false })
   try {
-    // The agent's sandbox cannot run git, so it is given the change so far.
-    const diff = await deps.workspace.diff(workdir, current.baseSha!, MAX_DIFF)
+    // The agent's sandbox cannot run git, so it is given the change so far. Without the rumba's
+    // lessons: one an earlier round added here is not merged, and lessons reach an agent only from the default branch.
+    const diff = await deps.workspace.diff(workdir, current.baseSha!, MAX_DIFF, [lessonsPath(rumba.name)])
     const result = await deps.agent.run({
       kind: 'revise', ticket, context: rumba.context, environmentKind: rumba.environment.kind, timeoutMs: timeLeft(deps), ...execPrefixOf(rumba),
       criteria: current.criteria, checks: current.checks, feedback: r.feedback, diff, lockedFiles: r.lock.files, failures, attempt,
@@ -362,7 +364,7 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
     lines.push(`- Check for ${oneLine(d.criterionId, deps.secrets, 100)} changed, as asked in ${askedUrl(r, d)}: ${oneLine(d.reason, deps.secrets, MAX_REPLY)}`)
   }
   await quietly(() => deps.codeHost.commentOnPullRequest(url, lines.join('\n')))
-  return next
+  return withRoundLesson(r, next)
 }
 
 /** The agent found nothing to change: its reason and replies go on the pull request, and nothing is pushed. */
@@ -380,7 +382,37 @@ async function answerWithoutChange(r: Round, outcome: Extract<Outcome, { kind: '
   const lines = feedbackLines(r, outcome.result)
   const reply = ["Rumba made no change in this round. The agent's reason:", '', reason, ...(lines.length > 0 ? ['', ...lines] : [])]
   await quietly(() => deps.codeHost.commentOnPullRequest(url, reply.join('\n')))
+  return withRoundLesson(r, next)
+}
+
+/**
+ * Draws a lesson from the round's feedback and commits it on the fix branch, on top of what the
+ * round left there, pushed without force like the round. Runs once the round is recorded and
+ * replied to. Nothing here undoes the round or counts as an error: learn never throws, and the
+ * reply and the record are written quietly.
+ */
+async function withRoundLesson(r: Round, state: TicketState): Promise<TicketState> {
+  const { deps, rumba, ticket } = r
+  const record = await learn(deps, rumba, ticket, state, { feedback: r.feedback, url: state.pullRequestUrl!, branch: state.branch!, push: { force: false } })
+  // The commit is on the pull request whatever happens to the record, so the reviewer is told.
+  if (record.status === 'added') await quietly(() => deps.codeHost.commentOnPullRequest(state.pullRequestUrl!, lessonReply(rumba, record.commit!)))
+  // pr_open holds no lease, and the agent may have taken minutes: a run that moved the ticket
+  // since (the pull request closed, a new round asked for) wrote the state that stands.
+  const stored = await deps.tracker.readState(ticket).catch(() => null)
+  if (stored === null || stored.state !== 'pr_open' || !carriesOn(state, stored) || !carriesOn(stored, state)) return state
+  const next = withLesson(state, record)
+  try {
+    await deps.tracker.writeState(ticket, next)
+  } catch {
+    // The round is recorded; only the lesson's record is lost.
+    return state
+  }
   return next
+}
+
+/** The reply that tells the reviewer a lesson commit was added, and how to leave it out. */
+function lessonReply(rumba: RumbaConfig, commit: string): string {
+  return `Rumba added a lesson from this review to \`${lessonsPath(rumba.name)}\` (commit ${commit.slice(0, 7)}). Merging this pull request adds it; drop the commit to leave it out.`
 }
 
 /** Every attempt failed: the branch goes back to where the round started, and a person takes over. */

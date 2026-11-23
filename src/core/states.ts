@@ -60,6 +60,18 @@ export function newState(rumba: string, _now: Date): TicketState {
   }
 }
 
+/**
+ * True when `later` carries on from `earlier`: its history holds all of earlier's moves, and
+ * perhaps more. False when another run moved the ticket on from where `later` was made.
+ */
+export function carriesOn(earlier: TicketState, later: TicketState): boolean {
+  const n = earlier.history.length
+  if (n === 0) return true
+  const a = earlier.history[n - 1]!
+  const b = later.history[n - 1]
+  return b !== undefined && a.state === b.state && a.at === b.at && a.note === b.note
+}
+
 export function transition(s: TicketState, to: StateName, now: Date, note?: string): TicketState {
   if (!canTransition(s.state, to)) throw new Error(`Illegal move from ${s.state} to ${to}`)
   const entry = note === undefined ? { state: to, at: now.toISOString() } : { state: to, at: now.toISOString(), note }

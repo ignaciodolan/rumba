@@ -8,15 +8,24 @@ export interface Workspace {
   prepare(branch: string, opts: { fresh: boolean; like?: string }): Promise<{ workdir: string; baseSha: string }>
   /** Null when there is nothing to commit, unless `allowEmpty` asks for a commit anyway. */
   commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null>
+  /**
+   * Makes a commit on the workdir's branch, with HEAD as its parent, that changes only `file`
+   * to `content`, and puts the workdir at it; returns the commit. Built from HEAD's objects,
+   * never from the workdir's files, so nothing else an agent left there is committed. Throws,
+   * changing nothing, when a folder on the way to `file` in HEAD is not a folder (a link or a
+   * file) or `file` in HEAD is not a regular file.
+   */
+  commitFile(workdir: string, file: string, content: string, message: string): Promise<string>
   reset(workdir: string, sha: string): Promise<void>
   /** The commit the workdir's branch points at. */
   head(workdir: string): Promise<string>
   changedFiles(workdir: string, sinceSha: string): Promise<string[]>
   /**
    * The text of `git diff <sinceSha> HEAD`, with no external diff program, text conversion or
-   * filter run. Cut at `maxChars` characters, with a closing note that it was cut.
+   * filter run. Cut at `maxChars` characters, with a closing note that it was cut. The files at
+   * `exclude`, exact paths from the repository root, are left out.
    */
-  diff(workdir: string, sinceSha: string, maxChars: number): Promise<string>
+  diff(workdir: string, sinceSha: string, maxChars: number, exclude?: string[]): Promise<string>
   /**
    * Puts the workdir's branch at `sha`, the head of `branch` on the remote, fetched first, so
    * that commits someone else pushed are kept and a local commit never pushed is dropped.

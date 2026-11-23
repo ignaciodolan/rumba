@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { decodeStateComment, encodeStateComment } from '../../src/core/stateComment.js'
 import { newState } from '../../src/core/states.js'
+import type { LessonRecord } from '../../src/core/types.js'
 
 const t0 = new Date('2026-01-01T00:00:00.000Z')
 
@@ -28,6 +29,17 @@ describe('stateComment', () => {
   })
   it('round-trips the review round count and a check changed after review', () => {
     const s = { ...newState('shop', t0), reviewRounds: 1, checks: [{ criterionId: 'c1', command: 'npm test', files: ['a.test.ts'], changedAfterReview: true, changeAskedIn: 'https://example.test/pr/1#pullrequestreview-1' }] }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it('round-trips the lessons recorded on a ticket', () => {
+    const lessons: LessonRecord[] = [
+      { at: '2026-01-02T00:00:00.000Z', status: 'added', commit: 'abc123' },
+      { at: '2026-01-03T00:00:00.000Z', status: 'added', commit: 'def456', pullRequestUrl: 'https://github.com/acme/shop/pull/8' },
+      { at: '2026-01-04T00:00:00.000Z', status: 'none', reason: 'The feedback only concerns this change.' },
+      { at: '2026-01-05T00:00:00.000Z', status: 'refused', reason: 'the lesson quoted the feedback' },
+      { at: '2026-01-06T00:00:00.000Z', status: 'failed', reason: 'The agent timed out.' },
+    ]
+    const s = { ...newState('shop', t0), lessons }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
   it.each([{ reviewRounds: -1 }, { reviewRounds: 1.5 }, { reviewRounds: '1' }])('rejects %o', (bad) => {
@@ -66,6 +78,7 @@ describe('stateComment', () => {
       expect(decodeStateComment(forge({}))).toEqual(newState('shop', t0))
     })
     const entry = { kind: 'comment', author: 'alice', url: 'u', at: 'a', text: 't' }
+    const lesson = { at: 'a', status: 'added', commit: 'abc123' }
     it.each([
       ['feedback that is not a list', { feedback: 'x' }],
       ['feedback of an unknown kind', { feedback: [{ ...entry, kind: 'praise' }] }],
@@ -76,6 +89,12 @@ describe('stateComment', () => {
       ['feedback with an unknown field', { feedback: [{ ...entry, extra: 1 }] }],
       ['a pushedAt that is not a string', { pushedAt: 3 }],
       ['an answeredAt that is not a string', { answeredAt: 3 }],
+      ['lessons that are not a list', { lessons: 'x' }],
+      ['a lesson of an unknown status', { lessons: [{ ...lesson, status: 'kept' }] }],
+      ['a lesson without a time', { lessons: [{ ...lesson, at: undefined }] }],
+      ['a lesson with an unknown field', { lessons: [{ ...lesson, text: 'Round totals in cents.' }] }],
+      ['a lesson with a reason over 500 characters', { lessons: [{ ...lesson, status: 'none', reason: 'x'.repeat(501) }] }],
+      ['more than 10 lessons', { lessons: Array.from({ length: 11 }, () => lesson) }],
     ])('refuses %s', (_name, patch) => {
       expect(decodeStateComment(forge(patch))).toBeNull()
     })
@@ -134,6 +153,33 @@ describe('encodeStateComment size', () => {
     const feedback = [{ kind: 'comment' as const, author: 'alice', url: 'u', at: 'a', text: 'y'.repeat(2000) }]
     const s = { ...newState('shop', t0), feedback }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it('fits 10 lessons with the longest reasons beside feedback that has to be cut', () => {
+    const feedback = Array.from({ length: 20 }, (_, i) => ({ kind: 'comment' as const, author: 'alice', url: `u${i}`, at: 'a', text: 'x'.repeat(4000) }))
+    const lessons = Array.from({ length: 10 }, (_, i) => ({
+      at: '2026-01-02T00:00:00.000Z', status: 'failed' as const, reason: 'r'.repeat(500), commit: `c${i}`, pullRequestUrl: 'https://github.com/acme/shop/pull/8',
+    }))
+    const body = encodeStateComment({ ...newState('shop', t0), feedback, lessons })
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(decodeStateComment(body)!.lessons).toEqual(lessons)
+  })
+  it('cuts lesson reasons, keeping their start, before giving up', () => {
+    // Each backtick is stored as six characters, so ten such reasons take half the comment.
+    const lessons = Array.from({ length: 10 }, (_, i) => ({ at: '2026-01-02T00:00:00.000Z', status: 'none' as const, reason: `R${i}${'`'.repeat(498)}`, commit: `c${i}` }))
+    const criteria = Array.from({ length: 60 }, (_, i) => ({ id: `c${i}`, text: 'x'.repeat(500), checkable: true }))
+    const s = { ...newState('shop', t0), criteria, lessons }
+    expect(JSON.stringify(s).length).toBeLessThan(60_000)
+    const copy = structuredClone(s)
+    const body = encodeStateComment(s)
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(s).toEqual(copy)
+    const back = decodeStateComment(body)!
+    expect(back.criteria).toEqual(criteria)
+    back.lessons!.forEach((l, i) => {
+      expect(l.reason!.startsWith(`R${i}\``)).toBe(true)
+      expect(l.reason!.length).toBeLessThan(500)
+      expect(l).toMatchObject({ status: 'none', commit: `c${i}` })
+    })
   })
   it('throws, with the size, when the state does not fit even without output', () => {
     const criteria = Array.from({ length: 200 }, (_, i) => ({ id: `c${i}`, text: 'x'.repeat(500), checkable: true }))

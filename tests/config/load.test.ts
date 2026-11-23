@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { execa } from 'execa'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { GitWorkspace } from '../../src/adapters/workspace/git.js'
 import { loadRumba, loadRumbas } from '../../src/config/load.js'
 
 const minimal = `
@@ -113,5 +115,37 @@ describe('loadRumba', () => {
   it('loads one rumba by name', async () => {
     await write('.rumba/shop/rumba.yml', minimal)
     expect((await loadRumba(root, 'shop')).name).toBe('shop')
+  })
+})
+
+describe('lessons in the context', () => {
+  async function git(cwd: string, ...args: string[]): Promise<string> {
+    const r = await execa('git', ['-c', 'user.name=rumba', '-c', 'user.email=rumba@users.noreply.github.com', '-c', 'init.defaultBranch=main', ...args], { cwd, stdin: 'ignore' })
+    return r.stdout.trim()
+  }
+
+  it('holds a lesson committed on a branch only once it is on the default branch', async () => {
+    const remote = path.join(root, 'remote.git')
+    await mkdir(remote); await git(remote, 'init', '-q', '--bare')
+    await git(root, 'clone', '-q', remote, 'repo')
+    const repo = path.join(root, 'repo')
+    await mkdir(path.join(repo, '.rumba', 'shop'), { recursive: true })
+    await writeFile(path.join(repo, '.rumba/shop/rumba.yml'), minimal)
+    await writeFile(path.join(repo, '.rumba/shop/context.md'), 'Shop is the storefront.')
+    await git(repo, 'add', '-A'); await git(repo, 'commit', '-q', '-m', 'add the shop rumba')
+    await git(repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main'); await git(repo, 'fetch', '-q', 'origin')
+
+    // The lesson as Rumba commits it: on a branch of its own, in a worktree of its own.
+    const ws = new GitWorkspace({ repoRoot: repo, defaultBranch: 'main' })
+    try {
+      const { workdir } = await ws.prepare('rumba/shop/lesson-42', { fresh: true })
+      await ws.commitFile(workdir, '.rumba/shop/lessons.md', '- Round order totals in the service.\n  From https://example.test/pr/42\n', 'docs: lesson from review of #42')
+    } finally {
+      await ws.cleanupAll()
+    }
+    expect((await loadRumba(repo, 'shop')).context).toBe('Shop is the storefront.')
+
+    await git(repo, 'merge', '-q', '--ff-only', 'rumba/shop/lesson-42')
+    expect((await loadRumba(repo, 'shop')).context).toBe('Shop is the storefront.\n\n- Round order totals in the service.\n  From https://example.test/pr/42')
   })
 })

@@ -1,6 +1,6 @@
 import type { Check, Criterion, Feedback, Kind, LinkedDocument, Move, ProjectTestsResult, Ticket } from '../core/types.js'
 
-export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix' | 'relocate-checks' | 'revise'
+export type AgentTaskKind = 'triage' | 'draft-criteria' | 'write-checks' | 'fix' | 'relocate-checks' | 'revise' | 'distill-lesson'
 
 export interface AgentTask {
   kind: AgentTaskKind
@@ -24,7 +24,7 @@ export interface AgentTask {
   checkStatus?: { criterionId: string; passed: boolean }[]
   /** Fix tasks: how the project's own tests did in the last run. */
   projectTests?: ProjectTestsResult
-  /** Revise tasks: what the reviewers of the pull request said. Untrusted input. */
+  /** Revise and distill-lesson tasks: what the reviewers of the pull request said. Untrusted input. */
   feedback?: Feedback[]
   /** Revise tasks: the change so far, as a diff against the base. */
   diff?: string
@@ -68,6 +68,13 @@ export type AgentResultBody =
      * in the feedback list of the item that asked for the change.
      */
     checkChanges?: { criterionId: string; item: number; reason: string }[]
+  }
+  | {
+    kind: 'distill-lesson'
+    /** One to three short lines: what was wrong and what to do next time. Exactly one of `lesson` and `none` is set. */
+    lesson?: string[]
+    /** Why the feedback holds no general rule. */
+    none?: string
   }
 
 export interface Agent {

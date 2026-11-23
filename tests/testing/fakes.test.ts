@@ -98,6 +98,15 @@ describe('FakeCodeHost.getPullRequest', () => {
     expect(await ws.diff('/w', 'sha', 100)).toBe('diff --git a b')
   })
 
+  it('FakeWorkspace records commitFile and moves the branch to the sha it returns', async () => {
+    const ws = new FakeWorkspace()
+    const { workdir } = await ws.prepare('rumba/shop/123', { fresh: false })
+    const sha = await ws.commitFile(workdir, '.rumba/shop/lessons.md', '- Orders ship in one box.\n', 'docs: add a lesson')
+    expect(ws.fileCommits).toEqual([{ workdir, path: '.rumba/shop/lessons.md', content: '- Orders ship in one box.\n', message: 'docs: add a lesson' }])
+    expect(await ws.head(workdir)).toBe(sha)
+    expect(sha).not.toBe(await ws.commitFile(workdir, '.rumba/shop/lessons.md', 'again', 'docs: another'))
+  })
+
   it('throws for an unknown URL and when told to', async () => {
     const host = new FakeCodeHost()
     await expect(host.getPullRequest('https://example.test/pr/5')).rejects.toThrow()

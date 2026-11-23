@@ -1,0 +1,219 @@
+import type { RumbaConfig } from '../config/load.js'
+import type { AgentResult } from '../ports/agent.js'
+import type { Deps } from '../ports/deps.js'
+import { timeLeft } from './budget.js'
+import { redact } from './redact.js'
+import { cleanupQuietly } from './steps/teardown.js'
+import type { Feedback, LessonRecord, Ticket, TicketState } from './types.js'
+
+import { LESSON_REASON_MAX, LESSONS_KEPT } from './lessonLimits.js'
+
+export { LESSON_REASON_MAX, LESSONS_KEPT }
+
+/** Below this many milliseconds left on the ticket, no lesson is asked for: the agent could not finish. */
+const MIN_LESSON_MS = 60_000
+const NO_TIME = 'no time left for a lesson'
+
+const MAX_LINES = 3
+const MAX_LINE = 200
+/** A lesson that shares this many characters in a row with a feedback text quotes it. */
+const QUOTE_RUN = 40
+const QUOTED = 'the lesson quoted the feedback'
+const EMPTY = 'the lesson was empty once cleaned'
+const NO_FEEDBACK = 'There was no feedback to learn from.'
+
+// Control characters, and the Unicode line and paragraph separators, which also break a line.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
+// What splits a feedback text into lines, each cleaned as a lesson line is.
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/
+// Lone surrogates and the replacement character: either would make lessons.md text that is not
+// valid UTF-8, which readFileAt refuses, and every later lesson of the rumba would fail.
+const BROKEN = /\p{Cs}|\uFFFD/gu
+// Format and other default-ignorable code points (zero-width spaces, bidi marks, variation
+// selectors, fillers): invisible in lessons.md, and they could split a quote of the feedback
+// so that it passes the quote check.
+const FORMAT = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+// Markdown that would give a line structure in every later agent's context, where lessons.md
+// is placed unfenced: a heading or quote marker at the start, an HTML comment, a code fence
+// (of backticks or of tildes).
+const LEADING_MARKS = /^(?:[#>]+\s*)+/
+const STRUCTURE = /<!--|-->|`{3,}|~{3,}/g
+// A line of only these makes a rule, or a heading of the line before it.
+const RULE_LINE = /^[-=*_\s]+$/
+
+type Distilled = Extract<AgentResult, { kind: 'distill-lesson' }>
+
+/**
+ * The agent's lesson as Rumba writes it: each line made plain, valid text (see cleanLine);
+ * empty lines, and lines that would only make a rule or a heading, dropped; at most three. Refused when nothing is left, or when it quotes the
+ * feedback (40 characters in a row of any feedback text, ignoring case, spacing, invisible
+ * characters and compatibility forms): the lesson is read by every later ticket's agent, so
+ * reviewer text must not reach it word for word.
+ */
+export function cleanLesson(lines: string[], feedback: Feedback[], secrets: string[]): { lines: string[] } | { refused: string } {
+  const kept = lines.map((l) => cleanLine(l, secrets)).filter((l) => l !== '' && !RULE_LINE.test(l)).slice(0, MAX_LINES)
+  if (kept.length === 0) return { refused: EMPTY }
+  if (quotes(kept, feedback, secrets)) return { refused: QUOTED }
+  return { lines: kept }
+}
+
+/** One line of the agent's lesson, as plainPieces makes it, cut to MAX_LINE code points (never inside a character). */
+function cleanLine(line: string, secrets: string[]): string {
+  return Array.from(plainPieces(line, secrets)).slice(0, MAX_LINE).join('').trimEnd()
+}
+
+/**
+ * A text with line breaks, as one line: each piece between breaks cleaned as a line
+ * (plainLine), so a heading or quote marker that starts a piece goes, joined with a space,
+ * and redacted again (a secret a break split is whole there). Lessons and feedback are both
+ * read this way, so the quote check compares like with like.
+ */
+function plainPieces(text: string, secrets: string[]): string {
+  return redact(text.split(LINE_BREAK).map((l) => plainLine(l, secrets)).filter((l) => l !== '').join(' '), secrets)
+}
+
+/**
+ * One line: broken and invisible characters removed, control characters made spaces, then
+ * redacted (so a secret a newline or a zero-width space split is still found), its markdown
+ * structure removed and trimmed. Redacted again after, as removing a mark can join a secret.
+ */
+function plainLine(line: string, secrets: string[]): string {
+  const chars = line.replace(BROKEN, '').replace(FORMAT, '').replace(CONTROL, ' ')
+  return redact(plainText(redact(chars, secrets)), secrets).trim()
+}
+
+/** The line without markdown structure. Repeated, since removing one mark can join the pieces of another. */
+function plainText(line: string): string {
+  let out = line
+  for (let before = ''; before !== out;) {
+    before = out
+    out = out.replace(STRUCTURE, '').trimStart().replace(LEADING_MARKS, '')
+  }
+  return out
+}
+
+function normalize(text: string): string {
+  return text.normalize('NFKC').replace(BROKEN, '').replace(FORMAT, '').replace(CONTROL, ' ').replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+/** True when the lesson, its lines read as one text, shares QUOTE_RUN characters in a row with a feedback text as cleaned. */
+function quotes(lines: string[], feedback: Feedback[], secrets: string[]): boolean {
+  const lesson = normalize(lines.join(' '))
+  // Each feedback text is cleaned as a lesson line is, so the markup Rumba strips from the
+  // lesson cannot make a quoted sentence differ from what the reviewer wrote.
+  const texts = feedback
+    .map((f) => normalize(plainPieces(f.text, secrets)))
+    .filter((t) => t.length >= QUOTE_RUN)
+  for (let i = 0; i + QUOTE_RUN <= lesson.length; i++) {
+    const run = lesson.slice(i, i + QUOTE_RUN)
+    if (texts.some((t) => t.includes(run))) return true
+  }
+  return false
+}
+
+/** The lesson as one list item of lessons.md, linking to the pull request it came from. No trailing newline. */
+export function lessonEntry(lines: string[], url: string): string {
+  const [first, ...rest] = lines
+  return [`- ${first ?? ''}`, ...rest.map((l) => `  ${l}`), `  From ${url}`].join('\n')
+}
+
+/**
+ * The lessons file with `entry` added at its end, after exactly one blank line, ending in a
+ * newline. `current` null: the file is missing. Existing lines are kept as they are; only
+ * blank lines at the end are dropped.
+ */
+export function appendLesson(current: string | null, entry: string): string {
+  const lines = (current ?? '').split('\n')
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') lines.pop()
+  return lines.length === 0 ? `${entry}\n` : `${lines.join('\n')}\n\n${entry}\n`
+}
+
+/** The state with `record` added, keeping the latest LESSONS_KEPT. */
+export function withLesson(state: TicketState, record: LessonRecord): TicketState {
+  return { ...state, lessons: [...(state.lessons ?? []), record].slice(-LESSONS_KEPT) }
+}
+
+export function lessonsPath(rumba: string): string {
+  return `.rumba/${rumba}/lessons.md`
+}
+
+export interface LearnOptions {
+  /** The feedback to learn from, as selected and cleaned for the ticket. */
+  feedback: Feedback[]
+  /** The pull request the feedback was written on; the entry links to it. */
+  url: string
+  /** The branch the lesson is committed on. */
+  branch: string
+  /** Make the branch again from the default branch (a lesson pull request of its own) instead of checking it out. */
+  fresh?: boolean
+  /** How the branch is pushed once the lesson is committed. */
+  push: { force: boolean }
+}
+
+/**
+ * Asks the agent whether the feedback holds a general rule and, when it gives one that Rumba
+ * accepts, appends it to the rumba's lessons.md on `branch`, commits that file alone and pushes
+ * it. Returns what to record on the ticket. Never throws: a lesson is a side matter, and its
+ * failure must not undo the round or the outcome that asked for it.
+ */
+export async function learn(deps: Deps, rumba: RumbaConfig, ticket: Ticket, _state: TicketState, opts: LearnOptions): Promise<LessonRecord> {
+  const at = deps.clock().toISOString()
+  if (opts.feedback.length === 0) return { at, status: 'none', reason: NO_FEEDBACK }
+  const left = timeLeft(deps)
+  if (left !== undefined && left < MIN_LESSON_MS) return { at, status: 'failed', reason: NO_TIME }
+  try {
+    const answer = await distill(deps, rumba, ticket, opts.feedback)
+    if (answer.none !== undefined) return { at, status: 'none', reason: lessonReason(answer.none, deps.secrets) }
+    const cleaned = cleanLesson(answer.lesson ?? [], opts.feedback, deps.secrets)
+    if ('refused' in cleaned) return { at, status: 'refused', reason: cleaned.refused }
+    const commit = await commitLesson(deps, rumba, ticket, lessonEntry(cleaned.lines, opts.url), opts)
+    return { at, status: 'added', commit }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    return { at, status: 'failed', reason: lessonReason(`The lesson could not be drawn: ${message}`, deps.secrets) }
+  }
+}
+
+/** The agent's answer, from a checkout of the default branch that is removed after: nothing it writes there is kept. */
+async function distill(deps: Deps, rumba: RumbaConfig, ticket: Ticket, feedback: Feedback[]): Promise<Distilled> {
+  const { workdir } = await deps.workspace.prepare(`rumba/${rumba.name}/distill-${ticket.id}`, { fresh: true })
+  try {
+    const result = await deps.agent.run({
+      kind: 'distill-lesson', ticket, context: rumba.context, environmentKind: rumba.environment.kind, feedback, timeoutMs: timeLeft(deps),
+    }, workdir)
+    if (result.kind !== 'distill-lesson') throw new Error(`Agent returned ${result.kind} for a distill-lesson task`)
+    return result
+  } finally {
+    await cleanupQuietly(deps.workspace, workdir)
+  }
+}
+
+/**
+ * Commits lessons.md, with `entry` appended, on the branch and pushes it. The file is read from
+ * the branch's commit and written with commitFile, never through the checkout. A refused push
+ * takes the commit off the local branch, so it holds what the remote does.
+ */
+async function commitLesson(deps: Deps, rumba: RumbaConfig, ticket: Ticket, entry: string, opts: LearnOptions): Promise<string> {
+  const file = lessonsPath(rumba.name)
+  const { workdir } = await deps.workspace.prepare(opts.branch, { fresh: opts.fresh ?? false })
+  try {
+    const head = await deps.workspace.head(workdir)
+    const current = await deps.workspace.readFileAt(workdir, head, file)
+    const sha = await deps.workspace.commitFile(workdir, file, appendLesson(current, entry), `docs: lesson from review of ${ticket.ref}`)
+    try {
+      await deps.codeHost.pushBranch(workdir, opts.branch, opts.push)
+    } catch (e) {
+      await deps.workspace.reset(workdir, head).catch(() => undefined)
+      throw e
+    }
+    return sha
+  } finally {
+    await cleanupQuietly(deps.workspace, workdir)
+  }
+}
+
+/** Redacted and cut to LESSON_REASON_MAX characters, keeping the start, which says what went wrong. */
+export function lessonReason(text: string, secrets: string[]): string {
+  const clean = redact(text, secrets).replace(CONTROL, ' ').trim()
+  return clean.length > LESSON_REASON_MAX ? `${clean.slice(0, LESSON_REASON_MAX - 1)}…` : clean
+}

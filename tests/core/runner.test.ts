@@ -147,7 +147,9 @@ describe('runRumba', () => {
       const r = await runRumba(d, oneTicket)
       expect(r.advanced).toEqual([{ ticket: '123', from: 'changes_requested', to: 'pr_open' }])
       expect(r.left).toEqual([{ ticket: '2', why: 'run limit' }])
-      expect(leases).toEqual([{ runId: 'run-1', at: '2026-01-01T00:00:00.000Z' }])
+      // The round's agent, then the lesson's, both while the run holds the ticket.
+      const lease = { runId: 'run-1', at: '2026-01-01T00:00:00.000Z' }
+      expect(leases).toEqual([lease, lease])
       expect(d.tracker.states.get('123')).toMatchObject({ state: 'pr_open', reviewRounds: 1 })
       expect(d.tracker.states.get('123')?.lease).toBeUndefined()
     })
@@ -168,12 +170,27 @@ describe('runRumba', () => {
     ] as const)('moves a parked ticket to %s when its pull request ended', async (to, pr, note, comment) => {
       const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', parked(d))
       d.codeHost.pullRequests.set(PR, pr)
-      d.codeHost.listFeedback = async () => { throw new Error('feedback must not be read') }
+      // No round is collected; only a closed pull request's lesson reads the feedback.
+      const reads: string[] = []
+      d.codeHost.listFeedback = async (url) => { reads.push(url); return [] }
       const r = await runRumba(d, makeRumba())
       expect(r.advanced).toEqual([{ ticket: '1', from: 'changes_requested', to }])
       expect(d.tracker.states.get('1')?.state).toBe(to)
       expect(d.tracker.states.get('1')?.history.at(-1)?.note).toBe(note)
       expect(d.tracker.comments.at(-1)?.body).toBe(comment)
+      expect(reads).toEqual(to === 'rejected' ? [PR] : [])
+    })
+    it('draws the lesson of a closed pull request whatever the run limit', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      d.agent.script['distill-lesson'] = { kind: 'distill-lesson', lesson: ['Order totals are rounded in the service layer.'] }
+      d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '42', ref: '#42' }))
+      d.tracker.states.set('42', parked(d))
+      d.codeHost.pullRequests.set(PR, { state: 'closed', headSha: 'h' })
+      d.codeHost.feedback.set(PR, [{ kind: 'review', reviewState: 'changes_requested', author: 'alice', url: `${PR}#pullrequestreview-1`, at: '2026-01-02T00:00:00Z', text: 'Round in the service.', canWrite: true, self: false }])
+      const r = await runRumba(d, oneTicket)
+      expect(r.advanced).toEqual([{ ticket: '1', from: 'queued', to: 'pr_open' }, { ticket: '42', from: 'changes_requested', to: 'rejected' }])
+      expect(d.codeHost.prs.at(-1)).toMatchObject({ title: 'Lesson from review of #42 for the shop rumba', head: 'rumba/shop/lesson-42' })
+      expect(d.tracker.states.get('42')?.lessons).toEqual([expect.objectContaining({ status: 'added' })])
     })
     it('restarts on rumba-retry and clears the feedback', async () => {
       const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
@@ -273,6 +290,38 @@ describe('runRumba', () => {
     expect(d.tracker.states.get('1')).toEqual(prOpenState(d, 1)); expect(d.tracker.states.get('2')).toEqual(prOpenState(d, 2))
     expect(d.tracker.comments).toEqual([])
   })
+  describe('the final write', () => {
+    it('counts a ticket that another run moved while the engine worked it toward the run limit', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      d.agent.script.revise = { kind: 'revise', summary: 'Renamed it.', replies: [{ item: 1, reply: 'Renamed it.' }] }
+      d.agent.script['distill-lesson'] = { kind: 'distill-lesson', none: 'Nothing general.' }
+      d.tracker.tickets.push(makeTicket({ id: '123' }), makeTicket({ id: '2' }))
+      d.tracker.states.set('123', changesRequested(d))
+      // While the round's lesson is drawn, another run records that the pull request was closed.
+      const run = d.agent.run.bind(d.agent)
+      d.agent.run = async (task, w) => {
+        if (task.kind === 'distill-lesson') d.tracker.states.set('123', transition(d.tracker.states.get('123')!, 'rejected', d.clock(), 'closed'))
+        return run(task, w)
+      }
+      const r = await runRumba(d, oneTicket)
+      expect(d.tracker.states.get('123')?.state).toBe('rejected')
+      expect(r.left).toEqual([{ ticket: '123', why: 'moved by another run' }, { ticket: '2', why: 'run limit' }])
+    })
+    it('writes the result when the final read fails', async () => {
+      const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
+      // Every read after the pull request is opened, the final one among them, fails.
+      let failReads = false
+      const open = d.codeHost.openPullRequest.bind(d.codeHost)
+      d.codeHost.openPullRequest = async (pr) => { const url = await open(pr); failReads = true; return url }
+      const read = d.tracker.readState.bind(d.tracker)
+      d.tracker.readState = async (t) => { if (failReads) throw new Error('tracker down'); return read(t) }
+      const r = await runRumba(d, makeRumba())
+      expect(r.advanced).toEqual([{ ticket: '1', from: 'queued', to: 'pr_open' }])
+      expect(d.tracker.states.get('1')?.state).toBe('pr_open')
+      expect(d.tracker.states.get('1')?.lease).toBeUndefined()
+    })
+  })
+
   describe('pull requests in pr_open', () => {
     it('moves a ticket whose pull request was merged to merged, and says when', async () => {
       const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', prOpenState(d))

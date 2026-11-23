@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { DURABLE, STATE_NAMES } from './states.js'
 import { isValidRumbaName } from './labels.js'
+import { LESSON_REASON_MAX, LESSONS_KEPT } from './lessonLimits.js'
 import type { TicketState } from './types.js'
 
 export const STATE_MARKER = 'rumba-state-v1'
@@ -39,6 +40,14 @@ const relocation = z.object({
   original: z.array(check).optional(),
   before: z.array(checkResult).optional(),
 })
+// Bounded, so the lessons alone can never push the comment over its limit.
+const lesson = z.object({
+  at: z.string(),
+  status: z.enum(['added', 'none', 'refused', 'failed']),
+  reason: z.string().max(LESSON_REASON_MAX).optional(),
+  commit: z.string().optional(),
+  pullRequestUrl: z.string().optional(),
+}).strict()
 
 // Tracker comments are untrusted input, so the decoded state is validated strictly.
 const ticketState = z.object({
@@ -65,6 +74,7 @@ const ticketState = z.object({
   attempts: z.array(attempt).optional(),
   fixSummary: z.string().optional(),
   relocation: relocation.optional(),
+  lessons: z.array(lesson).max(LESSONS_KEPT).optional(),
   lease: z.object({ runId: z.string(), at: z.string() }).optional(),
   history: z.array(z.object({ state: stateName, at: z.string(), note: z.string().optional() })),
 })
@@ -77,6 +87,10 @@ function cutStart(text: string, keep: number): string {
   return text.length <= keep ? text : text.slice(text.length - keep)
 }
 
+function cutEnd(text: string, keep: number): string {
+  return text.length <= keep ? text : text.slice(0, keep)
+}
+
 function encode(s: TicketState): string {
   // Escape backticks so no value in the state can close the fence early.
   const json = JSON.stringify({ marker: STATE_MARKER, ...s }, null, 2).replaceAll('`', '\\u0060')
@@ -85,7 +99,8 @@ function encode(s: TicketState): string {
 
 /**
  * The state comment, at most MAX_STATE_COMMENT characters. When it would be longer, the check
- * output is left out of it, then the feedback texts are cut; when it is still too long, this throws. `s` is never changed.
+ * output is left out of it, then the feedback texts are cut, then the lesson reasons; when it is
+ * still too long, this throws. `s` is never changed.
  */
 export function encodeStateComment(s: TicketState): string {
   const full = encode(s)
@@ -98,20 +113,36 @@ export function encodeStateComment(s: TicketState): string {
   if (s.attempts !== undefined) slim.attempts = s.attempts.map((a) => ({ ...a, tail: OUTPUT_DROPPED }))
   const body = encode(slim)
   if (body.length <= MAX_STATE_COMMENT) return body
-  return fitFeedback(slim, body)
+  return fitTexts(slim, body)
 }
 
 /** The first cut keeps this many characters of each feedback text; each further one halves it. */
 const FEEDBACK_KEPT = 2000
 const FEEDBACK_KEPT_MIN = 100
 
-/** Cuts every feedback text to its end, shorter each time, until the comment fits; throws when it never does. */
-function fitFeedback(slim: TicketState, tooLarge: string): string {
+/** The first cut keeps this many characters of each lesson reason; each further one halves it. */
+const REASON_KEPT = 250
+const REASON_KEPT_MIN = 25
+
+/**
+ * Cuts every feedback text to its end, shorter each time, until the comment fits; then, with the
+ * feedback at its shortest, every lesson reason to its start the same way. Throws when it never fits.
+ */
+function fitTexts(slim: TicketState, tooLarge: string): string {
   let body = tooLarge
+  let cut = slim
   if (slim.feedback !== undefined) {
     for (let keep = FEEDBACK_KEPT; keep >= FEEDBACK_KEPT_MIN; keep = Math.floor(keep / 2)) {
       // The end of a text is kept: a long review usually closes with what it asks for.
-      body = encode({ ...slim, feedback: slim.feedback.map((f) => ({ ...f, text: cutStart(f.text, keep) })) })
+      cut = { ...slim, feedback: slim.feedback.map((f) => ({ ...f, text: cutStart(f.text, keep) })) }
+      body = encode(cut)
+      if (body.length <= MAX_STATE_COMMENT) return body
+    }
+  }
+  if (slim.lessons !== undefined) {
+    for (let keep = REASON_KEPT; keep >= REASON_KEPT_MIN; keep = Math.floor(keep / 2)) {
+      // The start of a reason is kept: it says what went wrong.
+      body = encode({ ...cut, lessons: slim.lessons.map((l) => l.reason === undefined ? l : { ...l, reason: cutEnd(l.reason, keep) }) })
       if (body.length <= MAX_STATE_COMMENT) return body
     }
   }

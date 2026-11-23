@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
@@ -82,6 +82,17 @@ describe('GitWorkspace', () => {
     const cut = await ws.diff(workdir, baseSha, 20)
     expect(cut).toBe(`${full.slice(0, 20)}\n[diff cut at 20 characters]`)
     expect(await ws.diff(workdir, await ws.head(workdir), 100)).toBe('')
+  })
+
+  it('leaves out of the diff the files it is told to, by their exact path', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    await write(workdir, 'a.txt', 'one\n'); await write(workdir, '.rumba/shop/lessons.md', '- unmerged\n')
+    await write(workdir, '.rumba/shop/context.md', 'kept\n'); await write(workdir, '[ab].txt', 'brackets\n')
+    await ws.commit(workdir, 'c')
+    const diff = await ws.diff(workdir, baseSha, 100000, ['.rumba/shop/lessons.md', '[ab].txt'])
+    expect(diff).toContain('+++ b/a.txt'); expect(diff).toContain('+++ b/.rumba/shop/context.md')
+    expect(diff).not.toContain('lessons.md'); expect(diff).not.toContain('unmerged'); expect(diff).not.toContain('brackets')
+    expect(await ws.diff(workdir, baseSha, 100000)).toContain('+- unmerged')
   })
 
   it('never runs an external diff program or a text conversion for the diff', async () => {
@@ -407,6 +418,131 @@ describe('GitWorkspace', () => {
       await expect(ws.hashFiles(workdir, ['../secret.txt'])).rejects.toThrow(/outside/)
       await expect(ws.hashFiles(workdir, [path.join(root, 'secret.txt')])).rejects.toThrow(/outside/)
       await expect(ws.hashFiles(workdir, ['up/secret.txt'])).rejects.toThrow(/outside/)
+    })
+  })
+
+  describe('commitFile', () => {
+    const LESSONS = '.rumba/shop/lessons.md'
+
+    /** Commits whatever is in the worktree with plain git, as a person or an agent would. */
+    async function commitAll(workdir: string, message: string): Promise<string> {
+      await git(workdir, 'add', '-A'); await git(workdir, 'commit', '-q', '-m', message)
+      return git(workdir, 'rev-parse', 'HEAD')
+    }
+
+    /** The paths a commit changes against its parent. */
+    async function touched(sha: string): Promise<string[]> {
+      return (await git(clone, 'diff-tree', '--no-commit-id', '--name-only', '-r', '-z', `${sha}^`, sha)).split('\0').filter((p) => p !== '')
+    }
+
+    /** The bytes a commit stores at a path. */
+    async function stored(sha: string, file: string): Promise<Buffer> {
+      return Buffer.from((await execa('git', ['cat-file', 'blob', `${sha}:${file}`], { cwd: clone, encoding: 'buffer', stdin: 'ignore', stripFinalNewline: false })).stdout)
+    }
+
+    it('makes a commit on the branch that creates only that file, with HEAD as its parent', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, 'orders.ts', 'export const orders = 1\n'); const before = await commitAll(workdir, 'work')
+      const sha = await ws.commitFile(workdir, LESSONS, '- Orders ship in one box.\n', 'docs: add a lesson')
+      expect(sha).toMatch(/^[0-9a-f]{40}$/)
+      expect(await git(clone, 'rev-parse', `${sha}^`)).toBe(before)
+      expect(await git(clone, 'rev-list', '--count', `${before}..${sha}`)).toBe('1')
+      expect(await git(clone, 'rev-parse', 'refs/heads/rumba/shop/1')).toBe(sha)
+      expect(await ws.head(workdir)).toBe(sha)
+      expect(await touched(sha)).toEqual([LESSONS])
+      expect(await git(clone, 'log', '-1', '--format=%s', sha)).toBe('docs: add a lesson')
+      expect(await readFile(path.join(workdir, LESSONS), 'utf8')).toBe('- Orders ship in one box.\n')
+      expect(await git(workdir, 'status', '--porcelain')).toBe('')
+    })
+
+    it('replaces a file that exists', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, LESSONS, '- Old lesson.\n'); await write(workdir, '.rumba/shop/other.md', 'kept\n'); await commitAll(workdir, 'lessons')
+      const sha = await ws.commitFile(workdir, LESSONS, '- Old lesson.\n- Orders over 10 items need a review.\n', 'docs: add a lesson')
+      expect(await touched(sha)).toEqual([LESSONS])
+      expect((await stored(sha, LESSONS)).toString()).toBe('- Old lesson.\n- Orders over 10 items need a review.\n')
+      expect((await stored(sha, '.rumba/shop/other.md')).toString()).toBe('kept\n')
+    })
+
+    it('stores any content byte for byte, with no filter, line-ending change or attribute applied', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, '.gitattributes', '*.md filter=evil text eol=crlf\n'); await commitAll(workdir, 'attributes')
+      // Defined after that commit, so only Rumba's git calls could run it.
+      const marker = path.join(root, 'filter-ran')
+      await git(clone, 'config', 'filter.evil.clean', `touch '${marker}'; tr a-z A-Z`)
+      await git(clone, 'config', 'filter.evil.smudge', `touch '${marker}'; tr a-z A-Z`)
+      const content = 'line one\r\nline two\n\0nul\t tab é 漢字 🦀 \\ "quoted" trailing  '
+      const sha = await ws.commitFile(workdir, LESSONS, content, 'docs: add a lesson')
+      expect(await stored(sha, LESSONS)).toEqual(Buffer.from(content))
+      expect(await readFile(path.join(workdir, LESSONS))).toEqual(Buffer.from(content))
+      expect(existsSync(marker)).toBe(false)
+    })
+
+    it('commits as the workspace commit author', async () => {
+      const authored = new GitWorkspace({ repoRoot: clone, defaultBranch: 'main', author: async () => ({ name: 'Shop Bot', email: 'shop-bot@example.test' }) })
+      try {
+        const { workdir } = await authored.prepare('rumba/shop/1', { fresh: true })
+        const sha = await authored.commitFile(workdir, LESSONS, 'x\n', 'docs: add a lesson')
+        expect(await git(clone, 'log', '-1', '--format=%an <%ae> %cn <%ce>', sha)).toBe('Shop Bot <shop-bot@example.test> Shop Bot <shop-bot@example.test>')
+      } finally {
+        await authored.cleanupAll()
+      }
+    })
+
+    it('never commits what else the agent left in the worktree', async () => {
+      const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, 'untracked.txt', 'agent'); await write(workdir, 'README.md', 'changed by the agent')
+      await git(workdir, 'add', 'README.md')
+      const sha = await ws.commitFile(workdir, LESSONS, 'x\n', 'docs: add a lesson')
+      expect(await touched(sha)).toEqual([LESSONS])
+      expect((await stored(sha, 'README.md')).toString()).toBe('hello')
+      expect(await ws.changedFiles(workdir, baseSha)).toEqual([LESSONS])
+    })
+
+    it('is never led outside the worktree by a link named .rumba that is not committed', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      const outside = path.join(root, 'outside')
+      await mkdir(outside)
+      await symlink(outside, path.join(workdir, '.rumba'))
+      const sha = await ws.commitFile(workdir, LESSONS, 'x\n', 'docs: add a lesson')
+      expect(await touched(sha)).toEqual([LESSONS])
+      expect(await readdir(outside)).toEqual([])
+    })
+
+    /** Commits a tree with plain git, then expects commitFile to refuse and change nothing. */
+    async function refuses(setup: (workdir: string) => Promise<void>, file: string, error: RegExp): Promise<void> {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await setup(workdir)
+      const before = await commitAll(workdir, 'planted')
+      await expect(ws.commitFile(workdir, file, 'x\n', 'docs: add a lesson')).rejects.toThrow(error)
+      expect(await git(clone, 'rev-parse', 'refs/heads/rumba/shop/1')).toBe(before)
+    }
+
+    it('refuses when .rumba is a symbolic link in HEAD', async () => {
+      await refuses(async (w) => { await mkdir(path.join(w, 'docs/shop'), { recursive: true }); await symlink('docs', path.join(w, '.rumba')) }, LESSONS, /\.rumba is not a directory/)
+    })
+
+    it('refuses when .rumba/<name> is a file in HEAD', async () => {
+      await refuses((w) => write(w, '.rumba/shop', 'a file'), LESSONS, /\.rumba\/shop is not a directory/)
+    })
+
+    it('refuses when the file in HEAD is a symbolic link', async () => {
+      await refuses(async (w) => { await write(w, 'docs/lessons.md', 'x'); await mkdir(path.join(w, '.rumba/shop'), { recursive: true }); await symlink('../../docs/lessons.md', path.join(w, LESSONS)) }, LESSONS, /not a regular file/)
+    })
+
+    it('refuses when the file in HEAD is executable', async () => {
+      await refuses(async (w) => { await write(w, LESSONS, '#!/bin/sh\n'); await chmod(path.join(w, LESSONS), 0o755) }, LESSONS, /not a regular file/)
+    })
+
+    it('refuses when the path in HEAD is a directory', async () => {
+      await refuses((w) => write(w, `${LESSONS}/inner.md`, 'x'), LESSONS, /not a regular file/)
+    })
+
+    it('refuses a path that is not a plain relative path', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      for (const bad of ['', '/etc/passwd', '../outside.md', '.rumba/../x.md', '.rumba//x.md', '.rumba/shop/', './x.md']) {
+        await expect(ws.commitFile(workdir, bad, 'x', 'm')).rejects.toThrow(/not a plain relative path/)
+      }
     })
   })
 })

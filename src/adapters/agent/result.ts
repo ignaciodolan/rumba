@@ -9,6 +9,8 @@ import { RESULT_PATH } from './prompts.js'
 const MAX_ITEMS = 20
 const MAX_CRITERION_TEXT = 500
 const MAX_COMMAND = 2000
+const MAX_LESSON_LINES = 3
+const MAX_LESSON_LINE = 200
 
 const criterion = z.object({ id: z.string().min(1), text: z.string().min(1).max(MAX_CRITERION_TEXT), checkable: z.boolean(), reason: z.string().max(MAX_CRITERION_TEXT).optional() })
 const criteria = z.array(criterion).max(MAX_ITEMS)
@@ -47,6 +49,11 @@ const schemas: Record<AgentTaskKind, z.ZodType<AgentResult>> = {
       criterionId: z.string().min(1), item: z.number().int().min(1), reason: z.string().trim().min(1).max(MAX_CRITERION_TEXT),
     })).max(MAX_ITEMS).optional(),
   }),
+  'distill-lesson': z.object({
+    kind: z.literal('distill-lesson'),
+    lesson: z.array(z.string().trim().min(1).max(MAX_LESSON_LINE)).min(1).max(MAX_LESSON_LINES).optional(),
+    none: z.string().trim().min(1).max(MAX_CRITERION_TEXT).optional(),
+  }).refine((r) => (r.lesson === undefined) !== (r.none === undefined), { message: 'give exactly one of "lesson" and "none"' }),
   fix: z.object({ kind: z.literal('fix'), summary: z.string(), noChangeNeeded: z.string().trim().min(1).max(MAX_CRITERION_TEXT * 4).optional() }),
 }
 
