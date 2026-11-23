@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { trackPullRequest } from '../../../src/core/steps/trackPullRequest.js'
 import { makeDeps, makeRumba, makeTicket, verified } from '../../../src/testing/fakes.js'
+import type { FeedbackItem } from '../../../src/ports/codeHost.js'
 import { transition } from '../../../src/core/states.js'
 
 const URL = 'https://example.test/pr/42'
@@ -52,5 +53,70 @@ describe('trackPullRequest', () => {
   it('lets a failed read through', async () => {
     const d = makeDeps(); d.codeHost.pullRequestError = new Error('api down')
     await expect(trackPullRequest(d, makeRumba(), makeTicket(), prOpen(d))).rejects.toThrow('api down')
+  })
+})
+
+function fb(over: Partial<FeedbackItem> = {}): FeedbackItem {
+  return { kind: 'comment', author: 'alice', url: 'https://example.test/pr/42#c1', at: '2099-01-01T00:00:00Z', text: 'hi', canWrite: true, self: false, ...over }
+}
+const REQUEST = { kind: 'review', reviewState: 'changes_requested', text: 'please rename' } as const
+
+describe('trackPullRequest feedback', () => {
+  function open(labels: string[] = []) {
+    const d = makeDeps(); d.codeHost.pullRequests.set(URL, { state: 'open', headSha: 'h', labels })
+    return { d, start: { ...prOpen(d), pushedAt: '2026-11-20T00:00:00Z' } }
+  }
+  it('starts a round on a changes-requested review and comments without quoting it', async () => {
+    const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(REQUEST)])
+    const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
+    expect(s.state).toBe('changes_requested')
+    expect(s.history.at(-1)?.note).toBe('review feedback')
+    expect(s.feedback).toHaveLength(1)
+    expect(d.tracker.states.get('123')).toEqual(s)
+    expect(d.tracker.comments.at(-1)?.body).toBe(`Review feedback arrived on the pull request (1 comments). Rumba will revise the change on a later run: ${URL}`)
+    expect(d.codeHost.labelsRemoved).toEqual([])
+  })
+  it('stores line and pull request comments along with the review', async () => {
+    const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(REQUEST), fb({ kind: 'line', path: 'a.ts', line: 7, text: 'here' }), fb({ text: 'general' })])
+    const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
+    expect(s.feedback?.map((f) => f.kind).sort()).toEqual(['comment', 'line', 'review'])
+  })
+  it('changes nothing for comments alone, an approval, or feedback before the push', async () => {
+    const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(), fb({ kind: 'review', reviewState: 'approved', text: 'ok' }), fb({ ...REQUEST, at: '2026-11-19T00:00:00Z' })])
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    expect(d.tracker.states.size).toBe(0); expect(d.tracker.comments).toHaveLength(0)
+  })
+  it('ignores a review from someone without write access and leaks none of her text', async () => {
+    const { d, start } = open(); d.codeHost.feedback.set(URL, [fb({ ...REQUEST, author: 'mallory', canWrite: false, text: 'MALLORY-TEXT' })])
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    expect(JSON.stringify([...d.tracker.states.values()])).not.toContain('MALLORY')
+    expect(JSON.stringify(d.tracker.comments)).not.toContain('MALLORY')
+    expect(JSON.stringify(d.codeHost.labelsRemoved)).not.toContain('MALLORY')
+  })
+  it('ignores feedback written by the account Rumba runs as', async () => {
+    const { d, start } = open(); d.codeHost.feedback.set(URL, [fb({ ...REQUEST, author: 'rumba-bot', self: true })])
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+  })
+  it('starts a round from the revise label alone, with no feedback, and removes the label', async () => {
+    const { d, start } = open(['rumba-revise'])
+    const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
+    expect(s).toMatchObject({ state: 'changes_requested', feedback: [] })
+    expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
+    expect(d.tracker.comments.at(-1)?.body).toContain('(0 comments)')
+  })
+  it('redacts secrets and cuts long text', async () => {
+    const { d, start } = open(); d.secrets.push('s3cret')
+    d.codeHost.feedback.set(URL, [fb({ ...REQUEST, text: 'uses s3cret' }), fb({ text: 'y'.repeat(5000) })])
+    const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
+    expect(JSON.stringify(s.feedback)).not.toContain('s3cret')
+    expect(Math.max(...(s.feedback ?? []).map((f) => f.text.length))).toBeLessThan(2100)
+  })
+  it('uses the pr_open history time when there is no pushedAt', async () => {
+    const d = makeDeps(); d.codeHost.pullRequests.set(URL, { state: 'open', headSha: 'h' })
+    const start = prOpen(d); const opened = start.history.at(-1)?.at as string
+    d.codeHost.feedback.set(URL, [fb({ ...REQUEST, at: new Date(Date.parse(opened) - 1000).toISOString() })])
+    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    d.codeHost.feedback.set(URL, [fb({ ...REQUEST, at: new Date(Date.parse(opened) + 1000).toISOString() })])
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), start)).state).toBe('changes_requested')
   })
 })
