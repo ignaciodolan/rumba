@@ -104,13 +104,18 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   }
 
   if (ENDS.includes(state.state)) return left(state.state)
-  if (state.state === 'pr_open') {
-    await checkPullRequest(deps, ticket, state, summary, count, () => trackPullRequest(deps, rumba, ticket, state), 'pull request open')
-    return
+  // The pull request first, at no limit cost: one that has ended moves the ticket, and feedback on
+  // one still open starts a round. A round, whether found now or parked by an earlier run, goes on
+  // to the engine in this run like any other workable ticket. The pull request was just read, so a
+  // round found now is not read again as a parked one.
+  if (state.state === 'pr_open' || state.state === 'changes_requested') {
+    const tracked = state
+    const next = tracked.state === 'pr_open'
+      ? await checkPullRequest(deps, ticket, tracked, summary, count, () => trackPullRequest(deps, rumba, ticket, tracked), 'pull request open')
+      : await checkPullRequest(deps, ticket, tracked, summary, count, () => trackParkedPullRequest(deps, rumba, ticket, tracked), null)
+    if (next?.state !== 'changes_requested') return
+    state = next
   }
-  // The outcome first: a pull request that has ended moves the ticket at no limit cost. One
-  // still open goes on to the engine for its review round, like any other workable ticket.
-  if (state.state === 'changes_requested' && !(await checkPullRequest(deps, ticket, state, summary, count, () => trackParkedPullRequest(deps, rumba, ticket, state), null))) return
   if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 
   const from = state.state
@@ -146,26 +151,23 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
 
 /**
  * Reads the pull request of a ticket in `pr_open` or `changes_requested`. It needs no lease and no engine, so it does not
- * count toward the run limit; only a failed read does, like any other error. Returns true when the ticket stayed as it
- * was; it is then listed as left with `stays`, unless `stays` is null.
+ * count toward the run limit; only a failed read does, like any other error. Returns the state the read leaves the ticket
+ * in, or null when the read failed. A ticket that stayed as it was is listed as left with `stays`, unless `stays` is null.
  */
 async function checkPullRequest(
   deps: Deps, ticket: Ticket, state: TicketState, summary: RunSummary, count: RunCount,
   track: () => Promise<TicketState>, stays: string | null,
-): Promise<boolean> {
+): Promise<TicketState | null> {
   try {
     const next = await track()
-    if (next.state !== state.state) {
-      summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
-      return false
-    }
-    if (stays !== null) summary.left.push({ ticket: ticket.id, why: stays })
-    return true
+    if (next.state !== state.state) summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
+    else if (stays !== null) summary.left.push({ ticket: ticket.id, why: stays })
+    return next
   } catch (e) {
     // A setup error, not the ticket's: it stops the run and counts against no ticket.
     if (e instanceof CodeHostIdentityError) throw e
     summary.left.push({ ticket: ticket.id, why: await recordError(deps, ticket, state, e, count) })
-    return false
+    return null
   }
 }
 

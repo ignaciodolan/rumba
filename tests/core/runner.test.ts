@@ -3,7 +3,7 @@ import { runRumba, TrackerIdentityError } from '../../src/core/runner.js'
 import { newState, transition } from '../../src/core/states.js'
 import { CodeHostIdentityError } from '../../src/ports/codeHost.js'
 import { AgentError } from '../../src/ports/agent.js'
-import { changesRequested, failing, happyTriage, makeDeps, makeRumba, makeTicket, REVIEWED_PR, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
+import { aliceReview, changesRequested, failing, happyTriage, makeDeps, makeRumba, makeTicket, REVIEWED_PR, scriptFeatureWithoutCriteria, scriptHappyBug, verified } from '../../src/testing/fakes.js'
 
 const PR = 'https://example.test/pr/42'
 const oneTicket = makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } })
@@ -319,6 +319,89 @@ describe('runRumba', () => {
       expect(r.advanced).toEqual([{ ticket: '1', from: 'queued', to: 'pr_open' }])
       expect(d.tracker.states.get('1')?.state).toBe('pr_open')
       expect(d.tracker.states.get('1')?.lease).toBeUndefined()
+    })
+  })
+
+  describe('a review round found in the same run', () => {
+    /** Ticket #42 in pr_open on REVIEWED_PR, pushed at 'sha2', with alice's changes-requested review written after the push. */
+    function reviewed(d: ReturnType<typeof makeDeps>) {
+      scriptHappyBug(d)
+      d.agent.script.revise = { kind: 'revise', summary: 'Renamed total to subtotal.', replies: [{ item: 1, reply: 'Renamed it.' }] }
+      d.workspace.commitResults = ['sha3']
+      d.workspace.branchTip = 'sha2'
+      d.codeHost.pullRequests.set(REVIEWED_PR, { state: 'open', headSha: 'sha2' })
+      d.codeHost.feedback.set(REVIEWED_PR, [{ ...aliceReview, reviewState: 'changes_requested', canWrite: true, self: false }])
+      const state = { ...transition(verified(d), 'pr_open', d.clock()), pullRequestUrl: REVIEWED_PR, pushedAt: '2025-12-31T00:00:00.000Z', reviewRounds: 0, fixSummary: 'fixed' }
+      d.tracker.tickets.push(makeTicket({ id: '42', ref: '#42' }))
+      d.tracker.states.set('42', state)
+      return state
+    }
+    const revisions = (d: ReturnType<typeof makeDeps>) => d.agent.calls.filter((c) => c.kind === 'revise')
+
+    it('moves the ticket to changes_requested, then carries out the round, under a lease', async () => {
+      const d = makeDeps(); reviewed(d)
+      const leases: unknown[] = []
+      const run = d.agent.run.bind(d.agent)
+      d.agent.run = async (task, w) => { if (task.kind === 'revise') leases.push(d.tracker.states.get('42')?.lease); return run(task, w) }
+      const reads: string[] = []
+      const get = d.codeHost.getPullRequest.bind(d.codeHost)
+      d.codeHost.getPullRequest = async (url) => { reads.push(url); return get(url) }
+      const r = await runRumba(d, makeRumba())
+      expect(r.advanced).toEqual([
+        { ticket: '42', from: 'pr_open', to: 'changes_requested' },
+        { ticket: '42', from: 'changes_requested', to: 'pr_open' },
+      ])
+      expect(r.left).toEqual([])
+      expect(revisions(d)).toHaveLength(1)
+      expect(leases).toEqual([{ runId: 'run-1', at: '2026-01-01T00:00:00.000Z' }])
+      expect(d.tracker.states.get('42')).toMatchObject({ state: 'pr_open', reviewRounds: 1 })
+      expect(d.tracker.states.get('42')?.lease).toBeUndefined()
+      // Tracked once, not again as a parked ticket: one read for the tracking, one for the round's head.
+      expect(reads).toEqual([REVIEWED_PR, REVIEWED_PR])
+    })
+    it('says on the ticket that Rumba will revise the change, not that a later run will', async () => {
+      const d = makeDeps(); reviewed(d)
+      await runRumba(d, makeRumba())
+      expect(d.tracker.comments.map((c) => c.body)).toContain(`Review feedback arrived on the pull request (1 comment). Rumba will revise the change: ${REVIEWED_PR}`)
+      expect(JSON.stringify(d.tracker.comments)).not.toContain('later run')
+    })
+    it('leaves the round for the next run when the run limit is reached', async () => {
+      const d = makeDeps(); scriptHappyBug(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
+      reviewed(d)
+      const r = await runRumba(d, oneTicket)
+      expect(r.advanced).toEqual([
+        { ticket: '1', from: 'queued', to: 'pr_open' },
+        { ticket: '42', from: 'pr_open', to: 'changes_requested' },
+      ])
+      expect(r.left).toEqual([{ ticket: '42', why: 'run limit' }])
+      expect(revisions(d)).toHaveLength(0)
+      expect(d.tracker.states.get('42')).toMatchObject({ state: 'changes_requested', reviewRounds: 0 })
+      expect(d.tracker.states.get('42')?.lease).toBeUndefined()
+    })
+    it('spends one run-limit slot on the round and none on the tracking', async () => {
+      const d = makeDeps(); reviewed(d); d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+      const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } }))
+      expect(r.advanced.map((a) => `${a.ticket} ${a.to}`)).toEqual(['42 changes_requested', '42 pr_open', '1 pr_open'])
+      expect(r.left).toEqual([{ ticket: '2', why: 'run limit' }])
+    })
+    it('changes nothing when the tracking leaves the ticket in pr_open', async () => {
+      const d = makeDeps(); const start = reviewed(d); d.codeHost.feedback.set(REVIEWED_PR, [])
+      const r = await runRumba(d, makeRumba())
+      expect(r).toEqual({ rumba: 'shop', advanced: [], left: [{ ticket: '42', why: 'pull request open' }] })
+      expect(d.tracker.states.get('42')).toEqual(start)
+      expect(d.agent.calls).toHaveLength(0); expect(d.tracker.comments).toEqual([])
+    })
+    it('counts a round that fails as one error and leaves the ticket in changes_requested', async () => {
+      const d = makeDeps(); reviewed(d); d.agent.script.revise = new AgentError('bad json')
+      d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+      const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } }))
+      expect(r.advanced).toEqual([
+        { ticket: '42', from: 'pr_open', to: 'changes_requested' },
+        { ticket: '1', from: 'queued', to: 'pr_open' },
+      ])
+      expect(r.left).toEqual([{ ticket: '42', why: 'error: bad json' }, { ticket: '2', why: 'run limit' }])
+      expect(d.tracker.states.get('42')).toMatchObject({ state: 'changes_requested', errorCount: 1, reviewRounds: 0 })
+      expect(d.tracker.states.get('42')?.lease).toBeUndefined()
     })
   })
 

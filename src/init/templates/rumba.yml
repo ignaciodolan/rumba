@@ -52,6 +52,7 @@ environment:
 #   max_tickets_per_run: 3
 #   minutes_per_ticket: 30
 #   max_fix_attempts: 2
+#   max_review_rounds: 2
 
 # labels:                   # optional: rename the labels Rumba uses
 #   opt_in: rumba:__NAME__

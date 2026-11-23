@@ -81,13 +81,14 @@ describe('trackPullRequest feedback', () => {
     expect(s.history.at(-1)?.note).toBe('review feedback')
     expect(s.feedback).toHaveLength(1)
     expect(d.tracker.states.get('123')).toEqual(s)
-    expect(d.tracker.comments.at(-1)?.body).toBe(`Review feedback arrived on the pull request (1 comment). Rumba will revise the change on a later run: ${URL}`)
+    expect(d.tracker.comments.at(-1)?.body).toBe(`Review feedback arrived on the pull request (1 comment). Rumba will revise the change: ${URL}`)
     expect(d.codeHost.labelsRemoved).toEqual([])
   })
   it('stores line and pull request comments along with the review', async () => {
     const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(REQUEST), fb({ kind: 'line', path: 'a.ts', line: 7, text: 'here' }), fb({ text: 'general' })])
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
     expect(s.feedback?.map((f) => f.kind).sort()).toEqual(['comment', 'line', 'review'])
+    expect(d.tracker.comments.at(-1)?.body).toBe(`Review feedback arrived on the pull request (3 comments). Rumba will revise the change: ${URL}`)
   })
   it('starts a round on alice\'s commented review with a body and three line comments', async () => {
     const { d, start } = open()
@@ -118,7 +119,7 @@ describe('trackPullRequest feedback', () => {
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
     expect(s).toMatchObject({ state: 'changes_requested', feedback: [] })
     expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
-    expect(d.tracker.comments.at(-1)?.body).toBe(`Rumba was asked to revise the change on the pull request. It will do so on a later run: ${URL}`)
+    expect(d.tracker.comments.at(-1)?.body).toBe(`Rumba was asked to revise the change on the pull request and will do so: ${URL}`)
   })
   it('starts nothing for a label from someone without write access, and leaves it on', async () => {
     const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'tess', canWrite: false }))
