@@ -4,7 +4,7 @@ import { baseBranch, baseBranchOf, defaultLabels, fixBranch, isValidRumbaName, s
 describe('labels', () => {
   it('builds default names', () => {
     const l = defaultLabels('shop')
-    expect(l).toEqual({ optIn: 'rumba:shop', statePrefix: 'rumba-state:', approved: 'rumba-approved', retry: 'rumba-retry' })
+    expect(l).toEqual({ optIn: 'rumba:shop', statePrefix: 'rumba-state:', approved: 'rumba-approved', retry: 'rumba-retry', revise: 'rumba-revise' })
     expect(stateLabel(l, 'building')).toBe('rumba-state:building')
     expect(fixBranch('shop', '123')).toBe('rumba/shop/123')
     expect(baseBranch('shop', '123')).toBe('rumba/shop/base-123')

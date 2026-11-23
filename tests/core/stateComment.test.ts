@@ -14,6 +14,17 @@ describe('stateComment', () => {
     expect(encodeStateComment(s).split('\n')[0]).toContain(name)
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
+  it('round-trips a ticket in changes_requested with its feedback', () => {
+    const s = {
+      ...newState('shop', t0), state: 'changes_requested' as const, lastDurable: 'changes_requested' as const,
+      pushedAt: '2026-01-01T00:00:00.000Z',
+      feedback: [
+        { kind: 'review' as const, author: 'alice', url: 'https://github.com/acme/shop/pull/7#r1', at: '2026-01-02T00:00:00.000Z', text: 'Please add a test' },
+        { kind: 'line' as const, author: 'alice', url: 'https://github.com/acme/shop/pull/7#r2', at: '2026-01-02T00:00:00.000Z', text: 'Rename this', path: 'src/a.ts', line: 12 },
+      ],
+    }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
   it('returns null for other comments and for broken json', () => {
     expect(decodeStateComment('looks good to me')).toBeNull()
     expect(decodeStateComment('```json\n{ "marker": "rumba-state-v1", \n```')).toBeNull()
@@ -44,6 +55,19 @@ describe('stateComment', () => {
       '```json\n' + JSON.stringify({ marker: 'rumba-state-v1', ...newState('shop', t0), ...patch }) + '\n```'
     it('accepts an untouched forged-style block', () => {
       expect(decodeStateComment(forge({}))).toEqual(newState('shop', t0))
+    })
+    const entry = { kind: 'comment', author: 'alice', url: 'u', at: 'a', text: 't' }
+    it.each([
+      ['feedback that is not a list', { feedback: 'x' }],
+      ['feedback of an unknown kind', { feedback: [{ ...entry, kind: 'praise' }] }],
+      ['feedback without an author', { feedback: [{ ...entry, author: undefined }] }],
+      ['feedback with a text that is not a string', { feedback: [{ ...entry, text: 5 }] }],
+      ['feedback with a fractional line', { feedback: [{ ...entry, kind: 'line', line: 1.5 }] }],
+      ['feedback with a negative line', { feedback: [{ ...entry, kind: 'line', line: -1 }] }],
+      ['feedback with an unknown field', { feedback: [{ ...entry, extra: 1 }] }],
+      ['a pushedAt that is not a string', { pushedAt: 3 }],
+    ])('refuses %s', (_name, patch) => {
+      expect(decodeStateComment(forge(patch))).toBeNull()
     })
     it.each([
       ['unknown state', { state: 'abandoned' }],
@@ -77,6 +101,28 @@ describe('encodeStateComment size', () => {
   })
   it('leaves a state under the limit unchanged', () => {
     const s = { ...newState('shop', t0), before: results(2, 1000, false), after: results(2, 1000, true) }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it('cuts feedback texts, keeping their end, before giving up', () => {
+    const feedback = Array.from({ length: 30 }, (_, i) => ({
+      kind: 'comment' as const, author: 'alice', url: `u${i}`, at: 'a', text: `${'x'.repeat(4000)}END${i}`,
+    }))
+    const s = { ...newState('shop', t0), state: 'changes_requested' as const, lastDurable: 'changes_requested' as const, feedback }
+    const copy = structuredClone(s)
+    const body = encodeStateComment(s)
+    expect(body.length).toBeLessThanOrEqual(60_000)
+    expect(s).toEqual(copy)
+    const back = decodeStateComment(body)!.feedback!
+    expect(back).toHaveLength(30)
+    back.forEach((f, i) => {
+      expect(f.text.endsWith(`END${i}`)).toBe(true)
+      expect(f.text.length).toBeLessThan(copy.feedback![i]!.text.length)
+      expect(f).toMatchObject({ author: 'alice', url: `u${i}` })
+    })
+  })
+  it('leaves feedback that fits untouched', () => {
+    const feedback = [{ kind: 'comment' as const, author: 'alice', url: 'u', at: 'a', text: 'y'.repeat(2000) }]
+    const s = { ...newState('shop', t0), feedback }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
   it('throws, with the size, when the state does not fit even without output', () => {

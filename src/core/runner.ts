@@ -53,7 +53,7 @@ function optInPrefix(rumba: RumbaConfig): string {
 /** Lists the rumba's tickets and advances each one, within the run limits. */
 export async function runRumba(deps: Deps, rumba: RumbaConfig, opts: { ticketId?: string } = {}): Promise<RunSummary> {
   await deps.tracker.ensureLabels()
-  const tickets = opts.ticketId === undefined ? await deps.tracker.listCandidates({ closedIn: ['pr_open'] }) : [await deps.tracker.getTicket(opts.ticketId)]
+  const tickets = opts.ticketId === undefined ? await deps.tracker.listCandidates({ closedIn: ['pr_open', 'changes_requested'] }) : [await deps.tracker.getTicket(opts.ticketId)]
   const summary: RunSummary = { rumba: rumba.name, advanced: [], left: [] }
   const count: RunCount = { errors: 0, worked: 0 }
   for (const ticket of tickets) {
@@ -81,9 +81,9 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   const stored = await deps.tracker.readState(ticket)
   let state = stored !== null && stored.rumba === rumba.name ? stored : newState(rumba.name, deps.clock())
 
-  if (ticket.labels.includes(labels.retry) && (ENDS.includes(state.state) || state.state === 'pr_open')) {
+  if (ticket.labels.includes(labels.retry) && (ENDS.includes(state.state) || state.state === 'pr_open' || state.state === 'changes_requested')) {
     // A retry starts the attempts again; the old ones would explain nothing about the new run.
-    const { attempts: _attempts, fixSummary: _summary, relocation: _relocation, ...rest } = state
+    const { attempts: _attempts, fixSummary: _summary, relocation: _relocation, feedback: _feedback, ...rest } = state
     state = { ...transition(rest, 'queued', deps.clock()), fixAttempts: 0, errorCount: 0 }
     await deps.tracker.writeState(ticket, state)
     await deps.tracker.removeLabel(ticket, labels.retry)
@@ -103,6 +103,8 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   }
 
   if (ENDS.includes(state.state)) return left(state.state)
+  // Until feedback is acted on, a ticket waiting for changes is left as it is.
+  if (state.state === 'changes_requested') return left('changes requested')
   if (state.state === 'pr_open') return await checkPullRequest(deps, rumba, ticket, state, summary, count)
   if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 

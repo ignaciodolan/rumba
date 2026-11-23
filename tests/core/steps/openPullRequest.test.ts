@@ -11,6 +11,11 @@ describe('openPullRequest', () => {
     expect(d.tracker.comments.at(-1)?.body).toContain('https://example.test/pr/1')
     expect(d.tracker.states.get('123')?.state).toBe('pr_open')
   })
+  it('records the clock time of the push as pushedAt', async () => {
+    const d = makeDeps(); const s = await openPullRequest(d, makeRumba(), makeTicket(), verified(d))
+    expect(s.pushedAt).toBe(d.clock().toISOString())
+    expect(d.tracker.states.get('123')?.pushedAt).toBe(d.clock().toISOString())
+  })
   it('opens a ready pull request when every criterion is verified', async () => {
     const d = makeDeps(); const v = verified(d); v.criteria = v.criteria.filter((c) => c.checkable)
     await openPullRequest(d, makeRumba(), makeTicket(), v)

@@ -129,6 +129,30 @@ describe('runRumba', () => {
     expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' }); expect(t.labels).not.toContain('rumba-retry')
     expect(d.tracker.states.get('1')).toMatchObject({ fixAttempts: 0, errorCount: 0 })
   })
+  describe('changes_requested', () => {
+    const parked = (d: ReturnType<typeof makeDeps>, extra = {}) => ({
+      ...newState('shop', d.clock()), state: 'changes_requested' as const, lastDurable: 'changes_requested' as const, pullRequestUrl: PR,
+      feedback: [{ kind: 'comment' as const, author: 'alice', url: 'u', at: 'a', text: 'Rename it' }], ...extra,
+    })
+    it('leaves the ticket alone, open or closed, at no limit cost', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }), makeTicket({ id: '3' }))
+      d.tracker.closed.add('2')
+      d.tracker.states.set('1', parked(d)); d.tracker.states.set('2', parked(d))
+      const r = await runRumba(d, oneTicket)
+      expect(r.left).toEqual([{ ticket: '1', why: 'changes requested' }, { ticket: '2', why: 'changes requested' }])
+      expect(r.advanced.map((a) => a.ticket)).toEqual(['3'])
+      expect(d.tracker.states.get('1')).toEqual(parked(d))
+    })
+    it('restarts on rumba-retry and clears the feedback', async () => {
+      const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
+      d.tracker.states.set('1', parked(d, { errorCount: 2 }))
+      const r = await runRumba(d, makeRumba())
+      expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' }); expect(t.labels).not.toContain('rumba-retry')
+      expect(d.tracker.states.get('1')).toMatchObject({ errorCount: 0 })
+      expect(d.tracker.states.get('1')).not.toHaveProperty('feedback')
+    })
+  })
   it('lists a ticket that stays in awaiting_criteria as left, with no lease', async () => {
     const d = makeDeps(); scriptFeatureWithoutCriteria(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
     const r = await runRumba(d, makeRumba())

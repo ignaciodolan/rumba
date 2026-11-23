@@ -19,6 +19,15 @@ const attempt = z.object({
 })
 
 const check = z.object({ criterionId: z.string(), command: z.string(), files: z.array(z.string()) })
+const feedback = z.object({
+  kind: z.enum(['review', 'line', 'comment']),
+  author: z.string(),
+  url: z.string(),
+  at: z.string(),
+  text: z.string(),
+  path: z.string().optional(),
+  line: z.number().int().positive().optional(),
+}).strict()
 const relocation = z.object({
   status: z.enum(['started', 'relocated', 'rejected']),
   from: z.string(),
@@ -45,6 +54,8 @@ const ticketState = z.object({
   baseSha: z.string().optional(),
   checksSha: z.string().optional(),
   pullRequestUrl: z.string().optional(),
+  pushedAt: z.string().optional(),
+  feedback: z.array(feedback).optional(),
   before: z.array(checkResult).optional(),
   after: z.array(checkResult).optional(),
   attempts: z.array(attempt).optional(),
@@ -58,6 +69,10 @@ const ticketState = z.object({
 export const MAX_STATE_COMMENT = 60000
 const OUTPUT_DROPPED = '[output dropped: state too large]'
 
+function cutStart(text: string, keep: number): string {
+  return text.length <= keep ? text : text.slice(text.length - keep)
+}
+
 function encode(s: TicketState): string {
   // Escape backticks so no value in the state can close the fence early.
   const json = JSON.stringify({ marker: STATE_MARKER, ...s }, null, 2).replaceAll('`', '\\u0060')
@@ -66,7 +81,7 @@ function encode(s: TicketState): string {
 
 /**
  * The state comment, at most MAX_STATE_COMMENT characters. When it would be longer, the check
- * output is left out of it; when it is still too long, this throws. `s` is never changed.
+ * output is left out of it, then the feedback texts are cut; when it is still too long, this throws. `s` is never changed.
  */
 export function encodeStateComment(s: TicketState): string {
   const full = encode(s)
@@ -79,6 +94,23 @@ export function encodeStateComment(s: TicketState): string {
   if (s.attempts !== undefined) slim.attempts = s.attempts.map((a) => ({ ...a, tail: OUTPUT_DROPPED }))
   const body = encode(slim)
   if (body.length <= MAX_STATE_COMMENT) return body
+  return fitFeedback(slim, body)
+}
+
+/** The first cut keeps this many characters of each feedback text; each further one halves it. */
+const FEEDBACK_KEPT = 2000
+const FEEDBACK_KEPT_MIN = 100
+
+/** Cuts every feedback text to its end, shorter each time, until the comment fits; throws when it never does. */
+function fitFeedback(slim: TicketState, tooLarge: string): string {
+  let body = tooLarge
+  if (slim.feedback !== undefined) {
+    for (let keep = FEEDBACK_KEPT; keep >= FEEDBACK_KEPT_MIN; keep = Math.floor(keep / 2)) {
+      // The end of a text is kept: a long review usually closes with what it asks for.
+      body = encode({ ...slim, feedback: slim.feedback.map((f) => ({ ...f, text: cutStart(f.text, keep) })) })
+      if (body.length <= MAX_STATE_COMMENT) return body
+    }
+  }
   throw new Error(`The state is too large to store: ${body.length} characters, over the limit of ${MAX_STATE_COMMENT}.`)
 }
 

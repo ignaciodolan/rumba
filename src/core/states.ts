@@ -2,13 +2,13 @@ import type { StateName, TicketState } from './types.js'
 
 export const STATE_NAMES = [
   'queued', 'triaged', 'awaiting_criteria', 'criteria_ready', 'env_ready',
-  'checks_failing', 'building', 'verified', 'pr_open',
+  'checks_failing', 'building', 'verified', 'pr_open', 'changes_requested',
   'skipped', 'not_reproducible', 'needs_human', 'fix_failed',
   'merged', 'rejected',
 ] as const satisfies readonly StateName[]
 
 export const DURABLE: readonly StateName[] = [
-  'queued', 'awaiting_criteria', 'criteria_ready', 'pr_open',
+  'queued', 'awaiting_criteria', 'criteria_ready', 'pr_open', 'changes_requested',
   'skipped', 'not_reproducible', 'needs_human', 'fix_failed',
   'merged', 'rejected',
 ]
@@ -25,7 +25,8 @@ const MOVES: Record<StateName, StateName[]> = {
   checks_failing: ['building'],
   building: ['verified', 'fix_failed', 'needs_human'],
   verified: ['pr_open'],
-  pr_open: ['merged', 'rejected'],
+  pr_open: ['merged', 'rejected', 'changes_requested'],
+  changes_requested: [],
   skipped: [],
   not_reproducible: [],
   needs_human: [],
@@ -40,7 +41,7 @@ export function isDurable(s: StateName): boolean {
 
 export function canTransition(from: StateName, to: StateName): boolean {
   if (to === 'needs_human') return true
-  if (to === 'queued' && (from === 'pr_open' || ENDS.includes(from))) return true
+  if (to === 'queued' && (from === 'pr_open' || from === 'changes_requested' || ENDS.includes(from))) return true
   return Object.hasOwn(MOVES, from) && MOVES[from].includes(to)
 }
 

@@ -1,7 +1,7 @@
 export type Kind = 'bug' | 'feature'
 export type StateName =
   | 'queued' | 'triaged' | 'awaiting_criteria' | 'criteria_ready' | 'env_ready'
-  | 'checks_failing' | 'building' | 'verified' | 'pr_open'
+  | 'checks_failing' | 'building' | 'verified' | 'pr_open' | 'changes_requested'
   | 'skipped' | 'not_reproducible' | 'needs_human' | 'fix_failed'
   | 'merged' | 'rejected'
 export interface Ticket { id: string; ref: string; title: string; body: string; url: string; labels: string[] }
@@ -43,7 +43,9 @@ export interface Relocation {
   before?: CheckResult[]
 }
 export interface LinkedDocument { title: string; body: string }
-export interface LabelNames { optIn: string; statePrefix: string; approved: string; retry: string }
+export interface LabelNames { optIn: string; statePrefix: string; approved: string; retry: string; revise: string }
+/** One piece of review feedback on the pull request; `path` and `line` are set for a comment on a line. */
+export interface Feedback { kind: 'review' | 'line' | 'comment'; author: string; url: string; at: string; text: string; path?: string; line?: number }
 export interface TicketState {
   version: 1
   rumba: string
@@ -59,6 +61,10 @@ export interface TicketState {
   baseSha?: string
   checksSha?: string
   pullRequestUrl?: string
+  /** When Rumba last pushed the fix branch. */
+  pushedAt?: string
+  /** The review feedback collected from the pull request, while it waits for changes. */
+  feedback?: Feedback[]
   before?: CheckResult[]
   after?: CheckResult[]
   /** Every fix attempt, in order. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DURABLE, ENDS, canTransition, isDurable, newState, transition } from '../../src/core/states.js'
+import { DURABLE, ENDS, STATE_NAMES, canTransition, isDurable, newState, transition } from '../../src/core/states.js'
 
 const t0 = new Date('2026-01-01T00:00:00.000Z')
 
@@ -37,7 +37,7 @@ describe('states', () => {
     expect(next).not.toBe(s)
   })
   it('classifies durable states and ends', () => {
-    expect(DURABLE).toEqual(['queued', 'awaiting_criteria', 'criteria_ready', 'pr_open', 'skipped', 'not_reproducible', 'needs_human', 'fix_failed', 'merged', 'rejected'])
+    expect(DURABLE).toEqual(['queued', 'awaiting_criteria', 'criteria_ready', 'pr_open', 'changes_requested', 'skipped', 'not_reproducible', 'needs_human', 'fix_failed', 'merged', 'rejected'])
     expect(ENDS).toEqual(['skipped', 'not_reproducible', 'needs_human', 'fix_failed', 'merged', 'rejected'])
     expect(isDurable('building')).toBe(false)
     expect(isDurable('pr_open')).toBe(true)
@@ -47,6 +47,16 @@ describe('states', () => {
     expect(canTransition('fix_failed', 'queued')).toBe(true)
     expect(canTransition('building', 'queued')).toBe(false)
     expect(canTransition('building', 'needs_human')).toBe(true)
+  })
+  it('parks a pull request in changes_requested: durable, not an end, left only by needs_human or retry', () => {
+    expect(STATE_NAMES.indexOf('changes_requested')).toBe(STATE_NAMES.indexOf('pr_open') + 1)
+    expect(isDurable('changes_requested')).toBe(true)
+    expect(ENDS).not.toContain('changes_requested')
+    expect(canTransition('pr_open', 'changes_requested')).toBe(true)
+    expect(canTransition('changes_requested', 'queued')).toBe(true)
+    expect(canTransition('changes_requested', 'needs_human')).toBe(true)
+    for (const to of ['pr_open', 'merged', 'rejected', 'building'] as const) expect(canTransition('changes_requested', to)).toBe(false)
+    expect(canTransition('verified', 'changes_requested')).toBe(false)
   })
   it('lets pr_open end as merged or rejected, and nothing leave them but a retry', () => {
     expect(canTransition('pr_open', 'merged')).toBe(true)
