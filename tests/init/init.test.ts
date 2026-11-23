@@ -88,6 +88,12 @@ describe('initRumba', () => {
     expect(await read(root, '.github/workflows/rumba.yml')).toBe('name: mine\n')
     expect(r.notes.join('\n')).toMatch(/add "shop" to .*by hand/)
   })
+  it('lists every limit in the starter rumba.yml with its default, max_review_rounds included', async () => {
+    await initRumba(root, 'shop')
+    const text = await read(root, '.rumba/shop/rumba.yml')
+    const shown = Object.fromEntries([...text.matchAll(/^# {3}(\w+): (\d+)$/gm)].map((m) => [m[1], Number(m[2])]))
+    expect(shown).toEqual({ max_tickets_per_run: 3, minutes_per_ticket: 30, max_fix_attempts: 2, max_review_rounds: 2 })
+  })
   it('starts context.md and lessons.md with a line saying what they are for', async () => {
     await initRumba(root, 'shop')
     expect((await read(root, '.rumba/shop/context.md')).trim()).not.toBe('')
