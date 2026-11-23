@@ -68,7 +68,8 @@ async function gitDefaultBranch(root: string): Promise<string> {
 
 async function trackerStatus(tracker: Tracker, rumba: RumbaConfig): Promise<StatusLine[]> {
   const lines: StatusLine[] = []
-  for (const t of await tracker.listCandidates()) {
+  // A merge can close the issue; the ticket should still show how it ended.
+  for (const t of await tracker.listCandidates({ closedIn: ['pr_open', 'merged', 'rejected'] })) {
     const s = await tracker.readState(t)
     lines.push({ ref: t.ref, state: s !== null && s.rumba === rumba.name ? s.state : 'queued', title: t.title })
   }
