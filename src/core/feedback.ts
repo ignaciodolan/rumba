@@ -6,7 +6,11 @@ export const MAX_FEEDBACK = 20
 export const MAX_FEEDBACK_TEXT = 2000
 
 export interface Selection {
-  /** True when a writer asked for changes in a review. The revise label is the caller's to add. */
+  /**
+   * True when a writer asked for changes: their latest decision is a changes-requested review, or they left a line
+   * comment or a commented review with a body that they have not approved after. Pull request comments alone are
+   * discussion and do not count. The revise label is the caller's to add.
+   */
   requested: boolean
   feedback: Feedback[]
 }
@@ -16,6 +20,16 @@ function worthStoring(item: FeedbackItem): boolean {
   if (item.kind !== 'review') return true
   if (item.reviewState === 'approved') return false
   return item.reviewState === 'changes_requested' || item.text.trim() !== ''
+}
+
+/**
+ * A line comment, or a commented review with a body, asks for something unless its author approved later:
+ * GitHub's "Comment" review is how many reviewers ask for changes, and a later approval answers it.
+ */
+function asksForChange(i: FeedbackItem, kept: FeedbackItem[]): boolean {
+  const asks = i.kind === 'line' || (i.kind === 'review' && i.reviewState === 'commented' && i.text.trim() !== '')
+  if (!asks) return false
+  return !kept.some((a) => a.kind === 'review' && a.reviewState === 'approved' && a.author === i.author && Date.parse(a.at) > Date.parse(i.at))
 }
 
 /**
@@ -34,7 +48,7 @@ export function selectFeedback(items: FeedbackItem[], secrets: string[]): Select
   }
   const superseded = (i: FeedbackItem): boolean =>
     i.kind === 'review' && i.reviewState === 'changes_requested' && latest.get(i.author) !== i
-  const requested = [...latest.values()].some((i) => i.reviewState === 'changes_requested')
+  const requested = [...latest.values()].some((i) => i.reviewState === 'changes_requested') || kept.some((i) => asksForChange(i, kept))
   const newest = kept
     .filter((i) => worthStoring(i) && !superseded(i))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
