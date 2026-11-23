@@ -17,3 +17,21 @@ export function withMarker(body: string): string {
 export function isOwnBody(body: string): boolean {
   return body.split(/\r?\n/, 1)[0] === OWN_MARKER
 }
+
+/**
+ * How the pull request replies Rumba posted before the marker existed begin: the fixed openings its reply code
+ * writes (src/core/steps/revise.ts). They cover those older replies only; every reply since carries the marker.
+ */
+export const LEGACY_REPLY_OPENINGS = [
+  'Rumba made no change in this round.',
+  'Revised as asked with the ',
+  '- Review by ',
+  '- Line comment on ',
+  '- Comment by ',
+  '- Check for ',
+] as const
+
+/** Whether `body` reads as a Rumba reply: the marker first, or an older reply's opening. Says nothing about who wrote it. */
+export function isOwnReply(body: string): boolean {
+  return isOwnBody(body) || LEGACY_REPLY_OPENINGS.some((opening) => body.startsWith(opening))
+}

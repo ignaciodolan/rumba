@@ -287,6 +287,33 @@ describe('GitHubCodeHost feedback and labels', () => {
       expect(items.map((i) => [i.kind, i.canWrite, i.self])).toEqual([['review', true, false], ['line', true, false]])
     })
 
+    it.each([
+      "Rumba made no change in this round. The agent's reason:\n\n> Already done.",
+      'Revised as asked with the rumba-revise label.',
+      '- Review by alice (https://github.com/o/r/pull/7#pullrequestreview-1): Renamed it.',
+      '- Line comment on src/a.ts:12 by alice (https://github.com/o/r/pull/7#discussion_r2): Moved it.',
+      '- Comment by alice (https://github.com/o/r/pull/7#issuecomment-3): Done.',
+      '- Check for c1 changed, as asked in https://github.com/o/r/pull/7#issuecomment-3: renamed.',
+    ])('marks an old reply without the marker as its own by its opening: %s', async (body) => {
+      const { host } = setup({ comments: [comment({ body })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(true)
+    })
+
+    it('does not mark its own account\'s comment without the marker or an old opening', async () => {
+      const { host } = setup({ comments: [comment({ body: 'Please also round the totals' })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(false)
+    })
+
+    it('does not mark bob\'s comment that starts like an old reply', async () => {
+      const { host } = setup({ comments: [comment({ user: user('bob'), body: '- Review by alice: not done yet, please rename it.' })], permissions: { alice: 'write', bob: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]).toMatchObject({ author: 'bob', canWrite: true, self: false })
+    })
+
+    it('never marks a review or line comment by its own account that starts like an old reply', async () => {
+      const { host } = setup({ reviews: [review({ body: '- Review by alice: rename it' })], lineComments: [line({ body: '- Comment by alice: here' })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z')).map((i) => i.self)).toEqual([false, false])
+    })
+
     it('still looks up alice\'s permission, so her comment is a writer\'s only if she can write', async () => {
       const { host, lookups } = setup({ comments: [comment({ body: 'Please rename it.' })], permissions: { alice: 'read' }, login: 'alice' })
       expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]).toMatchObject({ canWrite: false, self: false })
@@ -372,6 +399,14 @@ describe('GitHubCodeHost feedback and labels', () => {
     const { host, posted } = setup()
     await host.commentOnPullRequest(URL7, 'Revised')
     expect(posted).toEqual([{ body: `${OWN}Revised` }])
+  })
+
+  it('reads back its own posted reply as its own, even one that reads like a request', async () => {
+    const comments: object[] = []
+    const { host, posted } = setup({ comments, permissions: { alice: 'write' }, login: 'alice' })
+    await host.commentOnPullRequest(URL7, 'Please also round the totals')
+    comments.push(comment({ body: posted[0]!.body }))
+    expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z')).map((i) => [i.author, i.self])).toEqual([['alice', true]])
   })
 
   it('removes a label from the pull request', async () => {

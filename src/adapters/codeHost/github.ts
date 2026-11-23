@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises'
 import type { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
-import { isOwnBody, withMarker } from '../../core/marker.js'
+import { isOwnReply, withMarker } from '../../core/marker.js'
 import { cleanOutput } from '../../core/redact.js'
 import { CodeHostIdentityError, type CodeHost, FeedbackItem, LabelAdded, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
 
@@ -21,11 +21,12 @@ const REVIEW_STATES: Record<string, NonNullable<FeedbackItem['reviewState']>> = 
 type Author = { login: string; type: string } | null
 
 /**
- * Rumba's own: a comment by the account Rumba runs as whose first line is the marker. That account may be a
- * maintainer's, so the author alone is not enough. Rumba writes no reviews or line comments, so those are a person's.
+ * Rumba's own: a comment by the account Rumba runs as whose first line is the marker, or which opens like a reply
+ * Rumba posted before the marker existed. That account may be a maintainer's, so the author alone is not enough.
+ * Rumba writes no reviews or line comments, so those are a person's.
  */
 function isOwn(i: Pick<FeedbackItem, 'kind' | 'author' | 'text'>, self: string): boolean {
-  return i.kind === 'comment' && i.author.toLowerCase() === self && isOwnBody(i.text)
+  return i.kind === 'comment' && i.author.toLowerCase() === self && isOwnReply(i.text)
 }
 
 const HEADER_KEY = 'http.https://github.com/.extraheader'

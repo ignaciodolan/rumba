@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_PULL_REQUEST_BODY } from '../../src/core/evidence.js'
-import { isOwnBody, OWN_MARKER, withMarker } from '../../src/core/marker.js'
+import { isOwnBody, isOwnReply, LEGACY_REPLY_OPENINGS, OWN_MARKER, withMarker } from '../../src/core/marker.js'
 import { MAX_STATE_COMMENT } from '../../src/core/stateComment.js'
 
 /** GitHub's limit on a comment or a pull request body. */
@@ -34,6 +34,25 @@ describe('the own-comment marker', () => {
     ['an empty body', ''],
   ])('does not count %s', (_name, body) => {
     expect(isOwnBody(body)).toBe(false)
+  })
+
+  it('lists exactly the openings of the replies Rumba wrote before the marker', () => {
+    expect(LEGACY_REPLY_OPENINGS).toEqual([
+      'Rumba made no change in this round.', 'Revised as asked with the ', '- Review by ', '- Line comment on ', '- Comment by ', '- Check for ',
+    ])
+  })
+
+  it('knows a reply by the marker, or by one of the old openings', () => {
+    expect(isOwnReply('<!-- rumba:own -->\nAnything')).toBe(true)
+    for (const opening of LEGACY_REPLY_OPENINGS) expect(isOwnReply(`${opening}rest`)).toBe(true)
+    expect(isOwnReply('Please also round the totals')).toBe(false)
+    expect(isOwnReply('> - Review by alice: done\n\nNot done.')).toBe(false)
+    expect(isOwnReply(' - Review by alice')).toBe(false)
+  })
+
+  it('does not take an old opening for the marker when adding it', () => {
+    expect(isOwnBody('- Review by alice')).toBe(false)
+    expect(withMarker('- Review by alice')).toBe('<!-- rumba:own -->\n- Review by alice')
   })
 
   it('cannot push a state comment or a pull request body over GitHub\'s limit', () => {

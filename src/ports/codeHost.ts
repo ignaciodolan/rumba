@@ -35,8 +35,9 @@ export interface FeedbackItem {
   /** The author has write access to the repository. False when that cannot be confirmed, and for a bot. */
   canWrite: boolean
   /**
-   * Rumba wrote it: a comment by the account Rumba runs as whose first line is Rumba's marker. That account may
-   * also be a maintainer's, so anything else by it, and every review and line comment, is a person's.
+   * Rumba wrote it: a comment by the account Rumba runs as whose first line is Rumba's marker, or that opens like
+   * a reply Rumba posted before the marker existed. That account may also be a maintainer's, so anything else by
+   * it, and every review and line comment, is a person's.
    */
   self: boolean
 }
