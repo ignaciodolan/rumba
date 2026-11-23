@@ -19,14 +19,19 @@ export interface BaseRun {
   what: string
   /** The message of the base commit. */
   message: string
+  /**
+   * Files set to their content on the base commit (`state.baseSha`), whatever `sha` holds: after
+   * a relocation, Rumba's original check files, which are not there, so the base commit loses them.
+   */
+  fromBase?: string[]
   /** The folder the agent wrote in, which a run must never use. */
-  agentDir?: string
+  agentDir: string
   /** The checks must keep their files: each is hashed, and a check that lost one is refused before anything runs. */
   keepFiles?: boolean
 }
 
-/** Why a check was refused on the base commit, and which one. */
-export interface Refused { criterionId: string; reason: string }
+/** Why a check was refused on the base commit, and which one; `infrastructure` when the machine failed, not the check. */
+export interface Refused { criterionId: string; reason: string; infrastructure?: string }
 
 /**
  * On the base commit with the checks as they are now, every check fails. The commit is the
@@ -39,9 +44,10 @@ export interface Refused { criterionId: string; reason: string }
 export async function onTheBase(deps: Deps, state: TicketState, run: BaseRun): Promise<{ results: CheckResult[]; hashes: Record<string, string> } | Refused> {
   const { workdir } = await deps.workspace.prepare(run.branch, { fresh: true, like: state.branch! })
   try {
-    if (run.agentDir !== undefined) notWhereTheAgentWrote(workdir, run.agentDir)
+    notWhereTheAgentWrote(workdir, run.agentDir)
     await deps.workspace.reset(workdir, state.checksSha!)
     await deps.workspace.checkoutFiles(workdir, run.sha, run.files)
+    if (run.fromBase !== undefined && run.fromBase.length > 0) await deps.workspace.checkoutFiles(workdir, state.baseSha!, run.fromBase)
     const base = await deps.workspace.commit(workdir, run.message, { allowEmpty: true })
     if (base === null) throw new Error(`The workspace made no commit of the ${run.what} checks on the base commit.`)
     const hashes = run.keepFiles === true ? await deps.workspace.hashFiles(workdir, run.files) : {}
@@ -55,7 +61,7 @@ export async function onTheBase(deps: Deps, state: TicketState, run: BaseRun): P
     try {
       const results = await runChecks(deps, handle, run.checks)
       for (const { criterionId, infrastructure, exitCode, passed } of results) {
-        if (infrastructure) return { criterionId, reason: `The ${run.what} check for ${criterionId} could not be judged on the base commit: ${infrastructure}.` }
+        if (infrastructure) return { criterionId, infrastructure, reason: `The ${run.what} check for ${criterionId} could not be judged on the base commit: ${infrastructure}.` }
         if (COULD_NOT_RUN.includes(exitCode)) return { criterionId, reason: `The ${run.what} check for ${criterionId} could not run on the base commit (exit ${exitCode}).` }
         if (passed) return { criterionId, reason: `The ${run.what} check for ${criterionId} passes on the base commit, so it no longer shows the problem.` }
       }

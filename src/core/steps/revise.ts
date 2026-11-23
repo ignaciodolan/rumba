@@ -47,8 +47,8 @@ interface Round {
 }
 
 /**
- * Checks the round changed, as the branch holds them now: each declared by the agent (or
- * sharing a changed file with a declared one), and each failing on the base commit as changed.
+ * Checks the round changed, as the branch holds them now: each declared by the agent, and each
+ * failing on the base commit as changed.
  */
 interface Accepted {
   checks: Check[]
@@ -66,7 +66,7 @@ const NOTHING_ACCEPTED: Accepted = { checks: [], reasons: [], before: [], hashes
  * How one attempt ended, before its verification. A commit comes with the checks whose files it
  * changed, and the check changes declared so far.
  */
-type Tried = { result: Revised; tip: string } & ({ sha: string; changed: Check[]; declared: Map<string, string> } | { failures: Failure[] } | { noChange: string })
+type Tried = { result: Revised; tip: string } & ({ sha: string; changed: Check[]; declared: Map<string, string>; workdir: string } | { failures: Failure[] } | { noChange: string })
 
 /** What the attempts of a round came to. */
 type Outcome =
@@ -205,7 +205,7 @@ async function reviseOnce(r: Round, failures: Failure[], attempt: number): Promi
       await deps.workspace.reset(workdir, r.start)
       return { failures: [{ criterionId: 'guard', output: checks }], result, tip: r.start }
     }
-    return { sha, result, tip: sha, changed: checks, declared }
+    return { sha, result, tip: sha, changed: checks, declared, workdir }
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
@@ -227,14 +227,16 @@ function declaredSoFar(r: Round, result: Revised): Map<string, string> {
 /**
  * The checks whose locked files the attempt changed since the round started. A check may
  * change only when the agent declares its criterion: a changed check file that belongs to no
- * declared criterion is refused, with the reason. A declared change exempts that criterion's
- * check files and nothing else.
+ * declared criterion, or also to a criterion not declared, is refused, with the reason. A
+ * declared change exempts that criterion's check files and nothing else.
  */
 async function changedChecks(deps: Deps, workdir: string, r: Round, declared: Map<string, string>): Promise<Check[] | string> {
   const changed = new Set(await deps.workspace.changedFiles(workdir, r.start))
   const edited = new Set(r.lock.files.filter((f) => changed.has(f)))
+  // A file of an undeclared check stays locked, even when a declared check shares it.
+  const locked = new Set(r.current.checks.filter((c) => !declared.has(c.criterionId)).flatMap((c) => c.files))
   const allowed = new Set(r.current.checks.filter((c) => declared.has(c.criterionId)).flatMap((c) => c.files))
-  const undeclared = [...edited].filter((f) => !allowed.has(f))
+  const undeclared = [...edited].filter((f) => locked.has(f) || !allowed.has(f))
   if (undeclared.length > 0) return `The change edited check files, which must stay as written: ${undeclared.join(', ')}`
   return r.current.checks.filter((c) => c.files.some((f) => edited.has(f)))
 }
@@ -252,10 +254,17 @@ async function acceptChanges(r: Round, tried: Extract<Tried, { sha: string }>): 
   }
   const branch = r.current.branch!
   if (!r.current.checksSha) throw new Error('Cannot run a changed check on the base commit without a checks commit')
+  const files = [...new Set(tried.changed.flatMap((c) => c.files))]
+  // After a relocation, Rumba's original check files go from the base commit too, as in the
+  // relocation's own base run: a command that selects checks by title would run them as well.
+  const relocation = r.current.relocation?.status === 'relocated' ? r.current.relocation : undefined
+  const originals = [...new Set((relocation?.moves ?? []).map((m) => m.from))].filter((f) => !files.includes(f))
   const proof = await onTheBase(deps, r.current, {
-    branch: `${branch}-review-base`, sha: tried.sha, checks: tried.changed, files: [...new Set(tried.changed.flatMap((c) => c.files))],
-    what: 'changed', message: 'test: the checks changed after review, on the base commit', keepFiles: true,
+    branch: `${branch}-review-base`, sha: tried.sha, checks: tried.changed, files, fromBase: originals,
+    what: 'changed', message: 'test: the checks changed after review, on the base commit', keepFiles: true, agentDir: tried.workdir,
   })
+  // The machine failed, not the change: the round stops as it does when verification hits that.
+  if ('reason' in proof && proof.infrastructure !== undefined) return { kind: 'infrastructure', results: [], projectTests: 'not-run', reason: proof.reason, tail: '' }
   if ('reason' in proof) {
     await resetBranch(deps, branch, r.start)
     return { kind: 'guard', failures: [{ criterionId: proof.criterionId, output: proof.reason }] }

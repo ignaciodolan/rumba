@@ -222,7 +222,6 @@ describe('revise', () => {
   it.each([
     ['passes there', { passed: true }, 'The changed check for c1 passes on the base commit, so it no longer shows the problem.'],
     ['cannot run there', { passed: false, exitCode: 127 }, 'The changed check for c1 could not run on the base commit (exit 127).'],
-    ['dies of the machine there', { passed: false, infrastructure: 'the machine ran out of memory' }, 'The changed check for c1 could not be judged on the base commit: the machine ran out of memory.'],
   ])('rejects a declared check change whose check %s, and gives the reason to the next attempt', async (_what, base, reason) => {
     const d = setup(); changedCheck(d)
     d.environment.checkResults = [base, base]
@@ -279,7 +278,7 @@ describe('revise', () => {
     expect(e.agent.calls[1]!.failures?.[0]?.output).toContain('.github/workflows/ci.yml')
   })
 
-  it('runs on the base every check that shares a changed file with a declared one', async () => {
+  it('rejects a changed file that is also a check file of a criterion the agent did not declare', async () => {
     const shared = 'tests/cart.test.ts'
     const d = setup(); changedCheck(d); d.workspace.changedSince = { sha2: [shared] }
     const start = changesRequested(d)
@@ -287,13 +286,50 @@ describe('revise', () => {
       ...start,
       criteria: [...start.criteria, { id: 'c3', text: 'C3', checkable: true }],
       checks: [{ criterionId: 'c1', command: 'npm test -- cart -t c1', files: [shared] }, { criterionId: 'c3', command: 'npm test -- cart -t c3', files: [shared] }],
-      before: [...start.before!, { criterionId: 'c3', passed: false, exitCode: 1, output: 'old c3' }],
     })
-    expect(s.state).toBe('pr_open')
-    expect(d.environment.checksRun.slice(0, 2)).toEqual(['c1', 'c3'])
-    expect(s.checks.map((c) => c.changedAfterReview)).toEqual([true, true])
-    expect(s.before?.map((r) => r.output)).toEqual(['check failed', 'check failed'])
-    expect(d.codeHost.pullRequestComments[0]!.body.split('\n').filter((l) => l.startsWith('- Check'))).toEqual(['- Check for c1 changed: alice says the check is wrong'])
+    expect(s.state).toBe('needs_human'); expect(d.environment.ups).toEqual([])
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: `The change edited check files, which must stay as written: ${shared}` }])
+    expect(d.workspace.resets).toContain('sha2'); expect(d.workspace.branchTip).toBe('sha2')
+    expect(s.checks.every((c) => c.changedAfterReview === undefined)).toBe(true)
+  })
+
+  it('stops for the machine when a changed check dies of it on the base commit, as verification does', async () => {
+    const d = setup(); changedCheck(d)
+    d.environment.checkResults = [{ passed: false, infrastructure: 'the machine ran out of memory' }]
+    await expect(revise(d, makeRumba(), makeTicket(), changesRequested(d))).rejects.toBeInstanceOf(InfrastructureError)
+    expect(d.agent.calls).toHaveLength(1)
+    expect(d.tracker.states.get('123')?.attempts?.at(-1)).toMatchObject({ outcome: 'infrastructure' })
+    expect(d.workspace.branchTip).toBe('sha2'); expect(d.codeHost.pushed).toEqual([])
+  })
+
+  it("never runs the base commit in the folder the agent wrote in", async () => {
+    const d = setup(); changedCheck(d)
+    let agentDir = ''
+    const run = d.agent.run.bind(d.agent)
+    d.agent.run = async (task, w) => { agentDir = w; return run(task, w) }
+    const prepare = d.workspace.prepare.bind(d.workspace)
+    d.workspace.prepare = async (branch, opts) => branch.endsWith('-review-base') ? { workdir: agentDir, baseSha: 'base000' } : prepare(branch, opts)
+    await expect(revise(d, makeRumba(), makeTicket(), changesRequested(d))).rejects.toThrow('The checkout for the run is the folder the agent wrote in, which was not removed.')
+    expect(d.environment.ups).toEqual([]); expect(d.workspace.branchTip).toBe('sha2')
+  })
+
+  it("removes Rumba's original check from the base commit of a relocated ticket, so a weakened check cannot hide behind it", async () => {
+    const original = 'tests/rumba/c1.test.ts'; const moved = 'tests/cart.test.ts'
+    const d = setup(); changedCheck(d); d.workspace.changedSince = { sha2: [moved] }
+    const start = changesRequested(d)
+    const relocated = {
+      ...start,
+      checks: [{ criterionId: 'c1', command: 'npm test -- -t "c1"', files: [moved] }],
+      relocation: { status: 'relocated' as const, from: 'sha2', sha: 'sha2', moves: [{ from: original, to: moved }], original: start.checks },
+    }
+    // The weakened check passes on the base unless the original, still failing there, runs with it.
+    const removed = () => d.workspace.log.some((l) => /^checkout \S+-review-base base000 /.test(l) && l.split(' ').includes(original))
+    d.environment.passes = (_c, role) => role === 'after' || removed()
+    const s = await revise(d, makeRumba(), makeTicket(), relocated)
+    expect(s.state).toBe('needs_human')
+    expect(d.agent.calls[1]!.failures).toEqual([{ criterionId: 'c1', output: 'The changed check for c1 passes on the base commit, so it no longer shows the problem.' }])
+    // The original is not part of the lock.
+    expect(s.checkHashes).toEqual({ [moved]: 'h1' })
   })
 
   it('makes the reason of a check change inert, on one line and at most 500 characters, also after the label line', async () => {

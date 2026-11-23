@@ -224,7 +224,10 @@ function fixRules(task: AgentTask): string {
   ]
   const locked = task.lockedFiles ?? []
   if (locked.length > 0) {
-    rules.push('', 'These files are locked. You must not change, move or delete them:', ...locked.map((f) => `- ${f}`))
+    const lockedLine = task.kind === 'revise'
+      ? 'These files are locked. Do not change them, unless a reviewer says that a check or its criterion is wrong: then change only that criterion\'s check files and declare it in "checkChanges" with the reason. Never move or delete them:'
+      : 'These files are locked. You must not change, move or delete them:'
+    rules.push('', lockedLine, ...locked.map((f) => `- ${f}`))
   }
   const failures = task.failures ?? []
   if (failures.length > 0) {
