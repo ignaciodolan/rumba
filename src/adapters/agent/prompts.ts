@@ -1,5 +1,5 @@
 import type { Feedback, LinkedDocument } from '../../core/types.js'
-import type { AgentTask, AgentTaskKind } from '../../ports/agent.js'
+import { AgentError, type AgentTask, type AgentTaskKind } from '../../ports/agent.js'
 
 export const MAX_TICKET_BODY = 20000
 export const RESULT_PATH = '.rumba-out/result.json'
@@ -16,7 +16,8 @@ const MAX_TITLE = 500
 const MAX_CONTEXT = 30000
 const MAX_FAILURES_TOTAL = 20000
 const MAX_DIFF = 40000
-const REVIEWERS_LEFT_OUT = '[feedback and diff left out: the prompt was too long]'
+const DIFF_CUT = '[diff cut: the prompt was too long]'
+const FEEDBACK_CUT = '[feedback cut: the prompt was too long]'
 const DOCUMENTS_LEFT_OUT = '[linked documents left out: the prompt was too long]'
 const CONTEXT_CUT = '[context cut: the prompt was too long]'
 const PROMPT_CUT = '[cut: the prompt was too long]'
@@ -118,6 +119,24 @@ function cutBytes(text: string, maxBytes: number): string {
     out = out.slice(0, -1)
   }
   return out
+}
+
+/**
+ * Cuts every feedback item's text to the same number of bytes, the largest that makes the
+ * prompt fit, and says so on each item it cuts. Throws when even the notes alone do not fit,
+ * because a round must never run without its feedback.
+ */
+function cutFeedback(feedback: Feedback[], build: (texts: string[]) => string): string {
+  const texts = (cap: number): string[] => feedback.map((f) => (bytes(f.text) <= cap ? f.text : `${cutBytes(f.text, cap)}\n${FEEDBACK_CUT}`))
+  let low = 0
+  let high = Math.max(0, ...feedback.map((f) => bytes(f.text)))
+  if (bytes(build(texts(low))) > MAX_PROMPT_BYTES) throw new AgentError("The reviewers' feedback does not fit in the prompt.")
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (bytes(build(texts(mid))) <= MAX_PROMPT_BYTES) low = mid
+    else high = mid - 1
+  }
+  return build(texts(low))
 }
 
 function documentsSection(documents: LinkedDocument[]): string {
@@ -231,15 +250,20 @@ function fenced(text: string): string {
   return `${fence}\n${text}\n${fence}`
 }
 
-function feedbackItem(f: Feedback, i: number): string {
-  const where = f.kind === 'line' && f.path !== undefined ? `, ${f.path}${f.line !== undefined ? `:${f.line}` : ''}` : ''
-  return `${i + 1}. ${f.kind} by ${f.author}${where}\n${fenced(f.text)}`
+/** Reviewer-controlled header text on one line, so it cannot start a section. */
+function oneLine(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, ' ')
 }
 
-/** The sections that carry reviewer text and the diff; the first thing cut when the prompt is too long. */
-function reviseSections(task: AgentTask): string[] {
-  const items = (task.feedback ?? []).map(feedbackItem).join('\n\n')
-  const diff = cut(task.diff ?? '', MAX_DIFF, `[diff cut at ${MAX_DIFF} characters]`)
+function feedbackItem(f: Feedback, i: number, text: string): string {
+  const line = f.line !== undefined ? `:${Number(f.line)}` : ''
+  const where = f.kind === 'line' && f.path !== undefined ? `, ${JSON.stringify(oneLine(f.path))}${line}` : ''
+  return `${i + 1}. ${f.kind} by ${oneLine(f.author)}${where}\n${fenced(text)}`
+}
+
+/** The reviewer sections. Text is cut before it is fenced, so a cut never leaves a fence open. */
+function reviseSections(feedback: Feedback[], texts: string[], diff: string): string[] {
+  const items = feedback.map((f, i) => feedbackItem(f, i, texts[i] ?? f.text)).join('\n\n')
   return [
     `# Feedback from reviewers\n${UNTRUSTED_REVIEWERS}\n\n${items}`,
     `# The change so far\n${fenced(diff)}`,
@@ -248,8 +272,10 @@ function reviseSections(task: AgentTask): string[] {
 
 /**
  * The prompt for one task, at most MAX_PROMPT_BYTES of UTF-8. When it would be longer, the
- * documents go first, then the context is cut, and as a last resort everything between the
- * rules and the result is cut. The task, the rules and the result shape are never cut.
+ * documents go first, then (for a revise task) the diff, then the context, then (revise) each
+ * feedback item's text, and as a last resort for other tasks everything between the rules and
+ * the result is cut. The task, the rules and the result shape are never cut. A revise task
+ * never runs without its feedback: when that does not fit, this throws.
  */
 /** Rumba refuses a working directory that holds either; saying so saves the agent a wasted attempt. */
 const NO_REPOSITORIES =
@@ -277,34 +303,43 @@ export function buildPrompt(task: AgentTask): string {
   if (task.kind === 'fix' || task.kind === 'revise') rest.push(`# How to fix\n${fixRules(task)}`)
   if (task.kind === 'relocate-checks') rest.push(`# How to move the checks\n${relocateRules(task)}`)
   if ((task.kind === 'write-checks' || task.kind === 'fix' || task.kind === 'revise' || task.kind === 'relocate-checks') && task.execPrefix !== undefined) rest.push(`# Where the checks run\n${whereChecksRun(task.execPrefix)}`)
-  // Last in the middle, so that whatever is cut at the end goes first.
-  const reviewers = task.kind === 'revise' ? reviseSections(task) : []
+  const feedback = task.kind === 'revise' ? task.feedback ?? [] : []
+  const fullDiff = cut(task.diff ?? '', MAX_DIFF, `[diff cut at ${MAX_DIFF} characters]`)
 
-  const assemble = (ctx: string | null, docs: string | null, late: string[] = reviewers): string => {
+  // Last in the middle, so that the last-resort cut takes them first. Text is cut before fencing.
+  const assemble = (ctx: string | null, docs: string | null, diff = fullDiff, texts: string[] = []): string => {
     const middle = [ticket]
     if (ctx !== null) middle.push(`# Context from the maintainers\n${ctx}`)
     if (docs !== null) middle.push(`# Linked documents\n${docs}`)
+    const late = task.kind === 'revise' ? reviseSections(feedback, texts, diff) : []
     return [head, ...middle, ...rest, ...late, result].join('\n\n')
   }
+  const fits = (p: string): boolean => bytes(p) <= MAX_PROMPT_BYTES
 
   let prompt = assemble(context, documents)
-  if (bytes(prompt) <= MAX_PROMPT_BYTES) return prompt
+  if (fits(prompt)) return prompt
 
   const docs = documents === null ? null : DOCUMENTS_LEFT_OUT
   prompt = assemble(context, docs)
-  if (bytes(prompt) <= MAX_PROMPT_BYTES) return prompt
+  if (fits(prompt)) return prompt
 
-  // Cutting through a fence would leave it open, so the reviewer sections go whole.
-  if (reviewers.length > 0) {
-    prompt = assemble(context, docs, [REVIEWERS_LEFT_OUT])
-    if (bytes(prompt) <= MAX_PROMPT_BYTES) return prompt
+  let diff = fullDiff
+  if (task.kind === 'revise') {
+    const budget = bytes(diff) - (bytes(prompt) - MAX_PROMPT_BYTES) - bytes(`\n${DIFF_CUT}`)
+    diff = `${cutBytes(diff, Math.max(0, budget))}\n${DIFF_CUT}`
+    prompt = assemble(context, docs, diff)
+    if (fits(prompt)) return prompt
   }
 
+  let ctx = context
   if (context !== null) {
     const budget = bytes(context) - (bytes(prompt) - MAX_PROMPT_BYTES) - bytes(`\n${CONTEXT_CUT}`)
-    prompt = assemble(`${cutBytes(context, Math.max(0, budget))}\n${CONTEXT_CUT}`, docs, reviewers.length > 0 ? [REVIEWERS_LEFT_OUT] : [])
-    if (bytes(prompt) <= MAX_PROMPT_BYTES) return prompt
+    ctx = `${cutBytes(context, Math.max(0, budget))}\n${CONTEXT_CUT}`
+    prompt = assemble(ctx, docs, diff)
+    if (fits(prompt)) return prompt
   }
+
+  if (task.kind === 'revise') return cutFeedback(feedback, (texts) => assemble(ctx, docs, diff, texts))
 
   // Last resort: cut what lies between the rules and the result.
   const before = `${head}\n\n`

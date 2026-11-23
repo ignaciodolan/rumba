@@ -39,6 +39,8 @@ describe('readAgentResult revise', () => {
   it.each([
     ['no replies', { kind: 'revise', summary: 's' }],
     ['item 0', { ...ok, replies: [{ item: 0, reply: 'x' }] }],
+    ['blank reply', { ...ok, replies: [{ item: 1, reply: '   ' }] }],
+    ['blank reason', { ...ok, checkChanges: [{ criterionId: 'c1', reason: ' \n' }] }],
     ['empty reply', { ...ok, replies: [{ item: 1, reply: '' }] }],
     ['long reply', { ...ok, replies: [{ item: 1, reply: 'x'.repeat(501) }] }],
     ['21 replies', { ...ok, replies: Array.from({ length: 21 }, () => ({ item: 1, reply: 'x' })) }],
