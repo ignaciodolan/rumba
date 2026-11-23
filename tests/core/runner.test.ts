@@ -96,6 +96,22 @@ describe('runRumba', () => {
     expect(r.left).toEqual([{ ticket: '1', why: 'needs_human' }, { ticket: '2', why: 'pr_open' }])
     expect(r.advanced.map(a => a.ticket)).toEqual(['3'])
   })
+  it.each(['merged', 'rejected'] as const)('leaves a %s ticket without the retry label alone, at no limit cost', async (name) => {
+    const d = makeDeps(); scriptHappyBug(d)
+    d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+    d.tracker.states.set('1', { ...newState('shop', d.clock()), state: name, lastDurable: name })
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    expect(r.left).toEqual([{ ticket: '1', why: name }])
+    expect(r.advanced.map(a => a.ticket)).toEqual(['2'])
+    expect(d.tracker.states.get('1')?.state).toBe(name)
+  })
+  it.each(['merged', 'rejected'] as const)('restarts a %s ticket on rumba-retry like fix_failed', async (name) => {
+    const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)
+    d.tracker.states.set('1', { ...newState('shop', d.clock()), state: name, lastDurable: name, errorCount: 3, fixAttempts: 2 })
+    const r = await runRumba(d, makeRumba())
+    expect(r.advanced[0]).toMatchObject({ from: 'queued', to: 'pr_open' }); expect(t.labels).not.toContain('rumba-retry')
+    expect(d.tracker.states.get('1')).toMatchObject({ fixAttempts: 0, errorCount: 0 })
+  })
   it('lists a ticket that stays in awaiting_criteria as left, with no lease', async () => {
     const d = makeDeps(); scriptFeatureWithoutCriteria(d); d.tracker.tickets.push(makeTicket({ id: '1' }))
     const r = await runRumba(d, makeRumba())

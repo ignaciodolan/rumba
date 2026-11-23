@@ -3,6 +3,7 @@ export type StateName =
   | 'queued' | 'triaged' | 'awaiting_criteria' | 'criteria_ready' | 'env_ready'
   | 'checks_failing' | 'building' | 'verified' | 'pr_open'
   | 'skipped' | 'not_reproducible' | 'needs_human' | 'fix_failed'
+  | 'merged' | 'rejected'
 export interface Ticket { id: string; ref: string; title: string; body: string; url: string; labels: string[] }
 /** `reason`: why a criterion is not checkable, when triage said so. */
 export interface Criterion { id: string; text: string; checkable: boolean; reason?: string }

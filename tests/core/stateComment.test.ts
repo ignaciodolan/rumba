@@ -9,6 +9,11 @@ describe('stateComment', () => {
     const s = { ...newState('shop', t0), kind: 'bug' as const, criteria: [{ id: 'c1', text: 'Login works', checkable: true }] }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
+  it.each(['merged', 'rejected'] as const)('round-trips a ticket in %s', (name) => {
+    const s = { ...newState('shop', t0), state: name, lastDurable: name, pullRequestUrl: 'https://github.com/acme/shop/pull/7' }
+    expect(encodeStateComment(s).split('\n')[0]).toContain(name)
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
   it('returns null for other comments and for broken json', () => {
     expect(decodeStateComment('looks good to me')).toBeNull()
     expect(decodeStateComment('```json\n{ "marker": "rumba-state-v1", \n```')).toBeNull()
@@ -41,7 +46,7 @@ describe('stateComment', () => {
       expect(decodeStateComment(forge({}))).toEqual(newState('shop', t0))
     })
     it.each([
-      ['unknown state', { state: 'merged' }],
+      ['unknown state', { state: 'abandoned' }],
       ['non-durable lastDurable', { lastDurable: 'building' }],
       ['wrong field type', { fixAttempts: '3' }],
       ['negative counter', { errorCount: -1 }],

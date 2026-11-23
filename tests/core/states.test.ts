@@ -37,8 +37,8 @@ describe('states', () => {
     expect(next).not.toBe(s)
   })
   it('classifies durable states and ends', () => {
-    expect(DURABLE).toEqual(['queued', 'awaiting_criteria', 'criteria_ready', 'pr_open', 'skipped', 'not_reproducible', 'needs_human', 'fix_failed'])
-    expect(ENDS).toEqual(['skipped', 'not_reproducible', 'needs_human', 'fix_failed'])
+    expect(DURABLE).toEqual(['queued', 'awaiting_criteria', 'criteria_ready', 'pr_open', 'skipped', 'not_reproducible', 'needs_human', 'fix_failed', 'merged', 'rejected'])
+    expect(ENDS).toEqual(['skipped', 'not_reproducible', 'needs_human', 'fix_failed', 'merged', 'rejected'])
     expect(isDurable('building')).toBe(false)
     expect(isDurable('pr_open')).toBe(true)
   })
@@ -47,6 +47,22 @@ describe('states', () => {
     expect(canTransition('fix_failed', 'queued')).toBe(true)
     expect(canTransition('building', 'queued')).toBe(false)
     expect(canTransition('building', 'needs_human')).toBe(true)
+  })
+  it('lets pr_open end as merged or rejected, and nothing leave them but a retry', () => {
+    expect(canTransition('pr_open', 'merged')).toBe(true)
+    expect(canTransition('pr_open', 'rejected')).toBe(true)
+    expect(canTransition('merged', 'pr_open')).toBe(false)
+    expect(canTransition('rejected', 'building')).toBe(false)
+    expect(canTransition('merged', 'queued')).toBe(true)
+    expect(canTransition('rejected', 'queued')).toBe(true)
+    expect(canTransition('verified', 'merged')).toBe(false)
+  })
+  it('keeps merged and rejected as durable end states', () => {
+    for (const s of ['merged', 'rejected'] as const) {
+      expect(isDurable(s)).toBe(true)
+      expect(ENDS).toContain(s)
+      expect(transition({ ...newState('shop', t0), state: 'pr_open', lastDurable: 'pr_open' }, s, t0).lastDurable).toBe(s)
+    }
   })
   it('returns false for values that are not states', () => {
     expect(canTransition('toString' as never, 'triaged')).toBe(false)
