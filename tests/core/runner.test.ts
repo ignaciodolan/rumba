@@ -140,10 +140,32 @@ describe('runRumba', () => {
       d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }), makeTicket({ id: '3' }))
       d.tracker.closed.add('2')
       d.tracker.states.set('1', parked(d)); d.tracker.states.set('2', parked(d))
+      d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
       const r = await runRumba(d, oneTicket)
       expect(r.left).toEqual([{ ticket: '1', why: 'changes requested' }, { ticket: '2', why: 'changes requested' }])
       expect(r.advanced.map((a) => a.ticket)).toEqual(['3'])
       expect(d.tracker.states.get('1')).toEqual(parked(d))
+    })
+    it('keeps a ticket parked while its pull request is open, without collecting feedback', async () => {
+      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', parked(d))
+      d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
+      d.codeHost.listFeedback = async () => { throw new Error('feedback must not be read') }
+      const r = await runRumba(d, makeRumba())
+      expect(r.left).toEqual([{ ticket: '1', why: 'changes requested' }])
+      expect(d.tracker.states.get('1')).toEqual(parked(d))
+    })
+    it.each([
+      ['merged', { state: 'merged', headSha: 'h', mergedAt: '2026-11-20T10:00:00Z' }, 'merged at 2026-11-20T10:00:00Z', `The pull request was merged: ${PR}`],
+      ['rejected', { state: 'closed', headSha: 'h', closedAt: '2026-11-21T09:00:00Z' }, 'closed at 2026-11-21T09:00:00Z', `The pull request was closed without merging: ${PR}`],
+    ] as const)('moves a parked ticket to %s when its pull request ended', async (to, pr, note, comment) => {
+      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', parked(d))
+      d.codeHost.pullRequests.set(PR, pr)
+      d.codeHost.listFeedback = async () => { throw new Error('feedback must not be read') }
+      const r = await runRumba(d, makeRumba())
+      expect(r.advanced).toEqual([{ ticket: '1', from: 'changes_requested', to }])
+      expect(d.tracker.states.get('1')?.state).toBe(to)
+      expect(d.tracker.states.get('1')?.history.at(-1)?.note).toBe(note)
+      expect(d.tracker.comments.at(-1)?.body).toBe(comment)
     })
     it('restarts on rumba-retry and clears the feedback', async () => {
       const d = makeDeps(); scriptHappyBug(d); const t = makeTicket({ id: '1', labels: ['rumba:shop', 'rumba-retry'] }); d.tracker.tickets.push(t)

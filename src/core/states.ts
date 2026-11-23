@@ -26,7 +26,7 @@ const MOVES: Record<StateName, StateName[]> = {
   building: ['verified', 'fix_failed', 'needs_human'],
   verified: ['pr_open'],
   pr_open: ['merged', 'rejected', 'changes_requested'],
-  changes_requested: [],
+  changes_requested: ['merged', 'rejected'],
   skipped: [],
   not_reproducible: [],
   needs_human: [],

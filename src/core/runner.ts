@@ -4,7 +4,7 @@ import { LEASE_MARGIN_MINUTES } from './budget.js'
 import { CodeHostIdentityError } from '../ports/codeHost.js'
 import { InfrastructureError } from '../ports/environment.js'
 import { advanceTicket } from './engine.js'
-import { trackPullRequest } from './steps/trackPullRequest.js'
+import { trackParkedPullRequest, trackPullRequest } from './steps/trackPullRequest.js'
 import { cleanOutput } from './redact.js'
 import { ENDS, isDurable, newState, transition } from './states.js'
 import type { StateName, Ticket, TicketState } from './types.js'
@@ -104,9 +104,9 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
   }
 
   if (ENDS.includes(state.state)) return left(state.state)
-  // Until feedback is acted on, a ticket waiting for changes is left as it is.
-  if (state.state === 'changes_requested') return left('changes requested')
-  if (state.state === 'pr_open') return await checkPullRequest(deps, rumba, ticket, state, summary, count)
+  // Until feedback is acted on, a ticket waiting for changes stays parked, unless its pull request has ended.
+  if (state.state === 'changes_requested') return await checkPullRequest(deps, ticket, state, summary, count, () => trackParkedPullRequest(deps, ticket, state), 'changes requested')
+  if (state.state === 'pr_open') return await checkPullRequest(deps, ticket, state, summary, count, () => trackPullRequest(deps, rumba, ticket, state), 'pull request open')
   if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 
   const from = state.state
@@ -133,13 +133,16 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
 }
 
 /**
- * Reads the pull request of a ticket in `pr_open`. It needs no lease and no engine, so it does not
+ * Reads the pull request of a ticket in `pr_open` or `changes_requested`. It needs no lease and no engine, so it does not
  * count toward the run limit; only a failed read does, like any other error.
  */
-async function checkPullRequest(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, summary: RunSummary, count: RunCount): Promise<void> {
+async function checkPullRequest(
+  deps: Deps, ticket: Ticket, state: TicketState, summary: RunSummary, count: RunCount,
+  track: () => Promise<TicketState>, stays: string,
+): Promise<void> {
   try {
-    const next = await trackPullRequest(deps, rumba, ticket, state)
-    if (next.state === state.state) summary.left.push({ ticket: ticket.id, why: 'pull request open' })
+    const next = await track()
+    if (next.state === state.state) summary.left.push({ ticket: ticket.id, why: stays })
     else summary.advanced.push({ ticket: ticket.id, from: state.state, to: next.state })
   } catch (e) {
     // A setup error, not the ticket's: it stops the run and counts against no ticket.

@@ -1,4 +1,5 @@
 import type { RumbaConfig } from '../../config/load.js'
+import type { PullRequestInfo } from '../../ports/codeHost.js'
 import type { Deps } from '../../ports/deps.js'
 import { selectFeedback } from '../feedback.js'
 import { transition } from '../states.js'
@@ -12,7 +13,23 @@ export async function trackPullRequest(deps: Deps, rumba: RumbaConfig, ticket: T
 
   const pr = await deps.codeHost.getPullRequest(url)
   if (pr.state === 'open') return startRound(deps, rumba, ticket, state, url, pr.labels)
+  return endTicket(deps, ticket, state, url, pr)
+}
 
+/**
+ * Reads the pull request of a ticket parked in `changes_requested`, and only its outcome: no feedback is
+ * collected, since the ticket already holds a round. Moves the ticket once the pull request has ended.
+ */
+export async function trackParkedPullRequest(deps: Deps, ticket: Ticket, state: TicketState): Promise<TicketState> {
+  if (state.state !== 'changes_requested') throw new Error(`Cannot track a parked pull request from state ${state.state}`)
+  const url = state.pullRequestUrl
+  if (!url) throw new Error('Cannot track a pull request without its url')
+  const pr = await deps.codeHost.getPullRequest(url)
+  if (pr.state === 'open') return state
+  return endTicket(deps, ticket, state, url, pr)
+}
+
+async function endTicket(deps: Deps, ticket: Ticket, state: TicketState, url: string, pr: PullRequestInfo): Promise<TicketState> {
   const merged = pr.state === 'merged'
   const when = merged ? pr.mergedAt : pr.closedAt
   const word = merged ? 'merged' : 'closed'
