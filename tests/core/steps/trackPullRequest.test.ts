@@ -102,7 +102,7 @@ describe('trackPullRequest feedback', () => {
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
     expect(s).toMatchObject({ state: 'changes_requested', feedback: [] })
     expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
-    expect(d.tracker.comments.at(-1)?.body).toContain('(0 comments)')
+    expect(d.tracker.comments.at(-1)?.body).toBe(`Rumba was asked to revise the change on the pull request. It will do so on a later run: ${URL}`)
   })
   it('redacts secrets and cuts long text', async () => {
     const { d, start } = open(); d.secrets.push('s3cret')

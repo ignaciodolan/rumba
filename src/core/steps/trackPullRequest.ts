@@ -72,8 +72,11 @@ async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state:
     // The label stays; the ticket has already left pr_open, so it is not read again as a new request.
   }
   const count = feedback.length === 1 ? '1 comment' : `${feedback.length} comments`
+  const note = feedback.length === 0
+    ? `Rumba was asked to revise the change on the pull request. It will do so on a later run: ${url}`
+    : `Review feedback arrived on the pull request (${count}). Rumba will revise the change on a later run: ${url}`
   try {
-    await deps.tracker.comment(ticket, `Review feedback arrived on the pull request (${count}). Rumba will revise the change on a later run: ${url}`)
+    await deps.tracker.comment(ticket, note)
   } catch {
     // Same reason: the state already shows the round.
   }
