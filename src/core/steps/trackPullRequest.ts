@@ -46,7 +46,19 @@ async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state:
   const next = { ...transition(state, 'changes_requested', deps.clock(), 'review feedback'), feedback }
   // Write before touching the label or commenting, so a failure there cannot lose the round.
   await deps.tracker.writeState(ticket, next)
-  if (hasLabel) await deps.codeHost.removeLabel(url, label)
-  await deps.tracker.comment(ticket, `Review feedback arrived on the pull request (${feedback.length} comments). Rumba will revise the change on a later run: ${url}`)
+  // The round is recorded. A throw here would reach the runner's error path, which counts an error and can
+  // overwrite changes_requested with needs_human. A failed removal just leaves the label on the pull request;
+  // a failed comment loses only the courtesy note.
+  try {
+    if (hasLabel) await deps.codeHost.removeLabel(url, label)
+  } catch {
+    // The label stays; the ticket has already left pr_open, so it is not read again as a new request.
+  }
+  const count = feedback.length === 1 ? '1 comment' : `${feedback.length} comments`
+  try {
+    await deps.tracker.comment(ticket, `Review feedback arrived on the pull request (${count}). Rumba will revise the change on a later run: ${url}`)
+  } catch {
+    // Same reason: the state already shows the round.
+  }
   return next
 }
