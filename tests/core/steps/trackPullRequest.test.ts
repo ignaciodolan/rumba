@@ -124,13 +124,20 @@ describe('trackPullRequest feedback', () => {
   })
   it('does not fail when removing a stale label fails', async () => {
     const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ at: '2026-11-19T00:00:00Z' }))
-    d.codeHost.removeLabel = async () => { throw new Error('label api down') }
+    const tried: string[] = []
+    d.codeHost.removeLabel = async (_url, label) => { tried.push(label); throw new Error('label api down') }
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
+    expect(tried).toEqual(['rumba-revise'])
   })
   it('keeps the label of a non-writer when a writer asked for changes in a review', async () => {
     const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'tess', canWrite: false })); d.codeHost.feedback.set(URL, [fb(REQUEST)])
     expect((await trackPullRequest(d, makeRumba(), makeTicket(), start)).state).toBe('changes_requested')
     expect(d.codeHost.labelsRemoved).toEqual([])
+  })
+  it('removes a stale label when a writer\'s changes-requested review starts the round', async () => {
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ at: '2026-11-19T00:00:00Z' })); d.codeHost.feedback.set(URL, [fb(REQUEST)])
+    expect((await trackPullRequest(d, makeRumba(), makeTicket(), start)).state).toBe('changes_requested')
+    expect(d.codeHost.labelsRemoved).toEqual([{ url: URL, label: 'rumba-revise' }])
   })
   it('keeps the line comments of a review submitted after the push', async () => {
     const { d, start } = open(); d.codeHost.feedback.set(URL, [fb(REQUEST), fb({ kind: 'line', path: 'a.ts', line: 7, text: 'here', at: REQUEST_AT })])
@@ -144,10 +151,12 @@ describe('trackPullRequest feedback', () => {
     expect(Math.max(...(s.feedback ?? []).map((f) => f.text.length))).toBeLessThan(2100)
   })
   it('keeps the round and the error count when removing the label fails', async () => {
-    const { d, start } = open(['rumba-revise']); d.codeHost.feedback.set(URL, [fb(REQUEST)])
-    d.codeHost.removeLabel = async () => { throw new Error('label api down') }
+    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added())
+    const tried: string[] = []
+    d.codeHost.removeLabel = async (_url, label) => { tried.push(label); throw new Error('label api down') }
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), { ...start, errorCount: 2 })
-    expect(s).toMatchObject({ state: 'changes_requested', errorCount: 2 }); expect(s.feedback).toHaveLength(1)
+    expect(tried).toEqual(['rumba-revise'])
+    expect(s).toMatchObject({ state: 'changes_requested', errorCount: 2 }); expect(s.feedback).toHaveLength(0)
     expect(d.tracker.states.get('123')).toMatchObject({ state: 'changes_requested', errorCount: 2 })
   })
   it('keeps the round and the error count when the ticket comment fails', async () => {
