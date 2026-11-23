@@ -4,6 +4,8 @@ Date: 2026-11-20. Status: revision 2, waiting for approval. Revision 1 was appro
 
 Amended after stage 1 was built: sections 3 and 12 now say where the commands of the Docker environment run. The earlier text had them run in a checkout of the code under test, which let a file written by the agent be read or executed on the host.
 
+Amended after stage 2 was built: sections 7 and 9 now say what was built. Each difference from the earlier text is marked **(changed: …)**.
+
 Lines marked **(call)** are choices the assistant that wrote this design made, which the owner has not explicitly agreed to. Everything else was decided in conversation.
 
 ## 1. Intent
@@ -161,7 +163,7 @@ queued → triaged → criteria_ready → env_ready → checks_failing → build
 | `building` | Agent writes or revises the change on the fix branch. | `verified` or `fix_failed` |
 | `verified` | Every check passes against the change. | `pr_open` |
 | `pr_open` | Pull request is open with the evidence. Each run looks at it again. | `merged`, `rejected` or `changes_requested` |
-| `changes_requested` | Feedback has arrived and is recorded in the state comment. | `building`, or `needs_human` after the allowed rounds |
+| `changes_requested` | Feedback has arrived and is recorded in the state comment. The review round runs in the same run that found the feedback, within the run limit. **(changed: the round runs in the same run that finds the feedback)** | `building`, or `needs_human` after the allowed rounds; `merged` or `rejected` if the pull request ends before the round **(changed: added)** |
 | `merged` | Pull request was merged. End. | none |
 | `rejected` | Pull request was closed without merging. End, unless retried. | none |
 
@@ -175,10 +177,10 @@ Exits, each of which posts a comment saying why:
 
 - `skipped`: triage judged the ticket not workable.
 - `not_reproducible`: a bug's check passes on the base commit.
-- `needs_human`: the environment does not come up or the project's own tests already fail on the default branch (checked before any agent call), a feature's checks already pass before any change, a time budget ran out, repeated errors, or review rounds ran out.
+- `needs_human`: the environment does not come up or the project's own tests already fail on the default branch (checked before any agent call), a feature's checks already pass before any change, a time budget ran out, repeated errors, a review round whose every attempt failed, or review rounds ran out. **(changed: a failed round goes to `needs_human`)**
 - `fix_failed`: checks still fail after the allowed fix attempts (default 2).
 
-Re-entry: a person adds `rumba-retry` and Rumba resets the ticket to `queued`. Feedback already recorded on the ticket is kept and given to the agent on the new attempt. **(call)**
+Re-entry: a person adds `rumba-retry` and Rumba resets the ticket to `queued`. A retry clears the stored feedback and the count of review rounds, since they would explain nothing about the new attempt. **(changed: this said that feedback already recorded on the ticket is kept and given to the agent on the new attempt)**
 
 Criteria that cannot be checked by a command, such as "feels fast on mobile", are listed in the pull request as not verified. They never count as passed. If any exist, the pull request is opened as a draft. **(call)** A written criterion can be such a criterion too, when it constrains how the work is done rather than what it does ("nothing calls the network"). Triage may mark it not checkable, with a reason; its wording does not change, and the reason is shown in the pull request.
 
@@ -201,30 +203,44 @@ Label names are configurable. Defaults are the ones above.
 
 ## 9. Pull request feedback loop
 
-On every run, for each ticket in `pr_open`, Rumba reads its pull request:
+On every run, for each ticket in `pr_open`, Rumba reads its pull request. It also reads the pull request of a ticket in `changes_requested`, for the outcome only. This read takes no place in the run limit. **(changed: tickets in `changes_requested` are read too)**
 
 - **Merged**: ticket moves to `merged`.
 - **Closed without merging**: ticket moves to `rejected`. Rumba distils a lesson from the feedback on it, if there is any.
-- **Feedback since Rumba's last push**: ticket moves to `changes_requested`, then on to `building`.
-- **Nothing new, or only approvals**: nothing happens.
+- **A round is asked for** (see "What starts a round"): ticket moves to `changes_requested`, then on to `building`. **(changed: this said "feedback since Rumba's last push")**
+- **Nothing new, only approvals, or only pull request comments**: nothing happens. **(changed: pull request comments added)**
 
-What counts as feedback **(call)**: a review that requests changes, or a review comment or pull request comment, written after Rumba's last push by someone with write access to the repository. Comments from anyone else are ignored and never reach the agent.
+The round runs in the same run that finds the feedback. It takes one place in the run limit, like any ticket worked, and gets the ticket's full time budget. When the run limit is already reached, the ticket stays in `changes_requested` for the next run. **(changed: the round runs in the same run that finds the feedback)**
+
+What counts as feedback **(call)**: a review that requests changes, a review left as a comment with a body, or a review comment or pull request comment, written by someone with write access to the repository. Comments from anyone else are ignored and never reach the agent. Only what was written after the feedback was last dealt with counts: after Rumba's push that opened the pull request or, once a review round has run, after that round started, so feedback written while it ran is not missed. **(changed: commented reviews added; "after Rumba's last push" became the start of the last round)**
+
+What starts a round **(changed: any feedback after the last push started one)**:
+
+- A writer's review that requests changes, a writer's line comment, or a writer's review left as a comment with a body, unless the same writer approved at or after it. For reviews that request changes, only each writer's latest decision counts, as on GitHub.
+- Or the revise label (`rumba-revise`, renamed with `labels.revise`), added to the pull request by a writer after that same point. Rumba removes it when the round starts. A label added before that point starts nothing, and Rumba removes it. A label added by someone without write access starts nothing, and stays.
+- Pull request comments alone do not start a round, since people discuss on pull requests. Once a round starts, they are collected with the rest.
+
+Rumba's own comments are never feedback. Every body Rumba writes on GitHub starts with a hidden marker line, `<!-- rumba:own -->`. A pull request comment is Rumba's own only when that line comes first and the account Rumba runs as wrote it. Rumba may run with a maintainer's own token, so the account alone is not enough. Reviews and line comments are always a person's, since Rumba writes none. **(changed: own comments are recognised by the marker line plus the account)**
 
 Revising:
 
 - The agent revises the change on the same branch, with the feedback in front of it.
 - Checks stay locked, as in section 11, unless the feedback says a check or a criterion is wrong. When the checks were moved into the project's tests (section 11), the moved files are the ones locked. In that case the agent may change the check, Rumba runs it again against the base commit and against the change, and the evidence table marks it as changed after review. **(call)**
+- A changed check must cite the feedback item that asked for it, and that item must name the check: its text holds the name of one of the check's files, or three words in a row of its criterion, or it is a line comment on one of the check's files. A change that cites no such item is rejected. **(changed: the citation rule is new)**
 - Rumba pushes to the same pull request, updates the evidence in its body, and replies on the pull request saying what changed.
+- An answer of "no change needed", with a reason, is posted as the reply and counts as a round. A round whose every attempt fails pushes nothing, puts the branch back where the round started, and moves the ticket to `needs_human`. **(changed: neither case was described)**
 - At most two review rounds per pull request (`max_review_rounds`, default 2). After that the ticket moves to `needs_human`. **(call)**
 
 Lessons:
 
-- After handling feedback, the agent is asked whether it holds a rule worth keeping for later tickets. If so it writes one to three lines: what was wrong, and what to do next time.
+- After a round that pushed a change or answered "no change needed", the agent is asked whether the feedback holds a rule worth keeping for later tickets. If so it writes one to three lines: what was wrong, and what to do next time. Not after a failed round. **(changed: this said "after handling feedback")**
+- Lessons are plain lines, at most 200 characters each, with secrets redacted. Rumba refuses a lesson that copies 40 characters in a row of any feedback. Rumba writes the lesson, never the agent. **(changed: lessons are plain lines, refused if they copy feedback at length)**
 - Rumba appends the lesson to `.rumba/<name>/lessons.md` with a link to the pull request it came from.
 - If the pull request is still open, the lesson is one more commit in it, so merging the fix also approves the lesson.
-- If the pull request was closed, Rumba opens a small pull request on `rumba/<name>/lesson-<ticket-id>` that changes only `lessons.md`.
-- If the agent finds no general rule, or the pull request was closed with no feedback at all, nothing is added and the state comment says so. **(call)**
+- If the pull request was closed, Rumba opens a small pull request on `rumba/<name>/lesson-<ticket-id>` that changes only `lessons.md`. It is not a draft. **(changed: the lesson pull request is not a draft)**
+- If the agent finds no general rule, or the pull request was closed with no feedback at all, nothing is added and the state comment says so. **(call)** The state keeps the latest 10 lesson records. **(changed: the state keeps the latest 10 records)**
 - A lesson only takes effect once a person merges it. Until then the rumba does not have it.
+- Two open pull requests that both carry a lesson conflict in `lessons.md`, since each appends at its end. Keeping both entries resolves it. **(changed: a known limit, found in building)**
 
 ## 10. Plug points
 
