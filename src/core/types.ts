@@ -64,6 +64,8 @@ export interface TicketState {
   pullRequestUrl?: string
   /** When Rumba last pushed the fix branch. */
   pushedAt?: string
+  /** When Rumba last answered review feedback: the end of a review round, pushed or not. */
+  answeredAt?: string
   /** How many review rounds Rumba has run on the pull request. */
   reviewRounds?: number
   /** The review feedback collected from the pull request, while it waits for changes. */

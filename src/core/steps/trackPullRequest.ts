@@ -47,27 +47,30 @@ async function endTicket(deps: Deps, ticket: Ticket, state: TicketState, url: st
   return next
 }
 
-/** The time of Rumba's last push: feedback older than that was already dealt with. */
-function lastPush(state: TicketState): string {
-  if (state.pushedAt) return state.pushedAt
+/**
+ * The later of Rumba's last push and its last answer to a review round: feedback older than
+ * that was already dealt with, including feedback a round answered without pushing.
+ */
+function dealtWithUntil(state: TicketState): string {
   const opened = state.history.findLast((h) => h.state === 'pr_open')
-  return opened ? opened.at : new Date(0).toISOString()
+  const pushed = state.pushedAt ?? (opened ? opened.at : new Date(0).toISOString())
+  return state.answeredAt !== undefined && Date.parse(state.answeredAt) > Date.parse(pushed) ? state.answeredAt : pushed
 }
 
-/** Whether the revise label counts: added after the last push by a writer who is not Rumba's own account. */
-function labelStartsRound(added: LabelAdded | null, pushedAt: string): boolean {
-  return added !== null && Date.parse(added.at) > Date.parse(pushedAt) && added.canWrite && !added.self
+/** Whether the revise label counts: added after the feedback was dealt with, by a writer who is not Rumba's own account. */
+function labelStartsRound(added: LabelAdded | null, since: string): boolean {
+  return added !== null && Date.parse(added.at) > Date.parse(since) && added.canWrite && !added.self
 }
 
 /** Starts a revision round when a writer asked for changes or put the revise label on; otherwise changes nothing. */
 async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state: TicketState, url: string, labels: string[]): Promise<TicketState> {
   const label = rumba.labels.revise
-  const pushedAt = lastPush(state)
-  const { requested, feedback } = selectFeedback(await deps.codeHost.listFeedback(url, pushedAt), deps.secrets)
+  const since = dealtWithUntil(state)
+  const { requested, feedback } = selectFeedback(await deps.codeHost.listFeedback(url, since), deps.secrets)
   const added = labels.includes(label) ? await deps.codeHost.labelAdded(url, label) : null
-  const asked = labelStartsRound(added, pushedAt)
-  // A label from before the push was dealt with by that push; one from a non-writer is left for a writer to judge.
-  const stale = added !== null && Date.parse(added.at) <= Date.parse(pushedAt)
+  const asked = labelStartsRound(added, since)
+  // A label from before the push or the answer was dealt with by it; one from a non-writer is left for a writer to judge.
+  const stale = added !== null && Date.parse(added.at) <= Date.parse(since)
   if (!asked && !requested) {
     if (stale) await dropLabel(deps, url, label)
     return state

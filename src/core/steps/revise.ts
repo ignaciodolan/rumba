@@ -33,7 +33,7 @@ interface Round {
   current: TicketState
   /** Which round this is, from 1. */
   n: number
-  /** The head of the branch when the round started: the pull request as Rumba last left it. */
+  /** The pull request's head when the round started. */
   start: string
   lock: Lock
   feedback: Feedback[]
@@ -70,7 +70,7 @@ export async function revise(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
 
   // The checks as they stand now (after a relocation, the moved files) are locked for the round.
   const files = [...new Set(state.checks.flatMap((c) => c.files))]
-  const { start, hashes } = await atHead(deps, branch, files)
+  const { start, hashes } = await atPullRequestHead(deps, branch, url, files)
   const n = done + 1
   const r: Round = {
     deps, rumba, ticket, n, start, lock: { files, hashes, resetTo: start }, feedback: state.feedback ?? [], attempts: [],
@@ -92,11 +92,17 @@ export async function revise(deps: Deps, rumba: RumbaConfig, ticket: Ticket, sta
   return fail(r, outcome.failures)
 }
 
-/** The head of the branch, and the hashes of `files` there, read in a new checkout of the branch. */
-async function atHead(deps: Deps, branch: string, files: string[]): Promise<{ start: string; hashes: Record<string, string> }> {
+/**
+ * Puts the branch at the pull request's head and hashes `files` there, in a new checkout. A
+ * person may have pushed to the branch, and their commits are kept; a commit a killed run left
+ * on the local branch, never pushed, is dropped.
+ */
+async function atPullRequestHead(deps: Deps, branch: string, url: string, files: string[]): Promise<{ start: string; hashes: Record<string, string> }> {
+  const { headSha } = await deps.codeHost.getPullRequest(url)
   const { workdir } = await deps.workspace.prepare(branch, { fresh: false })
   try {
-    return { start: await deps.workspace.head(workdir), hashes: await deps.workspace.hashFiles(workdir, files) }
+    await deps.workspace.syncToRemote(workdir, branch, headSha)
+    return { start: headSha, hashes: await deps.workspace.hashFiles(workdir, files) }
   } finally {
     await cleanupQuietly(deps.workspace, workdir)
   }
@@ -136,7 +142,8 @@ async function attempts(r: Round): Promise<Outcome> {
 }
 
 async function record(r: Round, a: Omit<AttemptRecord, 'n'>): Promise<void> {
-  const attempt = { n: (r.current.attempts?.at(-1)?.n ?? 0) + 1, ...a }
+  // Numbered within the round, so the round's comment counts its own attempts.
+  const attempt = { n: r.attempts.length + 1, ...a }
   r.attempts.push(attempt)
   r.current = { ...r.current, attempts: [...(r.current.attempts ?? []), attempt].slice(-MAX_ATTEMPTS_KEPT) }
   await r.deps.tracker.writeState(r.ticket, r.current)
@@ -205,7 +212,7 @@ async function succeed(r: Round, outcome: Extract<Outcome, { kind: 'passed' }>):
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
   const verified = {
-    ...transition(rest, 'verified', now), after: outcome.results, pushedAt: now.toISOString(),
+    ...transition(rest, 'verified', now), after: outcome.results, pushedAt: now.toISOString(), answeredAt: now.toISOString(),
     fixSummary: cleanOutput(outcome.result.summary, deps.secrets, MAX_SUMMARY),
   }
   const next = transition(verified, 'pr_open', now, `review round ${r.n}`)
@@ -225,7 +232,8 @@ async function answerWithoutChange(r: Round, outcome: Extract<Outcome, { kind: '
   await record(r, { outcome: 'no-change', checks: [], projectTests: 'not-run', note: cleanOutput(`The agent said no change was needed: ${outcome.reason}`, deps.secrets, MAX_REASON), tail: '' })
   const now = deps.clock()
   const { feedback: _answered, ...rest } = r.current
-  const next = transition(transition(rest, 'verified', now, 'no change needed'), 'pr_open', now, `review round ${r.n}: no change needed`)
+  // The answer marks the feedback as dealt with, though nothing was pushed: the next run reads only newer feedback.
+  const next = { ...transition(transition(rest, 'verified', now, 'no change needed'), 'pr_open', now, `review round ${r.n}: no change needed`), answeredAt: now.toISOString() }
   await deps.tracker.writeState(ticket, next)
 
   const reason = inertText(redact(outcome.reason, deps.secrets).trim().slice(0, MAX_REASON)).split('\n').map((l) => `> ${l}`).join('\n')

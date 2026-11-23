@@ -170,6 +170,42 @@ describe('GitWorkspace', () => {
     expect(again).toEqual(first)
   })
 
+  describe('syncToRemote', () => {
+    /** A branch pushed to the remote, then a commit on it pushed by someone else; returns that commit. */
+    async function pushedByOthers(): Promise<{ workdir: string; theirs: string }> {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, 'a.txt', 'rumba'); await ws.commit(workdir, 'fix')
+      await git(clone, 'push', '-q', 'origin', 'refs/heads/rumba/shop/1')
+      await git(root, 'clone', '-q', '--branch', 'rumba/shop/1', path.join(root, 'remote.git'), 'other')
+      const other = path.join(root, 'other')
+      await write(other, 'b.txt', 'theirs'); await git(other, 'add', 'b.txt'); await git(other, 'commit', '-q', '-m', 'by a person')
+      await git(other, 'push', '-q', 'origin', 'HEAD:refs/heads/rumba/shop/1')
+      return { workdir, theirs: await git(other, 'rev-parse', 'HEAD') }
+    }
+    it('puts the worktree at the remote head, with a commit someone else pushed', async () => {
+      const { workdir, theirs } = await pushedByOthers()
+      await ws.syncToRemote(workdir, 'rumba/shop/1', theirs)
+      expect(await ws.head(workdir)).toBe(theirs)
+      expect(await readFile(path.join(workdir, 'b.txt'), 'utf8')).toBe('theirs')
+      expect(await git(clone, 'rev-parse', 'refs/heads/rumba/shop/1')).toBe(theirs)
+    })
+    it('drops a local commit that was never pushed', async () => {
+      const { workdir } = await ws.prepare('rumba/shop/1', { fresh: true })
+      await write(workdir, 'a.txt', 'rumba'); const pushed = (await ws.commit(workdir, 'fix'))!
+      await git(clone, 'push', '-q', 'origin', 'refs/heads/rumba/shop/1')
+      await write(workdir, 'left.txt', 'from a killed run'); await ws.commit(workdir, 'unpushed')
+      await ws.syncToRemote(workdir, 'rumba/shop/1', pushed)
+      expect(await ws.head(workdir)).toBe(pushed)
+      expect(existsSync(path.join(workdir, 'left.txt'))).toBe(false)
+    })
+    it('refuses when the remote branch is not at the given commit, and leaves the worktree alone', async () => {
+      const { workdir, theirs } = await pushedByOthers()
+      const before = await ws.head(workdir)
+      await expect(ws.syncToRemote(workdir, 'rumba/shop/1', before)).rejects.toThrow(/rumba\/shop\/1/)
+      expect(await ws.head(workdir)).toBe(before); expect(before).not.toBe(theirs)
+    })
+  })
+
   it('refuses to reuse a branch that does not exist', async () => {
     await expect(ws.prepare('rumba/shop/9', { fresh: false })).rejects.toThrow(/rumba\/shop\/9/)
   })

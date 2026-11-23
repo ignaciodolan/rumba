@@ -263,6 +263,14 @@ export class GitWorkspace implements Workspace {
     await this.inWorktree(wt, workdir, ['clean', '-q', '-ffdx'])
   }
 
+  async syncToRemote(workdir: string, branch: string, sha: string): Promise<void> {
+    // Fetched into the trusted repository, never through the workdir.
+    await this.git(['fetch', '-q', this.remote, `refs/heads/${branch}`])
+    const fetched = await this.git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])
+    if (fetched !== sha) throw new Error(`The remote branch ${branch} is at ${fetched.slice(0, 12)}, not at ${sha.slice(0, 12)} as expected.`)
+    await this.reset(workdir, sha)
+  }
+
   async changedFiles(workdir: string, sinceSha: string): Promise<string[]> {
     const wt = await this.worktree(workdir)
     const out = (await this.inWorktree(wt, workdir, ['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', '--no-ext-diff', '--no-renames', sinceSha, 'HEAD'])).stdout

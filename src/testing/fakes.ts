@@ -312,6 +312,15 @@ export class FakeWorkspace implements Workspace {
     this.log.push(`reset ${workdir} ${sha}`)
   }
 
+  /** Every syncToRemote, in order. */
+  syncs: { branch: string; sha: string }[] = []
+
+  async syncToRemote(workdir: string, branch: string, sha: string): Promise<void> {
+    this.syncs.push({ branch, sha })
+    this.log.push(`sync ${workdir} ${sha}`)
+    this.move(workdir, sha)
+  }
+
   /** What changedFiles returns since a given commit, when set; otherwise `changed`. */
   changedSince: Record<string, string[]> = {}
 
@@ -412,12 +421,14 @@ export const aliceReview: Feedback = {
 
 /**
  * A 'changes_requested' state: verified(d) with its pull request open, pushed at the fix
- * commit 'sha2', and review feedback stored, built through real transitions.
+ * commit 'sha2' (the branch tip and the pull request's head), and review feedback stored,
+ * built through real transitions.
  */
 export function changesRequested(d: FakeDeps, feedback: Feedback[] = [aliceReview]): TicketState {
   const now = d.clock()
   const s = transition(transition(verified(d), 'pr_open', now), 'changes_requested', now, 'review feedback')
   d.workspace.branchTip = 'sha2'
+  d.codeHost.pullRequests.set(REVIEWED_PR, { state: 'open', headSha: 'sha2' })
   return { ...s, pullRequestUrl: REVIEWED_PR, pushedAt: '2025-12-31T00:00:00.000Z', reviewRounds: 0, fixSummary: 'fixed', feedback }
 }
 

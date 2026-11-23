@@ -55,6 +55,7 @@ const ticketState = z.object({
   checksSha: z.string().optional(),
   pullRequestUrl: z.string().optional(),
   pushedAt: z.string().optional(),
+  answeredAt: z.string().optional(),
   reviewRounds: count.optional(),
   feedback: z.array(feedback).optional(),
   before: z.array(checkResult).optional(),

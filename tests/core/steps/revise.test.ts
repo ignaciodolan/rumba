@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildPrompt } from '../../../src/adapters/agent/prompts.js'
 import { advanceTicket } from '../../../src/core/engine.js'
+import { runRumba } from '../../../src/core/runner.js'
 import { renderPullRequestBody } from '../../../src/core/evidence.js'
 import { revise } from '../../../src/core/steps/revise.js'
 import type { Feedback } from '../../../src/core/types.js'
@@ -209,6 +210,73 @@ describe('revise', () => {
     d.codeHost.commentOnPullRequest = async () => { throw new Error('GitHub is down') }
     const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
     expect(s.state).toBe('pr_open'); expect(d.tracker.states.get('123')?.state).toBe('pr_open')
+  })
+
+  it('records when the round answered, on success and on a no-change answer', async () => {
+    const d = setup()
+    expect((await revise(d, makeRumba(), makeTicket(), changesRequested(d))).answeredAt).toBe('2026-01-01T00:00:00.000Z')
+    const e = setup(); e.workspace.commitResults = [null]
+    e.agent.script.revise = { ...revised, noChangeNeeded: 'total is the name the API returns.' }
+    expect((await revise(e, makeRumba(), makeTicket(), changesRequested(e))).answeredAt).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('does not start another round on the review a no-change answer answered, but does on a newer one', async () => {
+    const d = setup(); d.workspace.commitResults = [null]
+    d.agent.script.revise = { ...revised, noChangeNeeded: 'total is the name the API returns.' }
+    d.tracker.tickets.push(makeTicket()); d.tracker.states.set('123', changesRequested(d))
+    const review = { ...aliceReview, reviewState: 'changes_requested' as const, canWrite: true, self: false }
+    d.codeHost.feedback.set(PR, [review])
+    expect((await runRumba(d, makeRumba())).advanced).toEqual([{ ticket: '123', from: 'changes_requested', to: 'pr_open' }])
+    expect((await runRumba(d, makeRumba())).left).toEqual([{ ticket: '123', why: 'pull request open' }])
+    d.codeHost.feedback.set(PR, [review, { ...review, url: `${PR}#pullrequestreview-4`, at: '2026-01-01T01:00:00Z', text: 'Still wrong.' }])
+    expect((await runRumba(d, makeRumba())).advanced).toEqual([{ ticket: '123', from: 'pr_open', to: 'changes_requested' }])
+    expect(d.tracker.states.get('123')?.feedback?.map((f) => f.text)).toEqual(['Still wrong.'])
+  })
+
+  it("starts the round from the pull request's head, not from a commit a killed run left on the branch", async () => {
+    const d = setup(); const start = changesRequested(d)
+    // A person pushed sha9 to the branch; the local branch still holds an unpushed sha2.
+    d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'sha9' })
+    d.environment.passes = () => false
+    const s = await revise(d, makeRumba(), makeTicket(), start)
+    expect(d.workspace.syncs).toEqual([{ branch: 'rumba/shop/123', sha: 'sha9' }])
+    expect(d.environment.ups.map((u) => u.sha)).toEqual(['sha3', 'sha3', 'sha4', 'sha4'])
+    expect(s.state).toBe('needs_human')
+    expect(d.workspace.resets).toEqual(['sha9']); expect(d.workspace.branchTip).toBe('sha9')
+  })
+
+  it("guards against changes since the pull request's head and resets there", async () => {
+    const d = setup(); const start = changesRequested(d)
+    d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'sha9' })
+    d.workspace.changedSince = { sha9: ['.github/workflows/ci.yml'] }
+    const s = await revise(d, makeRumba(), makeTicket(), start)
+    expect(s.state).toBe('needs_human'); expect(d.environment.ups).toEqual([])
+    expect(d.workspace.resets).toEqual(['sha9', 'sha9', 'sha9'])
+  })
+
+  it("numbers a round's attempts from 1, whatever the ticket's earlier attempts", async () => {
+    const d = setup(); d.environment.passes = () => false
+    const earlier = { outcome: 'checks-failed' as const, checks: [], projectTests: 'not-run' as const, tail: '' }
+    const s = await revise(d, makeRumba(), makeTicket(), { ...changesRequested(d), attempts: [{ n: 1, ...earlier }, { n: 2, ...earlier }] })
+    expect(s.attempts?.map((a) => a.n)).toEqual([1, 2, 1, 2])
+    const body = d.tracker.comments.at(-1)!.body
+    expect(body).toContain('after 2 attempts')
+    expect(body).toContain('- Attempt 1: checks failed (c1 failed)\n- Attempt 2: checks failed (c1 failed)\n\nLast failures:')
+  })
+
+  it("goes on to the next attempt when a no-change answer on an earlier attempt's commit fails verification", async () => {
+    const d = setup(); d.workspace.commitResults = ['sha3', null, 'sha4']
+    d.agent.script.revise = [revised, { ...revised, noChangeNeeded: 'It is fine as it is.' }, revised]
+    const failed = { passed: false, output: 'expected subtotal' }
+    // Two runs for the first attempt, one strict run for the no-change answer.
+    d.environment.checkResults = [failed, failed, failed]
+    const rumba = makeRumba({ limits: { ...makeRumba().limits, maxFixAttempts: 3 } })
+    const s = await revise(d, rumba, makeTicket(), changesRequested(d))
+    expect(s.state).toBe('pr_open')
+    expect(s.attempts?.map((a) => a.outcome)).toEqual(['checks-failed', 'no-change', 'verified'])
+    expect(s.attempts?.[1]?.note).toBe('The agent said no change was needed: It is fine as it is.')
+    expect(d.environment.ups.map((u) => u.sha)).toEqual(['sha3', 'sha3', 'sha3', 'sha4'])
+    expect(d.agent.calls[2]).toMatchObject({ attempt: 3, failures: [{ criterionId: 'c1', output: 'expected subtotal' }] })
   })
 
   it('is the step the engine runs for changes_requested', async () => {
