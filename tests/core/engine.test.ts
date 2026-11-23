@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { advanceTicket } from '../../src/core/engine.js'
 import { newState, transition } from '../../src/core/states.js'
-import { makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
+import { AgentError } from '../../src/ports/agent.js'
+import { changesRequested, makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
 
 describe('advanceTicket', () => {
   it('takes a bug from queued to pr_open in one call', async () => {
@@ -30,6 +31,19 @@ describe('advanceTicket', () => {
     expect(d.tracker.comments.at(-1)?.body).toBe('Rumba stopped work on this ticket: the time budget of 30 minutes ran out.')
     expect(d.tracker.states.get('123')?.state).toBe('needs_human')
     expect(d.workspace.cleanedAll).toBe(1)
+  })
+  it('keeps what a step recorded when the time budget runs out during it', async () => {
+    const d = makeDeps(); d.environment.passes = () => false
+    d.workspace.hashes = { 'tests/rumba/c1.test.ts': 'h1' }; d.workspace.commitResults = ['sha3', 'sha4']
+    d.agent.script.revise = [{ kind: 'revise', summary: 'Renamed it.', replies: [] }, new AgentError('The agent timed out.')]
+    // The first attempt of the round outlasts the budget; the second stops on it.
+    let now = new Date('2026-01-01T00:00:00Z'); d.clock = () => now
+    const run = d.agent.run.bind(d.agent)
+    d.agent.run = async (task, w) => { now = new Date('2026-01-01T00:31:00Z'); return run(task, w) }
+    const s = await advanceTicket(d, makeRumba(), makeTicket(), changesRequested(d))
+    expect(s.state).toBe('needs_human'); expect(s.history.at(-1)?.note).toBe('time budget exceeded')
+    expect(s.attempts?.map((a) => a.outcome)).toEqual(['checks-failed'])
+    expect(d.tracker.states.get('123')).toEqual(s)
   })
   it('throws on a state it has no step for, and still cleans up', async () => {
     const d = makeDeps()

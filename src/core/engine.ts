@@ -61,8 +61,13 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
         }
       } catch (e) {
         // A call stopped because the ticket's time ran out is the budget, not an error. What
-        // stopped the step is still said, in case it was something else.
-        if (spent()) return await outOfTime(deps, rumba, ticket, current, cleanOutput(e instanceof Error ? e.message : String(e), deps.secrets, 1000))
+        // stopped the step is still said, in case it was something else. The step may have
+        // written more than `current` holds (a round's attempts), so the latest state written is
+        // the one that ends, as on the runner's error path.
+        if (spent()) {
+          const latest = (await deps.tracker.readState(ticket)) ?? current
+          return await outOfTime(deps, rumba, ticket, latest, cleanOutput(e instanceof Error ? e.message : String(e), deps.secrets, 1000))
+        }
         throw e
       }
     }
