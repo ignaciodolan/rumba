@@ -25,6 +25,14 @@ describe('stateComment', () => {
     }
     expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
   })
+  it('round-trips the review round count and a check changed after review', () => {
+    const s = { ...newState('shop', t0), reviewRounds: 1, checks: [{ criterionId: 'c1', command: 'npm test', files: ['a.test.ts'], changedAfterReview: true }] }
+    expect(decodeStateComment(encodeStateComment(s))).toEqual(s)
+  })
+  it.each([{ reviewRounds: -1 }, { reviewRounds: 1.5 }, { reviewRounds: '1' }])('rejects %o', (bad) => {
+    const comment = encodeStateComment(newState('shop', t0)).replace('"fixAttempts": 0,', `"fixAttempts": 0, "reviewRounds": ${JSON.stringify(Object.values(bad)[0])},`)
+    expect(decodeStateComment(comment)).toBeNull()
+  })
   it('returns null for other comments and for broken json', () => {
     expect(decodeStateComment('looks good to me')).toBeNull()
     expect(decodeStateComment('```json\n{ "marker": "rumba-state-v1", \n```')).toBeNull()

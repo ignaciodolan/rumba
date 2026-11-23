@@ -64,6 +64,10 @@ export interface CodeHost {
   listFeedback(url: string, since: string): Promise<FeedbackItem[]>
   /** When and by whom `label` was last added to the pull request; null if it never was. Same URL check as the other reads. */
   labelAdded(url: string, label: string): Promise<LabelAdded | null>
+  /** Replaces the body of a pull request. Same URL check as the other methods: own repository only. */
+  updatePullRequest(url: string, update: { body: string }): Promise<void>
+  /** Adds a comment to a pull request. Same URL check. */
+  commentOnPullRequest(url: string, body: string): Promise<void>
   /** Removes a label from a pull request. A label that is not there is not an error. */
   removeLabel(url: string, label: string): Promise<void>
 }

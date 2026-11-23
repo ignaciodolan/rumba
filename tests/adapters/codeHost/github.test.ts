@@ -148,6 +148,8 @@ describe('GitHubCodeHost feedback and labels', () => {
   function setup(o: Setup = {}) {
     const labels = [...(o.labels ?? ['revise', 'other'])]
     const lookups: string[] = []
+    const edits: Record<string, unknown>[] = []
+    const posted: Record<string, unknown>[] = []
     const stub = stubOctokit([
       route('POST', /^\/graphql$/, () => {
         if (o.viewerLogin === null) return { data: null, errors: [{ message: 'nope' }] }
@@ -167,6 +169,8 @@ describe('GitHubCodeHost feedback and labels', () => {
         if (p === undefined) throw httpError(404)
         return { permission: p }
       }),
+      route('PATCH', /^\/repos\/o\/r\/pulls\/7$/, (req) => { edits.push(req.body); return {} }),
+      route('POST', /^\/repos\/o\/r\/issues\/7\/comments$/, (req) => { posted.push(req.body); return {} }),
       route('GET', /^\/repos\/o\/r\/issues\/7\/events$/, (req) => paged(req, o.events ?? [])),
       route('DELETE', /^\/repos\/o\/r\/issues\/7\/labels\/(.+)$/, (_req, [name]) => {
         if (!labels.includes(name!)) throw httpError(404, 'Label does not exist')
@@ -178,7 +182,7 @@ describe('GitHubCodeHost feedback and labels', () => {
       octokit: stub.octokit, owner: 'o', repo: 'r', token: TOKEN, repoRoot: path.join(tmpdir(), 'rumba-unused-checkout'),
       ...(o.login === undefined ? {} : { login: o.login }),
     })
-    return { host, calls: stub.requests, lookups, labels }
+    return { host, calls: stub.requests, lookups, labels, edits, posted }
   }
 
   const review = (o: object = {}) => ({ id: 1, user: user('alice'), body: 'Please rename it', state: 'CHANGES_REQUESTED', submitted_at: '2026-01-02T10:00:00Z', html_url: 'https://github.com/o/r/pull/7#pullrequestreview-1', ...o })
@@ -281,6 +285,8 @@ describe('GitHubCodeHost feedback and labels', () => {
     await expect(host.listFeedback(url, '2026-01-01T00:00:00Z')).rejects.toThrow(/pull request/i)
     await expect(host.removeLabel(url, 'revise')).rejects.toThrow(/pull request/i)
     await expect(host.labelAdded(url, 'revise')).rejects.toThrow(/pull request/i)
+    await expect(host.updatePullRequest(url, { body: 'b' })).rejects.toThrow(/pull request/i)
+    await expect(host.commentOnPullRequest(url, 'c')).rejects.toThrow(/pull request/i)
     expect(calls).toEqual([])
   })
 
@@ -316,6 +322,18 @@ describe('GitHubCodeHost feedback and labels', () => {
     const { host, calls } = setup({ events: many, permissions: WRITE, login: 'rumba-bot' })
     expect((await host.labelAdded(URL7, 'revise'))?.at).toBe('2026-01-04T10:00:00Z')
     expect(calls.filter((c) => c.path.endsWith('/issues/7/events'))).toHaveLength(3)
+  })
+
+  it('updates the body of the pull request', async () => {
+    const { host, edits } = setup()
+    await host.updatePullRequest(URL7, { body: 'New body' })
+    expect(edits).toEqual([{ body: 'New body' }])
+  })
+
+  it('comments on the pull request', async () => {
+    const { host, posted } = setup()
+    await host.commentOnPullRequest(URL7, 'Revised')
+    expect(posted).toEqual([{ body: 'Revised' }])
   })
 
   it('removes a label from the pull request', async () => {

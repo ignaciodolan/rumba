@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { newState, transition } from '../../src/core/states.js'
-import { FakeCodeHost, makeDeps, makeTicket } from '../../src/testing/fakes.js'
+import { FakeCodeHost, FakeWorkspace, makeDeps, makeTicket } from '../../src/testing/fakes.js'
 
 describe('fakes', () => {
   it('FakeAgent plays a script and records calls', async () => {
@@ -86,6 +86,16 @@ describe('FakeCodeHost.getPullRequest', () => {
     expect(await host.listFeedback('https://example.test/pr/9', '2026-01-01T00:00:00Z')).toEqual([item('2026-01-02T00:00:00Z')])
     await host.removeLabel('https://example.test/pr/9', 'revise')
     expect(host.labelsRemoved).toEqual([{ url: 'https://example.test/pr/9', label: 'revise' }])
+  })
+
+  it('records pull request updates and comments, and returns the configured diff', async () => {
+    const host = new FakeCodeHost()
+    await host.updatePullRequest('https://example.test/pr/9', { body: 'new' })
+    await host.commentOnPullRequest('https://example.test/pr/9', 'done')
+    expect(host.updates).toEqual([{ url: 'https://example.test/pr/9', body: 'new' }])
+    expect(host.pullRequestComments).toEqual([{ url: 'https://example.test/pr/9', body: 'done' }])
+    const ws = new FakeWorkspace(); ws.diffText = 'diff --git a b'
+    expect(await ws.diff('/w', 'sha', 100)).toBe('diff --git a b')
   })
 
   it('throws for an unknown URL and when told to', async () => {

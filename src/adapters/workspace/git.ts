@@ -269,6 +269,13 @@ export class GitWorkspace implements Workspace {
     return out.split('\0').filter((p) => p !== '')
   }
 
+  async diff(workdir: string, sinceSha: string, maxChars: number): Promise<string> {
+    const wt = await this.worktree(workdir)
+    // --no-ext-diff and --no-textconv: a diff must never run a program the repository names.
+    const text = (await this.inWorktree(wt, workdir, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', sinceSha, 'HEAD'])).stdout
+    return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n[diff cut at ${maxChars} characters]`
+  }
+
   async hashFiles(workdir: string, files: string[]): Promise<Record<string, string>> {
     const root = await realpath(workdir)
     const hashes: Record<string, string> = {}

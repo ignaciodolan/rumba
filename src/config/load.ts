@@ -23,7 +23,7 @@ export interface RumbaConfig {
   sandbox: { nodeVersion: string }
   /** Who Rumba's commits are made as, when rumba.yml says; see resolveCommitAuthor. */
   commitAuthor?: { name: string; email: string }
-  limits: { maxTicketsPerRun: number; minutesPerTicket: number; maxFixAttempts: number }
+  limits: { maxTicketsPerRun: number; minutesPerTicket: number; maxFixAttempts: number; maxReviewRounds: number }
   labels: LabelNames
   context: string
 }
@@ -97,6 +97,7 @@ async function loadOne(repoRoot: string, name: string): Promise<RumbaConfig> {
       maxTicketsPerRun: c.limits.max_tickets_per_run,
       minutesPerTicket: c.limits.minutes_per_ticket,
       maxFixAttempts: c.limits.max_fix_attempts,
+      maxReviewRounds: c.limits.max_review_rounds,
     },
     labels: mergeLabels(defaultLabels(name), c.labels),
     context: await readContext(dir),

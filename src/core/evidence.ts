@@ -47,10 +47,11 @@ function escapeHtml(text: string): string {
 /** The check's files; for a relocated check, also where each came from. */
 function fileCell(check: Check, relocation: Relocation | undefined): string {
   const original = relocation?.original?.find((c) => c.criterionId === check.criterionId)
-  return check.files.map((f) => {
+  const files = check.files.map((f) => {
     const from = (relocation?.moves ?? []).filter((m) => m.to === f && original?.files.includes(m.from)).map((m) => codeSpan(m.from))
     return from.length > 0 ? `${codeSpan(f)} (relocated from ${from.join(', ')})` : codeSpan(f)
   }).join(', ')
+  return check.changedAfterReview === true ? `${files} (changed after review)` : files
 }
 
 function verdict(results: CheckResult[] | undefined, criterionId: string): string {

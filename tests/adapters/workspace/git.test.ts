@@ -73,6 +73,29 @@ describe('GitWorkspace', () => {
     await ws.reset(workdir, baseSha); expect(await ws.changedFiles(workdir, baseSha)).toEqual([])
   })
 
+  it('gives the diff since a commit, cut at the limit with a note', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    await write(workdir, 'a.txt', 'one\n'); await ws.commit(workdir, 'c')
+    const full = await ws.diff(workdir, baseSha, 100000)
+    expect(full).toContain('+++ b/a.txt'); expect(full).toContain('+one')
+    expect(full).not.toContain('[diff cut')
+    const cut = await ws.diff(workdir, baseSha, 20)
+    expect(cut).toBe(`${full.slice(0, 20)}\n[diff cut at 20 characters]`)
+    expect(await ws.diff(workdir, await ws.head(workdir), 100)).toBe('')
+  })
+
+  it('never runs an external diff program or a text conversion for the diff', async () => {
+    const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
+    const marker = path.join(root, 'ran')
+    // A repository config that names programs must not run them; the worktree's own attributes would select them.
+    await git(clone, 'config', 'diff.evil.command', `touch ${marker}; true`)
+    await git(clone, 'config', 'diff.evil.textconv', `touch ${marker}; cat`)
+    await write(workdir, '.gitattributes', '*.txt diff=evil\n'); await write(workdir, 'a.txt', 'one\n')
+    await ws.commit(workdir, 'c')
+    expect(await ws.diff(workdir, baseSha, 100000)).toContain('+one')
+    expect(existsSync(marker)).toBe(false)
+  })
+
   it('reports unusual file names exactly', async () => {
     const { workdir, baseSha } = await ws.prepare('rumba/shop/1', { fresh: true })
     const names = ['.rumba/shop/é.md', `a b"c'.txt`, 'tab\there.txt', 'new\nline.txt']

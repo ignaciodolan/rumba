@@ -166,6 +166,8 @@ export function redactingCodeHost(inner: CodeHost, secrets: string[]): CodeHost 
     listFeedback: (url, since) => inner.listFeedback(url, since),
     labelAdded: (url, label) => inner.labelAdded(url, label),
     removeLabel: (url, label) => inner.removeLabel(url, label),
+    updatePullRequest: (url, update) => inner.updatePullRequest(url, { body: redact(update.body, secrets) }),
+    commentOnPullRequest: (url, body) => inner.commentOnPullRequest(url, redact(body, secrets)),
     openPullRequest: (pr) => inner.openPullRequest({ ...pr, title: redact(pr.title, secrets), body: redact(pr.body, secrets) }),
   }
 }

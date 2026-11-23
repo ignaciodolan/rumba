@@ -28,7 +28,7 @@ export function makeRumba(overrides: Partial<RumbaConfig> = {}): RumbaConfig {
     verify: {},
     checks: { relocate: true },
     sandbox: { nodeVersion: '22' },
-    limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2 },
+    limits: { maxTicketsPerRun: 3, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 },
     labels: defaultLabels('shop'),
     context: '',
     ...overrides,
@@ -199,6 +199,8 @@ export class FakeCodeHost implements CodeHost {
   /** What labelAdded returns for a URL, whatever the label. Unset: the label was never added. */
   labelEvents = new Map<string, LabelAdded>()
   labelsRemoved: { url: string; label: string }[] = []
+  updates: { url: string; body: string }[] = []
+  pullRequestComments: { url: string; body: string }[] = []
   pullRequestError: Error | null = null
   private readonly opened = new Set<string>()
 
@@ -235,6 +237,14 @@ export class FakeCodeHost implements CodeHost {
 
   async labelAdded(url: string, _label: string): Promise<LabelAdded | null> {
     return this.labelEvents.get(url) ?? null
+  }
+
+  async updatePullRequest(url: string, update: { body: string }): Promise<void> {
+    this.updates.push({ url, body: update.body })
+  }
+
+  async commentOnPullRequest(url: string, body: string): Promise<void> {
+    this.pullRequestComments.push({ url, body })
   }
 
   async removeLabel(url: string, label: string): Promise<void> {
@@ -307,6 +317,13 @@ export class FakeWorkspace implements Workspace {
 
   async changedFiles(_workdir: string, sinceSha: string): Promise<string[]> {
     return this.changedSince[sinceSha] ?? this.changed
+  }
+
+  /** What diff returns, whatever the arguments. */
+  diffText = ''
+
+  async diff(_workdir: string, _sinceSha: string, _maxChars: number): Promise<string> {
+    return this.diffText
   }
 
   async hashFiles(_workdir: string, files: string[]): Promise<Record<string, string>> {

@@ -7,7 +7,8 @@ export type StateName =
 export interface Ticket { id: string; ref: string; title: string; body: string; url: string; labels: string[] }
 /** `reason`: why a criterion is not checkable, when triage said so. */
 export interface Criterion { id: string; text: string; checkable: boolean; reason?: string }
-export interface Check { criterionId: string; command: string; files: string[] }
+/** `changedAfterReview`: a review round changed this check's files; the pull request says so. */
+export interface Check { criterionId: string; command: string; files: string[]; changedAfterReview?: boolean }
 /** `infrastructure`: set by the environment when the run died of the machine (out of memory, full disk, a timeout), not of the code. */
 export interface CheckResult { criterionId: string; passed: boolean; exitCode: number; output: string; infrastructure?: string }
 /** How the project's own tests went in one attempt. */
@@ -63,6 +64,8 @@ export interface TicketState {
   pullRequestUrl?: string
   /** When Rumba last pushed the fix branch. */
   pushedAt?: string
+  /** How many review rounds Rumba has run on the pull request. */
+  reviewRounds?: number
   /** The review feedback collected from the pull request, while it waits for changes. */
   feedback?: Feedback[]
   before?: CheckResult[]

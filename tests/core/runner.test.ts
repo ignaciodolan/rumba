@@ -6,7 +6,7 @@ import { AgentError } from '../../src/ports/agent.js'
 import { failing, happyTriage, makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
 
 const PR = 'https://example.test/pr/42'
-const oneTicket = makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } })
+const oneTicket = makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } })
 
 function prOpenState(d: ReturnType<typeof makeDeps>, errorCount = 0) {
   return { ...newState('shop', d.clock()), state: 'pr_open' as const, lastDurable: 'pr_open' as const, pullRequestUrl: PR, errorCount }
@@ -21,7 +21,7 @@ describe('runRumba', () => {
   it('stops at max_tickets_per_run', async () => {
     const d = makeDeps(); scriptHappyBug(d)
     for (const id of ['1', '2', '3']) d.tracker.tickets.push(makeTicket({ id, labels: ['rumba:shop'] }))
-    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } }))
     expect(r.advanced).toHaveLength(2); expect(r.left).toEqual([{ ticket: '3', why: 'run limit' }])
   })
   it('leaves a ticket claimed by two rumbas and says so once', async () => {
@@ -101,7 +101,7 @@ describe('runRumba', () => {
     d.tracker.states.set('1', transition(newState('shop', d.clock()), 'needs_human', d.clock()))
     d.tracker.states.set('2', prOpenState(d))
     d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
-    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } }))
     expect(r.left).toEqual([{ ticket: '1', why: 'needs_human' }, { ticket: '2', why: 'pull request open' }])
     expect(r.advanced.map(a => a.ticket)).toEqual(['3'])
   })
@@ -118,7 +118,7 @@ describe('runRumba', () => {
     const d = makeDeps(); scriptHappyBug(d)
     d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
     d.tracker.states.set('1', { ...newState('shop', d.clock()), state: name, lastDurable: name })
-    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } }))
     expect(r.left).toEqual([{ ticket: '1', why: name }])
     expect(r.advanced.map(a => a.ticket)).toEqual(['2'])
     expect(d.tracker.states.get('1')?.state).toBe(name)
@@ -217,7 +217,7 @@ describe('runRumba', () => {
   it('counts a ticket that threw toward max_tickets_per_run', async () => {
     const d = makeDeps(); scriptHappyBug(d); d.agent.script.triage = [new AgentError('x'), happyTriage]
     for (const id of ['1', '2', '3']) d.tracker.tickets.push(makeTicket({ id }))
-    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2 } }))
+    const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 2, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } }))
     expect(r.advanced.map(a => a.ticket)).toEqual(['2'])
     expect(r.left).toEqual([{ ticket: '1', why: 'error: x' }, { ticket: '3', why: 'run limit' }])
   })

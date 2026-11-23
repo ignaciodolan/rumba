@@ -12,6 +12,12 @@ describe('renderPullRequestBody', () => {
     expect(body).toMatch(/## Outside this rumba's scope[\s\S]*packages\/ui\/y\.ts/)
     expect(body).toContain('https://t/1'); expect(body).toContain('Rumba: shop')
   })
+  it('marks a check that changed after review in the File cell', () => {
+    const s = verified(d); s.checks[0] = { ...s.checks[0]!, changedAfterReview: true }
+    const body = renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: [] })
+    expect(body).toContain('| C1 | `npm test -- c1` | `tests/rumba/c1.test.ts` (changed after review) | fail | pass |')
+    expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: verified(d), outsideScope: [], secrets: [] })).not.toContain('changed after review')
+  })
   it('never prints a secret from check output', () => {
     const s = verified(d); s.after![0]!.output = 'Bearer sk-live-999'
     expect(renderPullRequestBody({ ticket: makeTicket(), rumba: makeRumba(), state: s, outsideScope: [], secrets: ['sk-live-999'] })).not.toContain('sk-live-999')

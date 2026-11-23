@@ -201,6 +201,15 @@ export class GitHubCodeHost implements CodeHost {
     }
   }
 
+  async updatePullRequest(url: string, update: { body: string }): Promise<void> {
+    await this.octokit.rest.pulls.update({ ...this.where(), pull_number: this.pullNumber(url), body: update.body })
+  }
+
+  async commentOnPullRequest(url: string, body: string): Promise<void> {
+    // A pull request is an issue to GitHub; its conversation comments are issue comments.
+    await this.octokit.rest.issues.createComment({ ...this.where(), issue_number: this.pullNumber(url), body })
+  }
+
   async removeLabel(url: string, label: string): Promise<void> {
     const number = this.pullNumber(url)
     try {
