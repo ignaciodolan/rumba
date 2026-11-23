@@ -39,6 +39,8 @@ function identityEnv(a: { name: string; email: string }): Record<string, string>
 const NO_HOST_CONFIG = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
 
 interface Worktree { branch: string; gitDir: string }
+/** strip: drop the final newline of the output (the default). input: what git reads on stdin. */
+interface GitOptions { strip?: boolean; input?: string }
 /** The branch recorded for a worktree that is on none; no real branch name is empty. */
 const DETACHED = ''
 /** A trusted checkout: its commit, that commit's tree, and the `.git` pointer git wrote in it. */
@@ -251,6 +253,52 @@ export class GitWorkspace implements Workspace {
     if (out.length > 0) throw new Error(`Refusing to commit symbolic links that lead outside the repository: ${out.join(', ')}`)
   }
 
+  /**
+   * Built with plumbing from HEAD's objects: the content is hashed as it is (no filter), a
+   * temporary index outside the worktree is read from HEAD and changed at that one path, and
+   * the commit made from it. No file of the worktree is read or written until the worktree is
+   * reset to the new commit, so a link, an untracked file or a filter the agent planted there
+   * cannot change what is committed or lead the write elsewhere.
+   */
+  async commitFile(workdir: string, file: string, content: string, message: string): Promise<string> {
+    if (!plainPath(file)) throw new Error(`${JSON.stringify(file)} is not a plain relative path`)
+    const wt = await this.worktree(workdir)
+    await this.refuseNestedRepositories(workdir)
+    const head = (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD^{commit}'])).stdout
+    await this.refuseUnsafeTarget(head, file)
+    const blob = (await this.inWorktree(wt, workdir, ['hash-object', '-w', '--no-filters', '--stdin'], [0], {}, { input: content })).stdout
+    const tree = await withTempIndex(async (index) => {
+      const env = { GIT_INDEX_FILE: index }
+      await this.inWorktree(wt, workdir, ['read-tree', head], [0], env)
+      await this.inWorktree(wt, workdir, ['update-index', '--add', '--cacheinfo', `100644,${blob},${file}`], [0], env)
+      return (await this.inWorktree(wt, workdir, ['write-tree'], [0], env)).stdout
+    })
+    this.authorOnce ??= this.author().catch(() => RUMBA_IDENTITY)
+    const author = await this.authorOnce
+    const sha = (await this.inWorktree(wt, workdir, ['-c', 'commit.gpgsign=false', 'commit-tree', tree, '-p', head, '-m', message], [0], identityEnv(author))).stdout
+    // Moved only if the branch is still at the commit the new one was built on.
+    await this.inWorktree(wt, workdir, ['update-ref', '-m', 'rumba: commit file', 'HEAD', sha, head])
+    await this.reset(workdir, sha)
+    return sha
+  }
+
+  /**
+   * Refuses a path git would write through something other than folders: a part of the way
+   * that is a link or a file in the commit, or an entry at the path that is not a regular,
+   * non-executable file.
+   */
+  private async refuseUnsafeTarget(sha: string, file: string): Promise<void> {
+    const parts = file.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join('/')
+      const entry = await this.entryAt(sha, dir)
+      if (entry === null) break
+      if (entry.mode !== '040000') throw new Error(`Refusing to write ${file}: ${dir} is not a directory in ${sha.slice(0, 12)}.`)
+    }
+    const entry = await this.entryAt(sha, file)
+    if (entry !== null && entry.mode !== '100644') throw new Error(`Refusing to write ${file}: it is not a regular file in ${sha.slice(0, 12)}.`)
+  }
+
   async head(workdir: string): Promise<string> {
     const wt = await this.worktree(workdir)
     return (await this.inWorktree(wt, workdir, ['rev-parse', '--verify', 'HEAD'])).stdout.trim()
@@ -439,8 +487,8 @@ export class GitWorkspace implements Workspace {
    * Runs git on one worktree with its git directory and work tree given explicitly, and
    * without the user's or the system's git config.
    */
-  private async inWorktree(wt: Worktree, workdir: string, args: string[], ok: number[] = [0], env: Record<string, string> = {}) {
-    return this.run(['--git-dir', wt.gitDir, '--work-tree', workdir, ...SAFE, ...args], workdir, ok, { ...NO_HOST_CONFIG, ...env })
+  private async inWorktree(wt: Worktree, workdir: string, args: string[], ok: number[] = [0], env: Record<string, string> = {}, o: GitOptions = {}) {
+    return this.run(['--git-dir', wt.gitDir, '--work-tree', workdir, ...SAFE, ...args], workdir, ok, { ...NO_HOST_CONFIG, ...env }, o)
   }
 
   /** Runs git in the trusted checkout and returns its trimmed output. */
@@ -448,7 +496,7 @@ export class GitWorkspace implements Workspace {
     return (await this.gitResult(args)).stdout
   }
 
-  private async gitResult(args: string[], ok: number[] = [0], o: { strip?: boolean } = {}) {
+  private async gitResult(args: string[], ok: number[] = [0], o: GitOptions = {}) {
     return this.run([...SAFE, ...args], this.repoRoot, ok, {}, o)
   }
 
@@ -458,7 +506,7 @@ export class GitWorkspace implements Workspace {
    * own config switched off. A git too old to know `--attr-source` fails here instead of
    * running without it.
    */
-  private async run(args: string[], cwd: string, ok: number[], env: Record<string, string> = {}, o: { strip?: boolean } = {}) {
+  private async run(args: string[], cwd: string, ok: number[], env: Record<string, string> = {}, o: GitOptions = {}) {
     return this.spawnGit([...(await this.started()).options, ...args], cwd, ok, env, o)
   }
 
@@ -496,10 +544,10 @@ export class GitWorkspace implements Workspace {
    * private (mode 700). `sh` only sets the umask and then replaces itself with git; the
    * arguments are passed as "$@", never as shell text.
    */
-  private async spawnGit(args: string[], cwd: string, ok: number[], env: Record<string, string>, o: { strip?: boolean } = {}) {
+  private async spawnGit(args: string[], cwd: string, ok: number[], env: Record<string, string>, o: GitOptions = {}) {
     const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !LOCATION_VARS.includes(k)))
     const result = await execa('/bin/sh', ['-c', 'umask 022 && exec git "$@"', 'git', ...args], {
-      cwd, stdin: 'ignore', all: true, reject: false, extendEnv: false, env: { ...base, ...env, GIT_TERMINAL_PROMPT: '0' },
+      cwd, ...(o.input === undefined ? { stdin: 'ignore' as const } : { input: o.input }), all: true, reject: false, extendEnv: false, env: { ...base, ...env, GIT_TERMINAL_PROMPT: '0' },
       stripFinalNewline: o.strip ?? true,
     })
     if (!ok.includes(result.exitCode ?? -1)) throw new Error(`git ${args.join(' ')} failed:\n${result.all ?? ''}`)
@@ -511,6 +559,21 @@ export class GitWorkspace implements Workspace {
 async function removeOwnParent(workdir: string): Promise<void> {
   const parent = path.dirname(workdir)
   if (path.basename(parent) === path.basename(workdir)) await rmdir(parent).catch(() => undefined)
+}
+
+/** A path from the repository root with no empty, `.` or `..` part. */
+function plainPath(file: string): boolean {
+  return file.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
+}
+
+/** Runs `use` with the path of an index file in a new private temp folder, removed after. */
+async function withTempIndex<T>(use: (index: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'rumba-index-'))
+  try {
+    return await use(path.join(dir, 'index'))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 }
 
 function inside(root: string, p: string): boolean {

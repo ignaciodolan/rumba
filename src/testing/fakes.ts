@@ -306,6 +306,17 @@ export class FakeWorkspace implements Workspace {
     return this.tipOf(workdir)
   }
 
+  /** Every commitFile, in order. */
+  fileCommits: { workdir: string; path: string; content: string; message: string }[] = []
+
+  async commitFile(workdir: string, path: string, content: string, message: string): Promise<string> {
+    this.fileCommits.push({ workdir, path, content, message })
+    this.log.push(`commitFile ${workdir} ${path}`)
+    const sha = `file${this.fileCommits.length}`
+    this.move(workdir, sha)
+    return sha
+  }
+
   async reset(workdir: string, sha: string): Promise<void> {
     this.move(workdir, sha)
     this.resets.push(sha)

@@ -8,6 +8,14 @@ export interface Workspace {
   prepare(branch: string, opts: { fresh: boolean; like?: string }): Promise<{ workdir: string; baseSha: string }>
   /** Null when there is nothing to commit, unless `allowEmpty` asks for a commit anyway. */
   commit(workdir: string, message: string, opts?: { allowEmpty?: boolean }): Promise<string | null>
+  /**
+   * Makes a commit on the workdir's branch, with HEAD as its parent, that changes only `file`
+   * to `content`, and puts the workdir at it; returns the commit. Built from HEAD's objects,
+   * never from the workdir's files, so nothing else an agent left there is committed. Throws,
+   * changing nothing, when a folder on the way to `file` in HEAD is not a folder (a link or a
+   * file) or `file` in HEAD is not a regular file.
+   */
+  commitFile(workdir: string, file: string, content: string, message: string): Promise<string>
   reset(workdir: string, sha: string): Promise<void>
   /** The commit the workdir's branch points at. */
   head(workdir: string): Promise<string>
