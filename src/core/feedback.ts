@@ -19,7 +19,7 @@ function worthStoring(item: FeedbackItem): boolean {
 }
 
 /**
- * Picks the feedback Rumba may act on. Only a writer who is not Rumba's own account counts: text from anyone
+ * Picks the feedback Rumba may act on. Only a writer's counts, and never Rumba's own comments: text from anyone
  * else could steer the agent, so it is dropped here and never reaches the state, the tracker or an error.
  */
 export function selectFeedback(items: FeedbackItem[], secrets: string[]): Selection {

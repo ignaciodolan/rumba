@@ -24,12 +24,17 @@ describe('selectFeedback', () => {
   it('keeps a commented review that has a body', () => {
     expect(selectFeedback([item({ kind: 'review', reviewState: 'commented', text: 'note' })], []).feedback).toHaveLength(1)
   })
-  it('ignores non-writers and the account Rumba runs as', () => {
+  it('ignores non-writers and Rumba\'s own comments', () => {
     const r = selectFeedback([
       item({ author: 'mallory', canWrite: false, kind: 'review', reviewState: 'changes_requested', text: 'evil' }),
-      item({ author: 'rumba-bot', self: true, kind: 'review', reviewState: 'changes_requested', text: 'mine' }),
+      item({ author: 'rumba-bot', self: true, text: '<!-- rumba:own -->\nmine' }),
     ], [])
     expect(r).toEqual({ requested: false, feedback: [] })
+  })
+  it('keeps a writer who shares Rumba\'s account when the item is not Rumba\'s own', () => {
+    const r = selectFeedback([item({ author: 'alice', kind: 'review', reviewState: 'changes_requested', text: 'rename it' })], [])
+    expect(r.requested).toBe(true)
+    expect(r.feedback.map((f) => f.text)).toEqual(['rename it'])
   })
   it('redacts secrets and cuts long text', () => {
     const r = selectFeedback([item({ text: 'token s3cret' }), item({ text: 'x'.repeat(5000) })], ['s3cret'])

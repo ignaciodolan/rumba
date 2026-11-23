@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises'
 import type { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
+import { isOwnBody, withMarker } from '../../core/marker.js'
 import { cleanOutput } from '../../core/redact.js'
 import { CodeHostIdentityError, type CodeHost, FeedbackItem, LabelAdded, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
 
@@ -18,6 +19,14 @@ const REVIEW_STATES: Record<string, NonNullable<FeedbackItem['reviewState']>> = 
 }
 
 type Author = { login: string; type: string } | null
+
+/**
+ * Rumba's own: a comment by the account Rumba runs as whose first line is the marker. That account may be a
+ * maintainer's, so the author alone is not enough. Rumba writes no reviews or line comments, so those are a person's.
+ */
+function isOwn(i: Pick<FeedbackItem, 'kind' | 'author' | 'text'>, self: string): boolean {
+  return i.kind === 'comment' && i.author.toLowerCase() === self && isOwnBody(i.text)
+}
 
 const HEADER_KEY = 'http.https://github.com/.extraheader'
 
@@ -114,7 +123,8 @@ export class GitHubCodeHost implements CodeHost {
     }
   }
 
-  async openPullRequest(pr: PullRequestDraft): Promise<string> {
+  async openPullRequest(draft: PullRequestDraft): Promise<string> {
+    const pr = { ...draft, body: withMarker(draft.body) }
     try {
       const { data } = await this.octokit.rest.pulls.create({ ...this.where(), ...pr })
       return data.html_url
@@ -171,7 +181,7 @@ export class GitHubCodeHost implements CodeHost {
     }
     const after = Date.parse(since)
     const fresh = raw.filter((i) => Date.parse(i.at) > after)
-    return Promise.all(fresh.map(async (i) => ({ ...i, canWrite: await canWrite(i.author), self: i.author.toLowerCase() === self })))
+    return Promise.all(fresh.map(async (i) => ({ ...i, canWrite: await canWrite(i.author), self: isOwn(i, self) })))
   }
 
   async labelAdded(url: string, label: string): Promise<LabelAdded | null> {
@@ -184,10 +194,9 @@ export class GitHubCodeHost implements CodeHost {
     }
     if (!latest) return null
     // Untrusted like feedback: the actor's permission is looked up, and failing closed means not a writer.
+    // Rumba never adds this label, so whoever did is a person, Rumba's own account included.
     const actor = latest.actor ? { login: latest.actor.login, type: latest.actor.type } : null
-    const self = (await this.ownLogin()).toLowerCase()
-    const by = actor?.login ?? ''
-    return { by, at: latest.created_at, canWrite: await this.canWrite(actor), self: by.toLowerCase() === self }
+    return { by: actor?.login ?? '', at: latest.created_at, canWrite: await this.canWrite(actor) }
   }
 
   /** Fails closed: a bot, an unknown author or any lookup that does not answer is not a writer. */
@@ -202,12 +211,12 @@ export class GitHubCodeHost implements CodeHost {
   }
 
   async updatePullRequest(url: string, update: { body: string }): Promise<void> {
-    await this.octokit.rest.pulls.update({ ...this.where(), pull_number: this.pullNumber(url), body: update.body })
+    await this.octokit.rest.pulls.update({ ...this.where(), pull_number: this.pullNumber(url), body: withMarker(update.body) })
   }
 
   async commentOnPullRequest(url: string, body: string): Promise<void> {
     // A pull request is an issue to GitHub; its conversation comments are issue comments.
-    await this.octokit.rest.issues.createComment({ ...this.where(), issue_number: this.pullNumber(url), body })
+    await this.octokit.rest.issues.createComment({ ...this.where(), issue_number: this.pullNumber(url), body: withMarker(body) })
   }
 
   async removeLabel(url: string, label: string): Promise<void> {

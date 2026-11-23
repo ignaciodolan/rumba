@@ -472,10 +472,10 @@ describe('revise', () => {
     const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d))
     d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'sha3', labels: ['rumba-revise'] })
     // A label from someone without write access starts nothing, and is not removed as stale either.
-    d.codeHost.labelEvents.set(PR, { by: 'tess', at: '2026-01-01T10:30:00Z', canWrite: false, self: false })
+    d.codeHost.labelEvents.set(PR, { by: 'tess', at: '2026-01-01T10:30:00Z', canWrite: false })
     expect((await trackPullRequest(d, makeRumba(), makeTicket(), s)).state).toBe('pr_open')
     expect(d.codeHost.labelsRemoved).toEqual([])
-    d.codeHost.labelEvents.set(PR, { by: 'alice', at: '2026-01-01T10:30:00Z', canWrite: true, self: false })
+    d.codeHost.labelEvents.set(PR, { by: 'alice', at: '2026-01-01T10:30:00Z', canWrite: true })
     expect((await trackPullRequest(d, makeRumba(), makeTicket(), s)).state).toBe('changes_requested')
   })
 

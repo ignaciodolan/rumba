@@ -34,19 +34,23 @@ export interface FeedbackItem {
   reviewState?: 'changes_requested' | 'approved' | 'commented'
   /** The author has write access to the repository. False when that cannot be confirmed, and for a bot. */
   canWrite: boolean
-  /** The author is the account Rumba runs as. */
+  /**
+   * Rumba wrote it: a comment by the account Rumba runs as whose first line is Rumba's marker. That account may
+   * also be a maintainer's, so anything else by it, and every review and line comment, is a person's.
+   */
   self: boolean
 }
 
-/** The latest time a label was put on a pull request, and who did it. */
+/**
+ * The latest time a label was put on a pull request, and who did it. Rumba never adds a label to a pull request,
+ * so the actor is never Rumba, even when it is the account Rumba runs as.
+ */
 export interface LabelAdded {
   by: string
   /** When, as an ISO timestamp. */
   at: string
   /** The actor has write access. False when that cannot be confirmed, and for a bot. */
   canWrite: boolean
-  /** The actor is the account Rumba runs as. */
-  self: boolean
 }
 
 export interface CodeHost {

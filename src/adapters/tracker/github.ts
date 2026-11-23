@@ -1,6 +1,7 @@
 import type { Octokit } from '@octokit/rest'
 import { renderCriteriaComment } from '../../core/criteria.js'
 import { stateLabel } from '../../core/labels.js'
+import { withMarker } from '../../core/marker.js'
 import { decodeStateComment, encodeStateComment } from '../../core/stateComment.js'
 import type { Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketState } from '../../core/types.js'
 import type { Tracker } from '../../ports/tracker.js'
@@ -109,7 +110,8 @@ export class GitHubTracker implements Tracker {
   }
 
   async writeState(t: Ticket, s: TicketState): Promise<void> {
-    const body = encodeStateComment(s)
+    // Decoding finds the state block anywhere in the body, so the marker line first keeps it readable.
+    const body = withMarker(encodeStateComment(s))
     const found = await this.findState(t)
     let edited = false
     if (found) {
@@ -146,8 +148,9 @@ export class GitHubTracker implements Tracker {
     t.labels = t.labels.filter((l) => l !== label)
   }
 
+  /** Every issue comment Rumba writes goes through here or the state edit, so each starts with the marker. */
   async comment(t: Ticket, body: string): Promise<void> {
-    await this.octokit.rest.issues.createComment({ ...this.where(), issue_number: issueNumber(t.id), body })
+    await this.octokit.rest.issues.createComment({ ...this.where(), issue_number: issueNumber(t.id), body: withMarker(body) })
   }
 
   async commentOnce(t: Ticket, key: string, body: string): Promise<void> {

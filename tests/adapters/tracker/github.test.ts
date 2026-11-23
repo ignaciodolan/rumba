@@ -12,6 +12,8 @@ const NOW = new Date('2026-01-01T00:00:00Z')
 const UNKNOWN_LOGIN = 'Could not determine which GitHub account Rumba runs as. Set RUMBA_GITHUB_LOGIN to its login (for the GitHub Actions token: github-actions[bot]).'
 const OWNER = { author_association: 'OWNER', user: { login: 'someone', type: 'User' } }
 const OTHER_BOT = { author_association: 'NONE', user: { login: 'other[bot]', type: 'Bot' } }
+/** The first line of every body Rumba writes on GitHub. */
+const OWN = '<!-- rumba:own -->\n'
 
 function makeGitHub(o: { labels?: string[]; login?: string } = {}) {
   const store = new GitHubStore()
@@ -201,7 +203,7 @@ describe('GitHubTracker', () => {
     await tracker.commentOnce(t, 'done', 'All done')
     const bodies = store.commentsOn(Number(t.id)).map((c) => c.body)
     expect(bodies).toHaveLength(2)
-    expect(bodies[1]).toBe('All done\n\nrumba-note: done')
+    expect(bodies[1]).toBe(`${OWN}All done\n\nrumba-note: done`)
   })
 
   it('posts the rendered criteria comment', async () => {
@@ -209,7 +211,49 @@ describe('GitHubTracker', () => {
     const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:shop'] }).number))
     const criteria = [{ id: 'c1', text: 'Saving works', checkable: true }]
     await tracker.postCriteria(t, criteria)
-    expect(store.commentsOn(Number(t.id)).map((c) => c.body)).toEqual([renderCriteriaComment(criteria, defaultLabels('shop'))])
+    expect(store.commentsOn(Number(t.id)).map((c) => c.body)).toEqual([`${OWN}${renderCriteriaComment(criteria, defaultLabels('shop'))}`])
+  })
+
+  it('starts a plain comment with the marker line', async () => {
+    const { tracker, store } = makeGitHub()
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:shop'] }).number))
+    await tracker.comment(t, 'The pull request was merged.')
+    expect(store.commentsOn(Number(t.id)).map((c) => c.body)).toEqual([`${OWN}The pull request was merged.`])
+  })
+
+  it('starts a new state comment and an edited one with the marker line, and reads both back', async () => {
+    const { tracker, store } = makeGitHub()
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:shop'] }).number))
+    await tracker.writeState(t, state('queued'))
+    expect(store.commentsOn(Number(t.id)).map((c) => c.body)).toEqual([`${OWN}${encodeStateComment(state('queued'))}`])
+    expect(await tracker.readState(t)).toEqual(state('queued'))
+    await tracker.writeState(t, state('triaged', 1))
+    expect(store.commentsOn(Number(t.id)).map((c) => c.body)).toEqual([`${OWN}${encodeStateComment(state('triaged', 1))}`])
+    expect(await tracker.readState(t)).toEqual(state('triaged', 1))
+  })
+
+  it('still reads a state comment written before the marker line', async () => {
+    const { tracker, store } = makeGitHub()
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:shop'] }).number))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')))
+    expect((await tracker.readState(t))?.state).toBe('triaged')
+  })
+
+  it('ignores a state comment with the marker line written by another account', async () => {
+    const { tracker, store } = makeGitHub()
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:shop'] }).number))
+    store.addComment(Number(t.id), encodeStateComment(state('triaged')))
+    store.addComment(Number(t.id), `${OWN}${encodeStateComment(state('verified'))}`, OWNER)
+    store.addComment(Number(t.id), `${OWN}${encodeStateComment(state('pr_open'))}`, OTHER_BOT)
+    expect((await tracker.readState(t))?.state).toBe('triaged')
+  })
+
+  it('ignores a commentOnce key with the marker line written by another account', async () => {
+    const { tracker, store } = makeGitHub()
+    const t = await tracker.getTicket(String(store.addIssue({ labels: ['rumba:shop'] }).number))
+    store.addComment(Number(t.id), `${OWN}Done\n\nrumba-note: done`, OWNER)
+    await tracker.commentOnce(t, 'done', 'All done')
+    expect(store.commentsOn(Number(t.id))).toHaveLength(2)
   })
 
   it('has no linked documents', async () => {
