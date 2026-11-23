@@ -343,6 +343,18 @@ describe('revise', () => {
     expect(line).toBe(`- Check for c1 changed, as asked in ${PR}#pullrequestreview-1: ${raw.replace('@', '@\u200b').replace('#7', '#\u200b7').replace('<b>', '&lt;b&gt;').replace('</b>', '&lt;/b&gt;')}`)
   })
 
+  it('accepts a check change citing a line comment on the check file, and not one on another file', async () => {
+    const line = (path: string): Feedback => ({ kind: 'line', author: 'alice', url: `${PR}#discussion_r5`, at: '2025-12-31T12:00:00Z', text: 'this assertion is wrong', path, line: 12 })
+    const d = setup(); changedCheck(d)
+    const s = await revise(d, makeRumba(), makeTicket(), changesRequested(d, [line(CHECK)]))
+    expect(s.state).toBe('pr_open')
+    expect(s.checks[0]).toMatchObject({ changedAfterReview: true, changeAskedIn: `${PR}#discussion_r5` })
+    const e = setup(); changedCheck(e)
+    const t = await revise(e, makeRumba(), makeTicket(), changesRequested(e, [line('src/cart.ts')]))
+    expect(t.state).toBe('needs_human'); expect(e.environment.ups).toEqual([])
+    expect(e.agent.calls[1]!.failures).toEqual([{ criterionId: 'guard', output: "The check for c1 changed citing feedback item 1, which names neither the check's file nor its criterion." }])
+  })
+
   it('accepts a check change citing an item that names three consecutive words of its criterion', async () => {
     const d = setup(); changedCheck(d)
     const start = changesRequested(d, [{ ...aliceReview, text: 'An order paid on Friday never "ships the day" it is paid on weekends.' }])

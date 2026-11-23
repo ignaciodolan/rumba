@@ -3,7 +3,7 @@ import type { AgentResult } from '../../ports/agent.js'
 import type { Deps } from '../../ports/deps.js'
 import { InfrastructureError } from '../../ports/environment.js'
 import { timeLeft } from '../budget.js'
-import { namesCheck } from '../citation.js'
+import { asksAbout } from '../citation.js'
 import { inertText, renderPullRequestBody } from '../evidence.js'
 import { MAX_FEEDBACK, selectFeedback } from '../feedback.js'
 import { cleanOutput, redact } from '../redact.js'
@@ -254,7 +254,8 @@ function declaredSoFar(r: Round, result: Revised): Map<string, Declaration> {
 
 /**
  * Why a changed check's declaration does not hold up, or null: each must cite an item of the
- * round's feedback, and that item must name the check's file or its criterion (see namesCheck).
+ * round's feedback, and that item must name the check's file or its criterion, or be a line
+ * comment on the check's file (see asksAbout).
  */
 function uncited(r: Round, changed: Check[], declared: Map<string, Declaration>): string | null {
   for (const check of changed) {
@@ -264,7 +265,7 @@ function uncited(r: Round, changed: Check[], declared: Map<string, Declaration>)
     const asked = item >= 1 ? r.feedback[item - 1] : undefined
     if (asked === undefined) return `The check for ${id} changed citing feedback item ${item}, but there is no such item.`
     const criterion = r.current.criteria.find((c) => c.id === id)?.text ?? ''
-    if (!namesCheck(asked.text, check.files, criterion)) return `The check for ${id} changed citing feedback item ${item}, which names neither the check's file nor its criterion.`
+    if (!asksAbout(asked, check.files, criterion)) return `The check for ${id} changed citing feedback item ${item}, which names neither the check's file nor its criterion.`
   }
   return null
 }
@@ -418,8 +419,10 @@ function feedbackLines(r: Round, result: Revised): string[] {
   })
 }
 
-/** The url of the feedback item an accepted check change cites, which `uncited` found in the round's feedback. */
+/** The url of the feedback item an accepted check change cites. */
 function askedUrl(r: Round, d: Declaration): string {
+  // Every accepted declaration passed the citation check (`uncited`): its `item` is a valid
+  // position in the round's feedback.
   return r.feedback[d.item! - 1]!.url.replace(/\s/g, '')
 }
 
