@@ -17,6 +17,7 @@ const MAX_CONTEXT = 30000
 const MAX_FAILURES_TOTAL = 20000
 const MAX_DIFF = 40000
 const DIFF_CUT = '[diff cut: the prompt was too long]'
+const MIN_FEEDBACK_BYTES = 200
 const FEEDBACK_CUT = '[feedback cut: the prompt was too long]'
 const DOCUMENTS_LEFT_OUT = '[linked documents left out: the prompt was too long]'
 const CONTEXT_CUT = '[context cut: the prompt was too long]'
@@ -123,13 +124,13 @@ function cutBytes(text: string, maxBytes: number): string {
 
 /**
  * Cuts every feedback item's text to the same number of bytes, the largest that makes the
- * prompt fit, and says so on each item it cuts. Throws when even the notes alone do not fit,
- * because a round must never run without its feedback.
+ * prompt fit, and says so on each item it cuts. Throws when that is under MIN_FEEDBACK_BYTES
+ * (or the whole item, when it is shorter), because a round must never run without its feedback.
  */
 function cutFeedback(feedback: Feedback[], build: (texts: string[]) => string): string {
   const texts = (cap: number): string[] => feedback.map((f) => (bytes(f.text) <= cap ? f.text : `${cutBytes(f.text, cap)}\n${FEEDBACK_CUT}`))
-  let low = 0
   let high = Math.max(0, ...feedback.map((f) => bytes(f.text)))
+  let low = Math.min(MIN_FEEDBACK_BYTES, high)
   if (bytes(build(texts(low))) > MAX_PROMPT_BYTES) throw new AgentError("The reviewers' feedback does not fit in the prompt.")
   while (low < high) {
     const mid = Math.ceil((low + high) / 2)
@@ -270,6 +271,10 @@ function reviseSections(feedback: Feedback[], texts: string[], diff: string): st
   ]
 }
 
+/** Rumba refuses a working directory that holds either; saying so saves the agent a wasted attempt. */
+const NO_REPOSITORIES =
+  'Do not create or clone a git repository inside the working directory, and do not add a symbolic link that leads outside it. Rumba commits your changes itself; do not run git.'
+
 /**
  * The prompt for one task, at most MAX_PROMPT_BYTES of UTF-8. When it would be longer, the
  * documents go first, then (for a revise task) the diff, then the context, then (revise) each
@@ -277,10 +282,6 @@ function reviseSections(feedback: Feedback[], texts: string[], diff: string): st
  * the result is cut. The task, the rules and the result shape are never cut. A revise task
  * never runs without its feedback: when that does not fit, this throws.
  */
-/** Rumba refuses a working directory that holds either; saying so saves the agent a wasted attempt. */
-const NO_REPOSITORIES =
-  'Do not create or clone a git repository inside the working directory, and do not add a symbolic link that leads outside it. Rumba commits your changes itself; do not run git.'
-
 export function buildPrompt(task: AgentTask): string {
   const head = [
     `# Task\n${TASKS[task.kind]}`,
@@ -324,7 +325,7 @@ export function buildPrompt(task: AgentTask): string {
   if (fits(prompt)) return prompt
 
   let diff = fullDiff
-  if (task.kind === 'revise') {
+  if (task.kind === 'revise' && diff !== '') {
     const budget = bytes(diff) - (bytes(prompt) - MAX_PROMPT_BYTES) - bytes(`\n${DIFF_CUT}`)
     diff = `${cutBytes(diff, Math.max(0, budget))}\n${DIFF_CUT}`
     prompt = assemble(context, docs, diff)
