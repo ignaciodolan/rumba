@@ -224,8 +224,31 @@ describe('titles in other languages and in JSX', () => {
     expect(judgeFile(...TSX, tsx("'inner'"), tsx("'${process.exit(0)}'"))).not.toBeNull()
   })
 
-  it('still renames a later title after JSX without quotes', () => {
-    const tsx = (title: string) => `it('c1', () => {\n  render(<Receipt id={1} />)\n})\n\nit(${title}, () => {\n  expect(1).toBe(1)\n})\n`
-    expect(judgeFile(...TSX, tsx("'c2: prints'"), tsx("'prints a receipt'"))).toBeNull()
+  it('stops renaming titles after the first JSX tag, since JSX text over several lines cannot be followed', () => {
+    const tsx = (title: string) => `it(${title.replace('c2', 'c1')}, () => {\n  render(<Receipt id={1} />)\n})\n\nit(${title}, () => {\n  expect(1).toBe(1)\n})\n`
+    // The first title, before any JSX, may still change; the second, after it, may not.
+    expect(judgeFile(...TSX, tsx("'c2: prints'"), tsx("'c2: prints'").replace("it('c1: prints'", "it('prints a receipt'"))).toBeNull()
+    expect(judgeFile(...TSX, tsx("'c2: prints'"), tsx("'prints a receipt'"))).not.toBeNull()
+  })
+
+  it('does not let quotes in JSX text on a line without a tag hide a template that opens', () => {
+    const tsx = (title: string) => `it('c1', () => {\n  render(\n    <p>\n      '{\`'\ntest(${title}, () => {})\n\`}\n    </p>,\n  )\n})\n`
+    expect(judgeFile(...TSX, tsx("'inner'"), tsx("'${process.exit(0)}'"))).not.toBeNull()
+    // Plain JavaScript files may hold JSX too.
+    expect(judgeFile('tests/rumba/c1.test.js', 'tests/orders/receipt.test.js', tsx("'inner'"), tsx("'${process.exit(0)}'"))).not.toBeNull()
+  })
+
+  it('keeps titles exact when the command names a title, whatever a comment at the top of the file holds', () => {
+    const file = (title: string) => `// Checks the \`fulfil\` helper.\nimport { expect, it } from 'vitest'\n\nit(${title}, () => {\n  expect(1).toBe(1)\n})\n`
+    const r = judgeRelocation({
+      original: [{ criterionId: 'c1', command: 'npm test -- tests/rumba/c1.test.ts c1-ships-today', files: ['tests/rumba/c1.test.ts'] }],
+      moves: [{ from: 'tests/rumba/c1.test.ts', to: 'tests/orders/ship.test.ts' }],
+      relocated: [{ criterionId: 'c1', command: 'npm test -- tests/orders/ship.test.ts c1-ships-today', files: ['tests/orders/ship.test.ts'] }],
+      changed: ['tests/rumba/c1.test.ts', 'tests/orders/ship.test.ts'],
+      before: { 'tests/rumba/c1.test.ts': file("'c1-ships-today'"), 'tests/orders/ship.test.ts': null },
+      after: { 'tests/rumba/c1.test.ts': null, 'tests/orders/ship.test.ts': file("'ships the order today'") },
+      protectedGlobs: [],
+    })
+    expect(r).toMatch(/title/)
   })
 })

@@ -134,11 +134,13 @@ export function judgeRelocation(i: RelocationInput): string | null {
   return null
 }
 
-/** The test titles a file gives: the strings and names the title rules would replace. */
+/**
+ * The test titles a file gives: exactly those its comparison would treat as titles (the
+ * body's, as `parse` masks them), so a title the check runs by cannot change unseen.
+ */
 function titlesIn(file: string, text: string): string[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim())
   // A JavaScript title's text, each piece between expressions on its own when it says something.
-  return maskTitles(file, lines).titles.flatMap((pieces) => (pieces.length === 1 ? pieces : pieces.map((p) => p.trim()).filter((p) => p.length >= 3)))
+  return parse(file, text).titles.flatMap((pieces) => (pieces.length === 1 ? pieces : pieces.map((p) => p.trim()).filter((p) => p.length >= 3)))
 }
 
 /** A command option that picks tests by name: a renamed test could fall out of it. */
@@ -179,6 +181,8 @@ interface Parsed {
   notes: string[]
   /** Every other line that is not blank, with its test titles replaced by a mark. */
   body: Line[]
+  /** The text of every title masked in `body`, piece by piece; empty when titles are kept. */
+  titles: string[][]
   /** Set when one name is imported as two different things. */
   conflict?: string
 }
@@ -334,7 +338,7 @@ const TITLES: [RegExp, string][] = [
 
 /** A file's imports and comments up to its first line of code, and every line after that. */
 function parse(file: string, text: string, keepTitles = false): Parsed {
-  const out: Parsed = { bindings: new Map(), effects: new Set(), notes: [], body: [] }
+  const out: Parsed = { bindings: new Map(), effects: new Set(), notes: [], body: [], titles: [] }
   const bind = (name: string, target: string) => {
     if (out.bindings.has(name) && out.bindings.get(name) !== target) out.conflict ??= code(name)
     out.bindings.set(name, target)
@@ -359,16 +363,18 @@ function parse(file: string, text: string, keepTitles = false): Parsed {
     out.body.push({ indent, text: line })
   }
   if (!keepTitles) {
-    const masked = maskTitles(file, out.body.map((l) => l.text)).lines
-    out.body = out.body.map((l, k) => ({ indent: l.indent, text: masked[k]! }))
+    const masked = maskTitles(file, out.body.map((l) => l.text))
+    out.body = out.body.map((l, k) => ({ indent: l.indent, text: masked.lines[k]! }))
+    out.titles = masked.titles
   }
   return out
 }
 
 /** The language whose titles a file holds, by its extension; null for any other file, whose lines are compared as written. */
 function languageOf(file: string): 'js' | 'jsx' | 'py' | 'go' | null {
-  if (/\.[cm]?[jt]sx$/.test(file)) return 'jsx'
-  if (/\.[cm]?[jt]s$/.test(file)) return 'js'
+  // Plain JavaScript may hold JSX too, through a bundler; TypeScript only in .tsx.
+  if (/\.(?:[cm]?jsx?|tsx)$/.test(file)) return 'jsx'
+  if (/\.[cm]?ts$/.test(file)) return 'js'
   if (file.endsWith('.py')) return 'py'
   if (file.endsWith('.go')) return 'go'
   return null
@@ -540,8 +546,9 @@ function jsTitles(lines: string[], jsx = false): { lines: string[]; titles: stri
   for (let k = 0; k < out.length; k++) {
     const line = out[k]!
     if (open) continue
-    // In JSX, text between tags may hold quotes that are not strings: such a line counts as open.
-    open = leavesOpen(line) || (jsx && /<[A-Za-z>/]/.test(line) && /[`'"]|\/\*/.test(line))
+    // In JSX, text between tags, over as many lines as it likes, may hold quotes that are not
+    // strings and hide a template that opens: after the first tag nothing more is masked.
+    open = leavesOpen(line) || (jsx && /<[A-Za-z>]/.test(line))
     if (next) {
       next = false
       mask(k, 0, /^\s*,/)
