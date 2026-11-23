@@ -162,6 +162,7 @@ export function redactingCodeHost(inner: CodeHost, secrets: string[]): CodeHost 
     defaultBranch: () => inner.defaultBranch(),
     pushBranch: (workdir, branch, opts) => inner.pushBranch(workdir, branch, opts),
     deleteBranch: (branch) => inner.deleteBranch(branch),
+    getPullRequest: (url) => inner.getPullRequest(url),
     openPullRequest: (pr) => inner.openPullRequest({ ...pr, title: redact(pr.title, secrets), body: redact(pr.body, secrets) }),
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { newState, transition } from '../../src/core/states.js'
-import { makeDeps, makeTicket } from '../../src/testing/fakes.js'
+import { FakeCodeHost, makeDeps, makeTicket } from '../../src/testing/fakes.js'
 
 describe('fakes', () => {
   it('FakeAgent plays a script and records calls', async () => {
@@ -57,5 +57,27 @@ describe('fakes', () => {
     await d.tracker.commentOnce(a, 'k', 'x')
     await d.tracker.commentOnce(a, 'k', 'y')
     expect(d.tracker.comments).toEqual([{ ticketId: '1', body: 'x' }])
+  })
+})
+
+describe('FakeCodeHost.getPullRequest', () => {
+  it('reports a pull request it opened as open', async () => {
+    const host = new FakeCodeHost()
+    const url = await host.openPullRequest({ title: 'T', body: 'B', head: 'h', base: 'main', draft: true })
+    expect(await host.getPullRequest(url)).toEqual({ state: 'open', headSha: 'head0' })
+  })
+
+  it('returns what the test set for a URL', async () => {
+    const host = new FakeCodeHost()
+    host.pullRequests.set('https://example.test/pr/9', { state: 'merged', headSha: 'x', mergedAt: '2026-01-01T00:00:00Z' })
+    expect(await host.getPullRequest('https://example.test/pr/9')).toMatchObject({ state: 'merged' })
+  })
+
+  it('throws for an unknown URL and when told to', async () => {
+    const host = new FakeCodeHost()
+    await expect(host.getPullRequest('https://example.test/pr/5')).rejects.toThrow()
+    const url = await host.openPullRequest({ title: 'T', body: 'B', head: 'h', base: 'main', draft: true })
+    host.pullRequestError = new Error('boom')
+    await expect(host.getPullRequest(url)).rejects.toThrow('boom')
   })
 })

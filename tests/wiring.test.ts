@@ -136,6 +136,7 @@ describe('redacting wrappers', () => {
     const inner = new FakeCodeHost(); const host = redactingCodeHost(inner, [SECRET])
     expect(await host.openPullRequest({ title: `t ${SECRET}`, body: `b ${SECRET}`, head: 'h', base: 'main', draft: false })).toBe('https://example.test/pr/1')
     expect(inner.prs[0]).toEqual({ title: 't [redacted]', body: 'b [redacted]', head: 'h', base: 'main', draft: false })
+    expect(await host.getPullRequest('https://example.test/pr/1')).toEqual({ state: 'open', headSha: 'head0' })
     expect(await host.defaultBranch()).toBe('main')
     await host.pushBranch('/w', 'rumba/shop/1', { force: true }); await host.deleteBranch('rumba/shop/base-1')
     expect(inner.pushed).toEqual([{ branch: 'rumba/shop/1', force: true }]); expect(inner.deleted).toEqual(['rumba/shop/base-1'])

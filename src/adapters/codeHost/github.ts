@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises'
 import type { Octokit } from '@octokit/rest'
 import { execa } from 'execa'
 import { cleanOutput } from '../../core/redact.js'
-import type { CodeHost, PullRequestDraft } from '../../ports/codeHost.js'
+import type { CodeHost, PullRequestDraft, PullRequestInfo } from '../../ports/codeHost.js'
 
 const HEADER_KEY = 'http.https://github.com/.extraheader'
 
@@ -110,6 +110,23 @@ export class GitHubCodeHost implements CodeHost {
       await this.octokit.rest.pulls.update({ ...this.where(), pull_number: open.number, title: pr.title, body: pr.body })
       return open.html_url
     }
+  }
+
+  async getPullRequest(url: string): Promise<PullRequestInfo> {
+    const { data } = await this.octokit.rest.pulls.get({ ...this.where(), pull_number: this.pullNumber(url) })
+    const info: PullRequestInfo = { state: data.merged || data.merged_at ? 'merged' : data.state === 'closed' ? 'closed' : 'open', headSha: data.head.sha }
+    if (info.state === 'merged' && data.merged_at) info.mergedAt = data.merged_at
+    if (info.state === 'closed' && data.closed_at) info.closedAt = data.closed_at
+    return info
+  }
+
+  /** The number in a pull request URL of this repository. Anything else is refused, so a stored URL cannot point a request elsewhere. */
+  private pullNumber(url: string): number {
+    const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url)
+    if (!m || m[1]!.toLowerCase() !== this.owner.toLowerCase() || m[2]!.toLowerCase() !== this.repo.toLowerCase()) {
+      throw new Error(`Not a pull request of ${this.owner}/${this.repo}: ${url}`)
+    }
+    return Number(m[3])
   }
 
   private where(): { owner: string; repo: string } {

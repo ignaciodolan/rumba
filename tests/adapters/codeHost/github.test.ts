@@ -71,6 +71,58 @@ describe('GitHubCodeHost API calls', () => {
   })
 })
 
+describe('GitHubCodeHost.getPullRequest', () => {
+  const URL7 = 'https://github.com/o/r/pull/7'
+
+  function hostWith(data: Record<string, unknown> | number) {
+    const stub = stubOctokit([
+      route('GET', /^\/repos\/o\/r\/pulls\/7$/, () => {
+        if (typeof data === 'number') throw httpError(data)
+        return data
+      }),
+    ])
+    const host = new GitHubCodeHost({ octokit: stub.octokit, owner: 'o', repo: 'r', token: TOKEN, repoRoot: path.join(tmpdir(), 'rumba-unused-checkout') })
+    return { host, calls: stub.requests }
+  }
+
+  it('reports an open pull request with its head commit', async () => {
+    const { host } = hostWith({ state: 'open', merged: false, merged_at: null, closed_at: null, head: { sha: 'abc' } })
+    expect(await host.getPullRequest(URL7)).toEqual({ state: 'open', headSha: 'abc' })
+  })
+
+  it('reports a merged pull request with the time it merged', async () => {
+    const { host } = hostWith({ state: 'closed', merged: true, merged_at: '2026-01-02T00:00:00Z', closed_at: '2026-01-02T00:00:00Z', head: { sha: 'abc' } })
+    expect(await host.getPullRequest(URL7)).toMatchObject({ state: 'merged', headSha: 'abc', mergedAt: '2026-01-02T00:00:00Z' })
+  })
+
+  it('reports a pull request closed without merging', async () => {
+    const { host } = hostWith({ state: 'closed', merged: false, merged_at: null, closed_at: '2026-01-03T00:00:00Z', head: { sha: 'abc' } })
+    expect(await host.getPullRequest(URL7)).toEqual({ state: 'closed', headSha: 'abc', closedAt: '2026-01-03T00:00:00Z' })
+  })
+
+  it('accepts the host owner and repository in any letter case', async () => {
+    const { host } = hostWith({ state: 'open', merged: false, head: { sha: 'abc' } })
+    await expect(host.getPullRequest('https://github.com/O/R/pull/7')).resolves.toMatchObject({ state: 'open' })
+  })
+
+  it.each([
+    'https://github.com/other/r/pull/7',
+    'https://github.com/o/other/pull/7',
+    'https://github.com/o/r/issues/7',
+    'https://github.com/o/r/pull/7/files',
+    'https://example.test/o/r/pull/7',
+    'not a url',
+  ])('refuses %s before any request is made', async (url) => {
+    const { host, calls } = hostWith({ state: 'open', head: { sha: 'abc' } })
+    await expect(host.getPullRequest(url)).rejects.toThrow(/pull request/i)
+    expect(calls).toEqual([])
+  })
+
+  it('lets a 404 propagate', async () => {
+    await expect(hostWith(404).host.getPullRequest(URL7)).rejects.toMatchObject({ status: 404 })
+  })
+})
+
 describe('gitAuthEnv', () => {
   it('clears any stored GitHub auth header, then sets the token header, and disables hooks', () => {
     expect(gitAuthEnv(TOKEN)).toEqual({
