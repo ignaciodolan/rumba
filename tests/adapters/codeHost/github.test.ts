@@ -222,6 +222,12 @@ describe('GitHubCodeHost feedback and labels', () => {
     expect(await host.listFeedback(URL7, '2026-01-01T00:00:00Z')).toEqual([])
   })
 
+  it('skips the line comments of a dismissed review', async () => {
+    const dismissed = review({ id: 9, state: 'DISMISSED' })
+    const { host } = setup({ reviews: [dismissed], lineComments: [line({ id: 30, pull_request_review_id: 9 })], permissions: WRITE, login: 'rumba-bot' })
+    expect(await host.listFeedback(URL7, '2026-01-01T00:00:00Z')).toEqual([])
+  })
+
   it('reports only items strictly after since', async () => {
     const { host } = setup({ comments: [comment({ id: 4, created_at: '2026-01-02T12:00:00Z' }), comment({ id: 5, created_at: '2026-01-02T12:00:01Z', body: 'newer' })], permissions: WRITE, login: 'rumba-bot' })
     const items = await host.listFeedback(URL7, '2026-01-02T12:00:00Z')

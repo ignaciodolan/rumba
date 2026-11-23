@@ -23,13 +23,13 @@ function worthStoring(item: FeedbackItem): boolean {
 }
 
 /**
- * A line comment, or a commented review with a body, asks for something unless its author approved later:
+ * A line comment, or a commented review with a body, asks for something unless its author approved at or after it (an approval's own line comments share its time):
  * GitHub's "Comment" review is how many reviewers ask for changes, and a later approval answers it.
  */
 function asksForChange(i: FeedbackItem, kept: FeedbackItem[]): boolean {
   const asks = i.kind === 'line' || (i.kind === 'review' && i.reviewState === 'commented' && i.text.trim() !== '')
   if (!asks) return false
-  return !kept.some((a) => a.kind === 'review' && a.reviewState === 'approved' && a.author === i.author && Date.parse(a.at) > Date.parse(i.at))
+  return !kept.some((a) => a.kind === 'review' && a.reviewState === 'approved' && a.author === i.author && Date.parse(a.at) >= Date.parse(i.at))
 }
 
 /**

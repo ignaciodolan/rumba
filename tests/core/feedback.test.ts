@@ -92,6 +92,15 @@ describe('selectFeedback', () => {
     it('starts a round on a commented review with a body alone', () => {
       expect(selectFeedback([commented('alice', 5, 'please split this')], []).requested).toBe(true)
     })
+    it('starts nothing when alice approves with line comments, which share the approval time', () => {
+      expect(selectFeedback([approval('alice', 5), line('alice', 5, 'nit'), line('alice', 5, 'nit 2')], []).requested).toBe(false)
+    })
+    it('starts nothing for a commented review at 10:00 and her approval at 10:05', () => {
+      expect(selectFeedback([commented('alice', 0, 'nit'), approval('alice', 5)], []).requested).toBe(false)
+    })
+    it('starts a round for an approval at 10:00 and a new line comment at 10:05', () => {
+      expect(selectFeedback([approval('alice', 0), line('alice', 5, 'one more')], []).requested).toBe(true)
+    })
     it('starts nothing when the same reviewer approved after it', () => {
       const r = selectFeedback([commented('alice', 5, 'nit'), line('alice', 5, 'round it'), approval('alice', 6)], [])
       expect(r.requested).toBe(false)
