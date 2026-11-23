@@ -59,9 +59,12 @@ export function dealtWithUntil(state: TicketState): string {
   return opened ? opened.at : new Date(0).toISOString()
 }
 
-/** Whether the revise label counts: added after the feedback was dealt with, by a writer who is not Rumba's own account. */
+/**
+ * Whether the revise label counts: added after the feedback was dealt with, by a writer. Rumba never adds it,
+ * so one added by Rumba's own account is a maintainer using that account, and counts like anyone's.
+ */
 function labelStartsRound(added: LabelAdded | null, since: string): boolean {
-  return added !== null && Date.parse(added.at) > Date.parse(since) && added.canWrite && !added.self
+  return added !== null && Date.parse(added.at) > Date.parse(since) && added.canWrite
 }
 
 /** Starts a revision round when a writer asked for changes or put the revise label on; otherwise changes nothing. */

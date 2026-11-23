@@ -1,8 +1,13 @@
+import path from 'node:path'
+import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
+import { GitHubCodeHost } from '../../../src/adapters/codeHost/github.js'
 import { trackPullRequest } from '../../../src/core/steps/trackPullRequest.js'
 import { makeDeps, makeRumba, makeTicket, verified } from '../../../src/testing/fakes.js'
 import type { FeedbackItem, LabelAdded } from '../../../src/ports/codeHost.js'
 import { transition } from '../../../src/core/states.js'
+import type { Deps } from '../../../src/ports/deps.js'
+import { paged, route, stubOctokit } from '../../adapters/tracker/githubStub.js'
 
 const URL = 'https://example.test/pr/42'
 
@@ -98,7 +103,7 @@ describe('trackPullRequest feedback', () => {
     const { d, start } = open(); d.codeHost.feedback.set(URL, [fb({ ...REQUEST, author: 'rumba-bot', self: true })])
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
   })
-  const added = (over: Partial<LabelAdded> = {}): LabelAdded => ({ by: 'alice', at: '2026-11-21T00:00:00Z', canWrite: true, self: false, ...over })
+  const added = (over: Partial<LabelAdded> = {}): LabelAdded => ({ by: 'alice', at: '2026-11-21T00:00:00Z', canWrite: true, ...over })
   it('starts a round from the revise label alone, with no feedback, and removes the label', async () => {
     const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added())
     const s = await trackPullRequest(d, makeRumba(), makeTicket(), start)
@@ -110,11 +115,6 @@ describe('trackPullRequest feedback', () => {
     const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'tess', canWrite: false }))
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
     expect(d.codeHost.labelsRemoved).toEqual([]); expect(d.tracker.states.size).toBe(0)
-  })
-  it('starts nothing for a label the account Rumba runs as added', async () => {
-    const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ by: 'rumba-bot', self: true }))
-    expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
-    expect(d.codeHost.labelsRemoved).toEqual([])
   })
   it('starts nothing for a label added before the push, and removes it', async () => {
     const { d, start } = open(['rumba-revise']); d.codeHost.labelEvents.set(URL, added({ at: '2026-11-19T00:00:00Z' }))
@@ -200,5 +200,66 @@ describe('trackPullRequest feedback', () => {
     expect(await trackPullRequest(d, makeRumba(), makeTicket(), start)).toEqual(start)
     d.codeHost.feedback.set(URL, [fb({ ...REQUEST, at: new Date(Date.parse(opened) + 1000).toISOString() })])
     expect((await trackPullRequest(d, makeRumba(), makeTicket(), start)).state).toBe('changes_requested')
+  })
+})
+
+describe('trackPullRequest when Rumba runs with the token of alice, who also reviews', () => {
+  const PR = 'https://github.com/o/r/pull/42'
+  const PUSHED = '2026-11-20T00:00:00Z'
+  const OWN = '<!-- rumba:own -->\n'
+  const alice = { login: 'alice', type: 'User' }
+  const bob = { login: 'bob', type: 'User' }
+
+  /** The real GitHub code host, as alice, over a stubbed pull request #42. */
+  function asAlice(o: { reviews?: object[]; comments?: object[]; events?: object[]; labels?: string[] }) {
+    const removed: string[] = []
+    const stub = stubOctokit([
+      route('GET', /^\/repos\/o\/r\/pulls\/42$/, () => ({ state: 'open', merged: false, head: { sha: 'h' }, labels: (o.labels ?? []).map((name) => ({ name })) })),
+      route('GET', /^\/repos\/o\/r\/pulls\/42\/reviews$/, (req) => paged(req, o.reviews ?? [])),
+      route('GET', /^\/repos\/o\/r\/pulls\/42\/comments$/, (req) => paged(req, [])),
+      route('GET', /^\/repos\/o\/r\/issues\/42\/comments$/, (req) => paged(req, o.comments ?? [])),
+      route('GET', /^\/repos\/o\/r\/issues\/42\/events$/, (req) => paged(req, o.events ?? [])),
+      route('GET', /^\/repos\/o\/r\/collaborators\/([^/]+)\/permission$/, () => ({ permission: 'write' })),
+      route('DELETE', /^\/repos\/o\/r\/issues\/42\/labels\/(.+)$/, (_req, [name]) => { removed.push(name!); return [] }),
+    ])
+    const codeHost = new GitHubCodeHost({ octokit: stub.octokit, owner: 'o', repo: 'r', token: 't', repoRoot: path.join(tmpdir(), 'rumba-unused-checkout'), login: 'alice' })
+    const d = makeDeps()
+    const deps: Deps = { ...d, codeHost }
+    const start = { ...transition(verified(d), 'pr_open', d.clock()), pullRequestUrl: PR, pushedAt: PUSHED }
+    return { d, deps, start, removed }
+  }
+
+  const reply = { id: 1, user: alice, body: `${OWN}Renamed it as asked. RUMBA-REPLY`, created_at: '2026-11-21T09:00:00Z', html_url: `${PR}#issuecomment-1` }
+
+  it("starts a round on alice's changes-requested review and stores her comment, but never Rumba's reply", async () => {
+    const review = { id: 2, user: alice, body: 'Please rename the helper.', state: 'CHANGES_REQUESTED', submitted_at: '2026-11-21T10:00:00Z', html_url: `${PR}#pullrequestreview-2` }
+    const comment = { id: 3, user: alice, body: 'And the test too.', created_at: '2026-11-21T11:00:00Z', html_url: `${PR}#issuecomment-3` }
+    const { d, deps, start } = asAlice({ reviews: [review], comments: [reply, comment] })
+    const s = await trackPullRequest(deps, makeRumba(), makeTicket(), start)
+    expect(s.state).toBe('changes_requested')
+    expect(s.feedback?.map((f) => [f.kind, f.author, f.text])).toEqual([['review', 'alice', 'Please rename the helper.'], ['comment', 'alice', 'And the test too.']])
+    expect(JSON.stringify(d.tracker.states.get('123'))).not.toContain('RUMBA-REPLY')
+  })
+
+  it("keeps bob's comment that quotes Rumba's reply", async () => {
+    const review = { id: 2, user: bob, body: '', state: 'CHANGES_REQUESTED', submitted_at: '2026-11-21T10:00:00Z', html_url: `${PR}#pullrequestreview-2` }
+    const quote = { id: 3, user: bob, body: '> <!-- rumba:own -->\n> Renamed it as asked.\n\nThe test is still old.', created_at: '2026-11-21T11:00:00Z', html_url: `${PR}#issuecomment-3` }
+    const { deps, start } = asAlice({ reviews: [review], comments: [reply, quote] })
+    const s = await trackPullRequest(deps, makeRumba(), makeTicket(), start)
+    expect(s.feedback?.map((f) => f.author)).toEqual(['bob', 'bob'])
+    expect(s.feedback?.at(-1)?.text).toContain('The test is still old.')
+  })
+
+  it('starts nothing for Rumba\'s own reply alone', async () => {
+    const { deps, start } = asAlice({ comments: [reply] })
+    expect(await trackPullRequest(deps, makeRumba(), makeTicket(), start)).toEqual(start)
+  })
+
+  it('starts a round when alice adds the revise label after the push, and removes it', async () => {
+    const event = { id: 9, event: 'labeled', created_at: '2026-11-21T10:00:00Z', label: { name: 'rumba-revise' }, actor: alice }
+    const { deps, start, removed } = asAlice({ events: [event], labels: ['rumba-revise'] })
+    const s = await trackPullRequest(deps, makeRumba(), makeTicket(), start)
+    expect(s).toMatchObject({ state: 'changes_requested', feedback: [] })
+    expect(removed).toEqual(['rumba-revise'])
   })
 })

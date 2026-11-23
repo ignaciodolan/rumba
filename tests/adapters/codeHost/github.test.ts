@@ -13,6 +13,9 @@ const BASIC = Buffer.from(`x-access-token:${TOKEN}`).toString('base64')
 
 interface Pull { number: number; html_url: string; head: string; title: string; body: string }
 
+/** The first line of every body Rumba writes on GitHub. */
+const OWN = '<!-- rumba:own -->\n'
+
 function makeHost(o: { html_url?: string; existing?: Pull[]; remoteUrl?: string; repoRoot?: string; deleteStatus?: number } = {}) {
   const pulls = [...(o.existing ?? [])]
   const requests: Record<string, unknown>[] = []
@@ -43,14 +46,14 @@ describe('GitHubCodeHost API calls', () => {
   it('opens a pull request and returns its URL', async () => {
     const { host, requests } = makeHost({ html_url: 'https://github.com/o/r/pull/7' })
     expect(await host.openPullRequest({ title: 'T', body: 'B', head: 'rumba/shop/1', base: 'main', draft: true })).toBe('https://github.com/o/r/pull/7')
-    expect(requests[0]).toMatchObject({ title: 'T', head: 'rumba/shop/1', base: 'main', draft: true })
+    expect(requests[0]).toEqual({ title: 'T', body: `${OWN}B`, head: 'rumba/shop/1', base: 'main', draft: true })
   })
 
   it('updates and returns the open pull request when one already exists for the head', async () => {
     const existing = { number: 3, html_url: 'https://github.com/o/r/pull/3', head: 'rumba/shop/1', title: 'Old', body: 'Old body' }
     const { host, pulls } = makeHost({ existing: [existing] })
     expect(await host.openPullRequest({ title: 'T', body: 'B', head: 'rumba/shop/1', base: 'main', draft: true })).toBe('https://github.com/o/r/pull/3')
-    expect(pulls[0]).toMatchObject({ title: 'T', body: 'B' })
+    expect(pulls[0]).toMatchObject({ title: 'T', body: `${OWN}B` })
   })
 
   it('reads the default branch', async () => {
@@ -251,16 +254,77 @@ describe('GitHubCodeHost feedback and labels', () => {
     expect(lookups).toEqual([])
   })
 
-  it('marks the account Rumba runs as, in any letter case', async () => {
-    const { host } = setup({ comments: [comment({ user: user('Rumba-Bot') }), comment({ id: 6 })], permissions: { 'Rumba-Bot': 'write', alice: 'write' }, login: 'rumba-bot' })
+  it('marks a comment as Rumba\'s own by its account, in any letter case, and the marker on its first line', async () => {
+    const { host } = setup({ comments: [comment({ user: user('Rumba-Bot'), body: `${OWN}Revised` }), comment({ id: 6, body: `${OWN}Revised` })], permissions: { 'Rumba-Bot': 'write', alice: 'write' }, login: 'rumba-bot' })
     const items = await host.listFeedback(URL7, '2026-01-01T00:00:00Z')
     expect(items.map((i) => i.self)).toEqual([true, false])
   })
 
+  describe('when Rumba runs with the token of alice, who also reviews', () => {
+    const reply = `${OWN}Renamed it as asked.`
+
+    it('marks only its own marked reply as its own, not alice\'s comment without the marker', async () => {
+      const { host } = setup({ comments: [comment({ body: reply }), comment({ id: 6, body: 'Please also rename the test.' })], permissions: { alice: 'write' }, login: 'alice' })
+      const items = await host.listFeedback(URL7, '2026-01-01T00:00:00Z')
+      expect(items.map((i) => [i.text, i.canWrite, i.self])).toEqual([[reply, true, true], ['Please also rename the test.', true, false]])
+    })
+
+    it('does not mark a comment by bob that quotes Rumba\'s reply', async () => {
+      const quoted = '> <!-- rumba:own -->\n> Renamed it as asked.\n\nThe test name is still old.'
+      const { host } = setup({ comments: [comment({ user: user('bob'), body: quoted })], permissions: { alice: 'write', bob: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]).toMatchObject({ author: 'bob', canWrite: true, self: false })
+    })
+
+    it('does not mark a comment by its own account that only quotes the marker', async () => {
+      const quoted = '> <!-- rumba:own -->\n> Renamed it as asked.\n\nNot yet: the test name is still old.'
+      const { host } = setup({ comments: [comment({ body: quoted })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(false)
+    })
+
+    it('never marks a review or a line comment as its own, even one that starts with the marker', async () => {
+      const { host } = setup({ reviews: [review({ body: `${OWN}Please rename it` })], lineComments: [line({ body: `${OWN}Why here?` })], permissions: { alice: 'write' }, login: 'alice' })
+      const items = await host.listFeedback(URL7, '2026-01-01T00:00:00Z')
+      expect(items.map((i) => [i.kind, i.canWrite, i.self])).toEqual([['review', true, false], ['line', true, false]])
+    })
+
+    it.each([
+      "Rumba made no change in this round. The agent's reason:\n\n> Already done.",
+      'Revised as asked with the rumba-revise label.',
+      '- Review by alice (https://github.com/o/r/pull/7#pullrequestreview-1): Renamed it.',
+      '- Line comment on src/a.ts:12 by alice (https://github.com/o/r/pull/7#discussion_r2): Moved it.',
+      '- Comment by alice (https://github.com/o/r/pull/7#issuecomment-3): Done.',
+      '- Check for c1 changed, as asked in https://github.com/o/r/pull/7#issuecomment-3: renamed.',
+    ])('marks an old reply without the marker as its own by its opening: %s', async (body) => {
+      const { host } = setup({ comments: [comment({ body })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(true)
+    })
+
+    it('does not mark its own account\'s comment without the marker or an old opening', async () => {
+      const { host } = setup({ comments: [comment({ body: 'Please also round the totals' })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(false)
+    })
+
+    it('does not mark bob\'s comment that starts like an old reply', async () => {
+      const { host } = setup({ comments: [comment({ user: user('bob'), body: '- Review by alice: not done yet, please rename it.' })], permissions: { alice: 'write', bob: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]).toMatchObject({ author: 'bob', canWrite: true, self: false })
+    })
+
+    it('never marks a review or line comment by its own account that starts like an old reply', async () => {
+      const { host } = setup({ reviews: [review({ body: '- Review by alice: rename it' })], lineComments: [line({ body: '- Comment by alice: here' })], permissions: { alice: 'write' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z')).map((i) => i.self)).toEqual([false, false])
+    })
+
+    it('still looks up alice\'s permission, so her comment is a writer\'s only if she can write', async () => {
+      const { host, lookups } = setup({ comments: [comment({ body: 'Please rename it.' })], permissions: { alice: 'read' }, login: 'alice' })
+      expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]).toMatchObject({ canWrite: false, self: false })
+      expect(lookups).toEqual(['alice'])
+    })
+  })
+
   it('looks the account up through GraphQL viewer, then GET /user', async () => {
-    const viaViewer = setup({ comments: [comment({ user: user('rumba-bot') })], permissions: { 'rumba-bot': 'write' } })
+    const viaViewer = setup({ comments: [comment({ user: user('rumba-bot'), body: `${OWN}Revised` })], permissions: { 'rumba-bot': 'write' } })
     expect((await viaViewer.host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(true)
-    const viaUser = setup({ comments: [comment({ user: user('rumba-bot') })], permissions: { 'rumba-bot': 'write' }, viewerLogin: null, userLogin: 'rumba-bot' })
+    const viaUser = setup({ comments: [comment({ user: user('rumba-bot'), body: `${OWN}Revised` })], permissions: { 'rumba-bot': 'write' }, viewerLogin: null, userLogin: 'rumba-bot' })
     expect((await viaUser.host.listFeedback(URL7, '2026-01-01T00:00:00Z'))[0]?.self).toBe(true)
   })
 
@@ -294,10 +358,10 @@ describe('GitHubCodeHost feedback and labels', () => {
 
   it('finds the latest time the label was added and who by, with write access and identity', async () => {
     const { host } = setup({ events: [labeled(1, '2026-01-02T10:00:00Z', 'revise', user('tess')), labeled(2, '2026-01-03T10:00:00Z'), labeled(3, '2026-01-05T10:00:00Z', 'other'), { id: 4, event: 'unlabeled', created_at: '2026-01-06T10:00:00Z', label: { name: 'revise' }, actor: user('alice') }], permissions: { alice: 'write', tess: 'triage' }, login: 'rumba-bot' })
-    expect(await host.labelAdded(URL7, 'revise')).toEqual({ by: 'alice', at: '2026-01-03T10:00:00Z', canWrite: true, self: false })
+    expect(await host.labelAdded(URL7, 'revise')).toEqual({ by: 'alice', at: '2026-01-03T10:00:00Z', canWrite: true })
   })
 
-  it('reports a triage actor, a bot and a missing actor as unable to write, and Rumba as self', async () => {
+  it('reports a triage actor, a bot and a missing actor as unable to write, and Rumba\'s own account like anyone else', async () => {
     const triage = setup({ events: [labeled(1, '2026-01-02T10:00:00Z', 'revise', user('tess'))], permissions: { tess: 'triage' }, login: 'rumba-bot' })
     expect(await triage.host.labelAdded(URL7, 'revise')).toMatchObject({ by: 'tess', canWrite: false })
     const bot = setup({ events: [labeled(1, '2026-01-02T10:00:00Z', 'revise', user('ci[bot]', 'Bot'))], permissions: { 'ci[bot]': 'write' }, login: 'rumba-bot' })
@@ -306,7 +370,8 @@ describe('GitHubCodeHost feedback and labels', () => {
     const gone = setup({ events: [labeled(1, '2026-01-02T10:00:00Z', 'revise', null)], login: 'rumba-bot' })
     expect(await gone.host.labelAdded(URL7, 'revise')).toMatchObject({ by: '', canWrite: false })
     const own = setup({ events: [labeled(1, '2026-01-02T10:00:00Z', 'revise', user('Rumba-Bot'))], permissions: { 'Rumba-Bot': 'write' }, login: 'rumba-bot' })
-    expect(await own.host.labelAdded(URL7, 'revise')).toMatchObject({ canWrite: true, self: true })
+    // Rumba never adds this label, so its own account adding it is a person using that account.
+    expect(await own.host.labelAdded(URL7, 'revise')).toEqual({ by: 'Rumba-Bot', at: '2026-01-02T10:00:00Z', canWrite: true })
   })
 
   it('treats a permission lookup that fails as canWrite false for a label actor', async () => {
@@ -327,13 +392,21 @@ describe('GitHubCodeHost feedback and labels', () => {
   it('updates the body of the pull request', async () => {
     const { host, edits } = setup()
     await host.updatePullRequest(URL7, { body: 'New body' })
-    expect(edits).toEqual([{ body: 'New body' }])
+    expect(edits).toEqual([{ body: `${OWN}New body` }])
   })
 
   it('comments on the pull request', async () => {
     const { host, posted } = setup()
     await host.commentOnPullRequest(URL7, 'Revised')
-    expect(posted).toEqual([{ body: 'Revised' }])
+    expect(posted).toEqual([{ body: `${OWN}Revised` }])
+  })
+
+  it('reads back its own posted reply as its own, even one that reads like a request', async () => {
+    const comments: object[] = []
+    const { host, posted } = setup({ comments, permissions: { alice: 'write' }, login: 'alice' })
+    await host.commentOnPullRequest(URL7, 'Please also round the totals')
+    comments.push(comment({ body: posted[0]!.body }))
+    expect((await host.listFeedback(URL7, '2026-01-01T00:00:00Z')).map((i) => [i.author, i.self])).toEqual([['alice', true]])
   })
 
   it('removes a label from the pull request', async () => {

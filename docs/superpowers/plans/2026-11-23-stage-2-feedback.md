@@ -12,7 +12,7 @@ For each ticket in `pr_open` whose pull request is still open, Rumba collects th
 - Line comments and pull request comments from such a user, after the last push, count as feedback too.
 - An approval alone, or feedback older than Rumba's last push, changes nothing.
 - Feedback from a user without write access is ignored, and its text is never stored or passed on.
-- Comments written by the account Rumba runs as are never treated as feedback.
+- Comments written by the account Rumba runs as are never treated as feedback. (Since changed: see `docs/superpowers/plans/2026-11-24-own-comment-marker.md`, which recognises Rumba's own comments by a marker, not by author alone.)
 - Adding `rumba-revise` to the pull request starts a round even with no "changes requested" review, and Rumba removes the label.
 - Stored feedback is cleaned like check output (secrets redacted, size bounded).
 
@@ -29,7 +29,7 @@ For each ticket in `pr_open` whose pull request is still open, Rumba collects th
 
 - **What starts a round.** A round starts when, after Rumba's last push, a person with write access submitted a review requesting changes, or when the pull request carries the `rumba-revise` label. Line comments and pull request comments alone do not start one (people discuss on pull requests), but once a round starts, every piece of feedback after the last push from people with write access is collected: reviews requesting changes, line comments and pull request comments. This reconciles "line comments and pull request comments count as feedback too" with "`rumba-revise` starts a round even with no changes-requested review".
 - **Last push.** `openPullRequest` records `pushedAt` (the clock at the push) on the state. For a ticket that has none (opened before this change), the time of its last `pr_open` history entry is used.
-- **Who counts.** The code host reports, for each piece of feedback, whether its author has write access (`admin`, `maintain` or `write` on the repository) and whether it is the account Rumba runs as. Core filters: it keeps only `canWrite && !self`. Text from anyone else is dropped in core before anything is stored.
+- **Who counts.** The code host reports, for each piece of feedback, whether its author has write access (`admin`, `maintain` or `write` on the repository) and whether it is the account Rumba runs as. Core filters: it keeps only `canWrite && !self`. Text from anyone else is dropped in core before anything is stored. (Since changed: see `docs/superpowers/plans/2026-11-24-own-comment-marker.md`, which recognises Rumba's own comments by a marker, not by author alone.)
 - **Bounds.** At most 20 pieces of feedback are kept, the newest last; each text is cleaned with `cleanOutput(text, secrets, 2000)`; a line comment keeps its path and line. If the state comment would exceed its size limit, the stored feedback texts are cut further before the comment is rejected (as check output already is).
 - **The label.** Its name is configurable as `labels.revise` in `rumba.yml`, default `rumba-revise`. Rumba removes it from the pull request when it moves the ticket to `changes_requested`. The GitHub tracker's `ensureLabels` creates it, since issues and pull requests share labels on GitHub.
 - **Parking.** Until part 3, a ticket in `changes_requested` is left alone by the runner (`left('changes requested')`), costs no run-limit slot, and is listed with closed tickets like `pr_open` (`closedIn: ['pr_open', 'changes_requested']`; status also lists it). `rumba-retry` restarts it from `queued`, as it does `pr_open`.
