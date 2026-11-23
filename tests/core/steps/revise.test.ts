@@ -502,8 +502,12 @@ describe('revise', () => {
     expect((await runRumba(d, makeRumba())).advanced).toEqual([{ ticket: '123', from: 'changes_requested', to: 'pr_open' }])
     expect((await runRumba(d, makeRumba())).left).toEqual([{ ticket: '123', why: 'pull request open' }])
     d.codeHost.feedback.set(PR, [review, { ...review, url: `${PR}#pullrequestreview-4`, at: '2026-01-01T01:00:00Z', text: 'Still wrong.' }])
-    expect((await runRumba(d, makeRumba())).advanced).toEqual([{ ticket: '123', from: 'pr_open', to: 'changes_requested' }])
-    expect(d.tracker.states.get('123')?.feedback?.map((f) => f.text)).toEqual(['Still wrong.'])
+    // The newer review starts a round, carried out in the same run, on that review alone.
+    expect((await runRumba(d, makeRumba())).advanced).toEqual([
+      { ticket: '123', from: 'pr_open', to: 'changes_requested' },
+      { ticket: '123', from: 'changes_requested', to: 'pr_open' },
+    ])
+    expect(d.agent.calls.filter((c) => c.kind === 'revise').at(-1)?.feedback?.map((f) => f.text)).toEqual(['Still wrong.'])
   })
 
   it("starts the round from the pull request's head, not from a commit a killed run left on the branch", async () => {

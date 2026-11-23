@@ -150,9 +150,10 @@ async function startRound(deps: Deps, rumba: RumbaConfig, ticket: Ticket, state:
   await deps.tracker.writeState(ticket, next)
   if (asked || stale) await dropLabel(deps, url, label)
   const count = feedback.length === 1 ? '1 comment' : `${feedback.length} comments`
+  // No promise of when: the round usually runs in this same run, but the run limit can leave it for the next.
   const note = feedback.length === 0
-    ? `Rumba was asked to revise the change on the pull request. It will do so on a later run: ${url}`
-    : `Review feedback arrived on the pull request (${count}). Rumba will revise the change on a later run: ${url}`
+    ? `Rumba was asked to revise the change on the pull request and will do so: ${url}`
+    : `Review feedback arrived on the pull request (${count}). Rumba will revise the change: ${url}`
   try {
     await deps.tracker.comment(ticket, note)
   } catch {
