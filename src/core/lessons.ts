@@ -21,6 +21,8 @@ const NO_FEEDBACK = 'There was no feedback to learn from.'
 
 // Control characters, and the Unicode line and paragraph separators, which also break a line.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
+// What splits a feedback text into lines, each cleaned as a lesson line is.
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/
 // Lone surrogates and the replacement character: either would make lessons.md text that is not
 // valid UTF-8, which readFileAt refuses, and every later lesson of the rumba would fail.
 const BROKEN = /\p{Cs}|\uFFFD/gu
@@ -28,9 +30,10 @@ const BROKEN = /\p{Cs}|\uFFFD/gu
 // split a quote of the feedback so that it passes the quote check.
 const FORMAT = /\p{Cf}/gu
 // Markdown that would give a line structure in every later agent's context, where lessons.md
-// is placed unfenced: a heading or quote marker at the start, an HTML comment, a code fence.
+// is placed unfenced: a heading or quote marker at the start, an HTML comment, a code fence
+// (of backticks or of tildes).
 const LEADING_MARKS = /^(?:[#>]+\s*)+/
-const STRUCTURE = /<!--|-->|`{3,}/g
+const STRUCTURE = /<!--|-->|`{3,}|~{3,}/g
 
 type Distilled = Extract<AgentResult, { kind: 'distill-lesson' }>
 
@@ -48,15 +51,19 @@ export function cleanLesson(lines: string[], feedback: Feedback[], secrets: stri
   return { lines: kept }
 }
 
+/** One line, as plainLine makes it, cut to MAX_LINE code points (never inside a character). */
+function cleanLine(line: string, secrets: string[]): string {
+  return Array.from(plainLine(line, secrets)).slice(0, MAX_LINE).join('').trimEnd()
+}
+
 /**
  * One line: broken and invisible characters removed, control characters made spaces, then
  * redacted (so a secret a newline or a zero-width space split is still found), its markdown
- * structure removed, trimmed, and cut to MAX_LINE code points (never inside a character).
+ * structure removed and trimmed. Redacted again after, as removing a mark can join a secret.
  */
-function cleanLine(line: string, secrets: string[]): string {
+function plainLine(line: string, secrets: string[]): string {
   const chars = line.replace(BROKEN, '').replace(FORMAT, '').replace(CONTROL, ' ')
-  const plain = redact(plainText(redact(chars, secrets)), secrets).trim()
-  return Array.from(plain).slice(0, MAX_LINE).join('').trimEnd()
+  return redact(plainText(redact(chars, secrets)), secrets).trim()
 }
 
 /** The line without markdown structure. Repeated, since removing one mark can join the pieces of another. */
@@ -76,7 +83,11 @@ function normalize(text: string): string {
 /** True when the lesson, its lines read as one text, shares QUOTE_RUN characters in a row with a feedback text as cleaned. */
 function quotes(lines: string[], feedback: Feedback[], secrets: string[]): boolean {
   const lesson = normalize(lines.join(' '))
-  const texts = feedback.map((f) => normalize(redact(f.text, secrets))).filter((t) => t.length >= QUOTE_RUN)
+  // Each feedback line is cleaned as a lesson line is, so the markup Rumba strips from the
+  // lesson cannot make a quoted sentence differ from what the reviewer wrote.
+  const texts = feedback
+    .map((f) => normalize(f.text.split(LINE_BREAK).map((l) => plainLine(l, secrets)).join(' ')))
+    .filter((t) => t.length >= QUOTE_RUN)
   for (let i = 0; i + QUOTE_RUN <= lesson.length; i++) {
     const run = lesson.slice(i, i + QUOTE_RUN)
     if (texts.some((t) => t.includes(run))) return true

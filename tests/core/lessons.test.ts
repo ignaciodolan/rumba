@@ -95,17 +95,36 @@ describe('cleanLesson keeps each line plain text', () => {
     ['a run of headings and quotes', '>> ## > Round in the service', 'Round in the service'],
     ['a code fence', '```js round in the service', 'js round in the service'],
     ['a longer fence inside the line', 'Round ```` in the service', 'Round  in the service'],
+    ['a tilde fence', '~~~ round in the service', 'round in the service'],
+    ['a longer tilde fence inside the line', 'Round ~~~~ in the service', 'Round  in the service'],
     ['a comment', '<!-- Round in the service -->', 'Round in the service'],
     ['a comment hidden in a comment', 'Round <!<!---->-- in the service', 'Round  in the service'],
   ])('strips %s', (_n, line, want) => {
     expect(cleanLesson([line], [], [])).toEqual({ lines: [want] })
   })
-  it('keeps single backticks, a # inside the line and a lone >', () => {
-    const line = 'Round in `src/orders/total.ts` (see #42); totals > 0.'
+  it('keeps single backticks, a # inside the line, a lone > and a short run of ~', () => {
+    const line = 'Round in `src/orders/total.ts` (see #42); totals > 0, ~~ish.'
     expect(cleanLesson([line], [], [])).toEqual({ lines: [line] })
   })
   it('drops a line that was only structure', () => {
     expect(cleanLesson(['###', '```', 'Round in the service.'], [], [])).toEqual({ lines: ['Round in the service.'] })
+  })
+})
+
+describe('cleanLesson compares with the feedback cleaned as a lesson line is', () => {
+  const said = (text: string): Feedback => ({ ...aliceReview, text })
+  const LESSON = ['Totals must be rounded to cents before tax is added to the order.']
+
+  it.each([
+    ['comment marks', 'Totals <!-- note --> must be rounded to cents before tax is added to the order', ['Totals note must be rounded to cents before tax is added to the order.']],
+    ['an empty comment between short pieces', 'Totals must be rounded <!-- --> to cents before tax is added', LESSON],
+    ['a fence of backticks', 'Totals must be rounded ``` to cents before tax is added', LESSON],
+    ['a fence of tildes', 'Totals must be rounded ~~~ to cents before tax is added', LESSON],
+    ['a quote marker at the start of a line', 'Totals must be rounded to cents\n> before tax is added to the order', LESSON],
+    ['a heading marker at the start of a line', 'Totals must be rounded to cents\n## before tax is added to the order', LESSON],
+    ['a zero-width character', 'Totals must be rounded​ to cents before tax is added', LESSON],
+  ])('refuses a quote of feedback with %s', (_n, text, lesson) => {
+    expect(cleanLesson(lesson, [said(text)], [])).toEqual({ refused: 'the lesson quoted the feedback' })
   })
 })
 
