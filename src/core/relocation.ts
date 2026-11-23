@@ -147,7 +147,7 @@ function titlesIn(text: string): string[] {
 }
 
 /** A command option that picks tests by name: a renamed test could fall out of it. */
-const NAME_FILTER = /(?:^|\s)(?:-t|--testNamePattern|--test-name-pattern|-k|-run|--run|--grep|-g|--filter|-m|--match|--test-name|-p|--tests|--testcase)(?:[\s=]|$)|::/
+const NAME_FILTER = /(?:^|\s)(?:-t|--testNamePattern|--test-name-pattern|-k|-run|--run|--grep|-g|--filter|-m|--match|--test-name|-p|--tests|--testcase|-f|--fgrep|--grep-invert|--invert)(?:[\s=]|$)|::/
 
 /** A top-level line that opens a test, or only closes brackets. Nothing else may sit at the top level of a file a check merges into. */
 const TEST_TOP = /^(?:(?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(|(?:async\s+)?def\s+test_|class\s+Test|func\s+(?:Test|Benchmark|Example|Fuzz)\w*\s*\(|[)}\];,\s]+$)/
@@ -370,8 +370,36 @@ function parse(file: string, text: string, keepTitles = false): Parsed {
   return out
 }
 
+/**
+ * Whether a line ends inside a template literal, a string or a block comment. Errs towards
+ * open: a quote or a backtick it cannot place counts as one left open.
+ */
+function leavesOpen(line: string): boolean {
+  if (line.endsWith('\\')) return true
+  let quote: string | null = null
+  for (let n = 0; n < line.length; n++) {
+    const c = line[n]!
+    if (c === '\\') { n += 1; continue }
+    if (quote !== null) {
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
+    if (c === '/' && line[n + 1] === '/') return false
+    if (c === '/' && line[n + 1] === '*') {
+      const close = line.indexOf('*/', n + 2)
+      if (close === -1) return true
+      n = close + 1
+    }
+  }
+  return quote !== null
+}
+
 /** A call that takes a test's title as its first argument: describe, it, test and the like, with any modifiers. */
-const TEST_CALL = /^((?:describe|it|test|suite|context|specify)(?:\.\w+)*\s*\(\s*)/
+const TEST_CALL = /^((?:describe|it|test|suite|context|specify)(?:\.(?:only|skip|todo|each|concurrent|sequential|fails|shuffle))*\s*\(\s*)/
+
+/** An expression a title may interpolate: names, members, indexes and plain calls. No regex, comment, block or template. */
+const SAFE_EXPRESSION = /^[\w$.[\]\s'"?!:,()+-]*$/
 
 /**
  * A string literal at `s[at]`: its length, the mark that stands for it, and its text. A
@@ -391,7 +419,7 @@ export function readTitle(s: string, at: number): { length: number; mark: string
     if (c === q) return { length: n + 1 - at, mark: `<title${expressions.map((e) => `\${${e}}`).join('')}>`, text }
     if (q === '`' && c === '$' && s[n + 1] === '{') {
       const end = expressionEnd(s, n + 2)
-      if (end === null) return null
+      if (end === null || !SAFE_EXPRESSION.test(s.slice(n + 2, end))) return null
       expressions.push(s.slice(n + 2, end))
       text.push('')
       n = end + 1
@@ -443,8 +471,13 @@ function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
     out[k] = out[k]!.slice(0, at) + t.mark + out[k]!.slice(at + t.length)
     titles.push(t.text)
   }
+  // Once a line leaves a template, a string or a block comment open, what follows may be
+  // inside it, where a test call is text and a `${...}` would run: nothing more is masked.
+  let open = false
   for (let k = 0; k < out.length; k++) {
     const line = out[k]!
+    if (open) continue
+    open = leavesOpen(line)
     if (next) {
       next = false
       mask(k, 0, /^\s*,/)
@@ -455,7 +488,8 @@ function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
       if (closed === null) { table = null; continue }
       if (typeof closed === 'number') { table = closed; continue }
       table = null
-      mask(k, closed.title, /^\s*,/)
+      if (closed.title === line.length) next = true
+      else mask(k, closed.title, /^\s*,/)
       continue
     }
     const call = TEST_CALL.exec(line)
@@ -465,7 +499,8 @@ function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
       const closed = tableEnd(line, at, 1)
       if (closed === null) continue
       if (typeof closed === 'number') { table = closed; continue }
-      mask(k, closed.title, /^\s*,/)
+      if (closed.title === line.length) next = true
+      else mask(k, closed.title, /^\s*,/)
       continue
     }
     if (at === line.length) { next = true; continue }
@@ -483,6 +518,8 @@ function jsTitles(lines: string[]): { lines: string[]; titles: string[][] } {
 function tableEnd(line: string, from: number, depth: number): { title: number } | number | null {
   for (let n = from; n < line.length; n++) {
     const c = line[n]!
+    // A comment or a regex could hold any bracket: stop reading rather than guess.
+    if (c === '/') return null
     if (c === "'" || c === '"' || c === '`') {
       const lit = readTitle(line, n)
       if (lit === null) return null

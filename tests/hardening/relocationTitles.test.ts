@@ -105,3 +105,57 @@ describe('other title forms', () => {
     expect(judge(curried("'today'"), curried("'never'"))).not.toBeNull()
   })
 })
+
+// Found in review: places where something looks like a title but is code.
+describe('what is not a title', () => {
+  const line = (code: string) => `it('c1', async () => {\n  ${code}\n  expect(await fulfil('ship')).toBeDefined()\n})\n`
+
+  it('is not the first argument of an ordinary method call on an object named like a test call', () => {
+    expect(judge(line("context.set('X-Role', 'admin')"), line("context.set('X-None', 'admin')"))).not.toBeNull()
+    expect(judge(line('context.get(`/api/${id}/orders`, h)'), line('context.get(`/none/${id}`, h)'))).not.toBeNull()
+    const routed = (path: string) => `it('c1', async () => {\n  test.route(\n    ${path},\n    h,\n  )\n})\n`
+    expect(judge(routed("'**/api/orders'"), routed("'**/none'"))).not.toBeNull()
+  })
+
+  it('is not a test call written inside a template literal, where an expression would run', () => {
+    const fixture = (title: string) => `it('c1', async () => {\n  await run(\`\ntest(${title}, () => {})\n\`)\n})\n`
+    expect(judge(fixture("'inner'"), fixture("'${process.exit(0)}'"))).not.toBeNull()
+  })
+
+  it('keeps an expression that holds a regex, a comment or braces exactly as it was', () => {
+    expect(judge(body('`c1 ${/}/.test(a)} ok`'), body('`renamed ${/}/.test(evil())} ok`'))).not.toBeNull()
+    expect(judge(body('`c1 ${a /* } */} ok`'), body('`renamed ${a /* } */} ok`'))).not.toBeNull()
+  })
+
+  it('stops reading a test.each table at a comment, and compares the rest as written', () => {
+    const each = (title: string) => `test.each([\n  [1, 2], // :(\n])(${title}, (a, b) => {\n  expect(fulfil(a)).toBe(b)\n})\n`
+    expect(judge(each("'c1: doubles'"), each("'doubles'"))).not.toBeNull()
+  })
+})
+
+describe('more title forms that may be renamed', () => {
+  it('keeps an escaped `\\${` as text', () => {
+    expect(judge(body('`c1: \\${not code} ok`'), body('`renamed \\${not code} ok`'))).toBeNull()
+  })
+
+  it('renames a title closed right after, as in it.todo', () => {
+    expect(judge("it.todo('c1: ships later')\n", "it.todo('ships an order later')\n")).toBeNull()
+  })
+
+  it('renames the title of a test.each whose table closes on its own line', () => {
+    const each = (title: string) => `test.each([\n  [1, 2],\n])(\n  ${title},\n  (a, b) => {\n    expect(fulfil(a)).toBe(b)\n  },\n)\n`
+    expect(judge(each("'c1: doubles %i'"), each("'doubles %i'"))).toBeNull()
+  })
+})
+
+describe('a command that picks tests by name', () => {
+  it('keeps the titles when the command names part of a template title without a filter option', () => {
+    expect(judge(body('`c1-ships ${action}`'), body('`ships ${action}`'), `npm test -- ${FROM} c1-ships`)).toMatch(/title/)
+  })
+
+  it("knows mocha's --fgrep and --grep-invert", () => {
+    for (const flag of ['--fgrep ok', '-f ok', '--grep-invert slow']) {
+      expect(judge(body('`${action} ok`'), body('`${action} gone`'), `npx mocha ${FROM} ${flag}`), flag).toMatch(/title/)
+    }
+  })
+})
