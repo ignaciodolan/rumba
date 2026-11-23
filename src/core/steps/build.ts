@@ -9,13 +9,13 @@ import { transition } from '../states.js'
 import type { AttemptRecord, CheckResult, ProjectTestsResult, Ticket, TicketState } from '../types.js'
 import { cleanupQuietly, downQuietly } from './teardown.js'
 
-type Failure = { criterionId: string; output: string }
+export type Failure = { criterionId: string; output: string }
 
 /** Exit codes of a command that timed out (124), could not execute (126) or was not found (127). */
 export const COULD_NOT_RUN = [124, 126, 127]
 
 /** The tail of the output kept with each attempt on the ticket. */
-const ATTEMPT_TAIL = 1000
+export const ATTEMPT_TAIL = 1000
 /** At most this many attempts are kept on the ticket, the latest. */
 const MAX_ATTEMPTS_KEPT = 10
 const MAX_SUMMARY = 2000
@@ -29,8 +29,14 @@ function fromResults(results: CheckResult[], secrets: string[]): Failure[] {
   return results.filter((r) => !r.passed).map((r) => ({ criterionId: r.criterionId, output: cleanOutput(r.output, secrets) }))
 }
 
+/**
+ * What a verification compares and where it puts the branch back: the check files and their
+ * hashes, and the commit a changed check file is reset to.
+ */
+export interface Lock { files: string[]; hashes: Record<string, string>; resetTo: string }
+
 /** What one verification of a commit found. */
-type Verdict =
+export type Verdict =
   | { kind: 'passed'; results: CheckResult[]; projectTests: ProjectTestsResult }
   | { kind: 'checks-failed' | 'project-tests-failed'; results: CheckResult[]; projectTests: ProjectTestsResult; failures: Failure[]; tail: string }
   | { kind: 'guard'; failures: Failure[] }
@@ -61,6 +67,7 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
   // The commit at the head of the fix branch, which a re-verification runs against. It is read
   // from the branch in every attempt, so a fix committed in an earlier run counts.
   let head = checksSha
+  const lock: Lock = { files: checkFiles, hashes: state.checkHashes, resetTo: checksSha }
 
   const nextNumber = () => (current.attempts?.at(-1)?.n ?? 0) + 1
   const record = async (r: Omit<AttemptRecord, 'n'>, extra: Partial<TicketState> = {}): Promise<void> => {
@@ -92,7 +99,7 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
       // counts, and a failure goes to a person with the agent's reason.
       const note = `The agent said no change was needed: ${fixed.noChange}`
       // One strict run: a re-verification is never given a second try.
-      const v = await verifyOnce(deps, rumba, current, head, checkFiles)
+      const v = await verifyOnce(deps, rumba, current, head, lock)
       if (v.kind === 'infrastructure') return await stopForInfrastructure(v, note)
       if (v.kind === 'passed') {
         await record({ outcome: 'verified', checks: brief(v.results), projectTests: v.projectTests, note, tail: '' }, { fixSummary: summaryOf(fixed.summary, deps) })
@@ -114,7 +121,7 @@ export async function build(deps: Deps, rumba: RumbaConfig, ticket: Ticket, stat
 
     let v: Verdict
     if ('sha' in fixed) {
-      v = await verify(deps, rumba, current, fixed.sha, checkFiles)
+      v = await verify(deps, rumba, current, fixed.sha, lock)
       if (v.kind === 'guard') head = checksSha
     } else {
       v = { kind: 'guard', failures: fixed.failures }
@@ -172,7 +179,7 @@ export function inertTitle(title: string): string {
   return title.replace(/#(?=\d)/g, '#\u200b').replace(/\/(issues|pull)\//gi, '/$1\u200b/')
 }
 
-function brief(results: CheckResult[]): AttemptRecord['checks'] {
+export function brief(results: CheckResult[]): AttemptRecord['checks'] {
   return results.map((r) => ({ criterionId: r.criterionId, passed: r.passed, exitCode: r.exitCode }))
 }
 
@@ -195,7 +202,7 @@ export function describe(a: AttemptRecord): string {
   }
 }
 
-function fence(text: string): string {
+export function fence(text: string): string {
   const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((m) => m[0].length))
   const f = '`'.repeat(longest + 1)
   return `${f}\n${text}\n${f}`
@@ -223,7 +230,7 @@ async function fixOnce(
       if (result.noChangeNeeded !== undefined) return { noChange: result.noChangeNeeded, summary: result.summary, tip }
       return { failures: [{ criterionId: 'guard', output: 'The agent changed no files.' }], summary: result.summary, tip }
     }
-    const guard = await protectedFailure(deps, rumba, workdir, state)
+    const guard = await protectedFailure(deps, rumba, workdir, state.checksSha!)
     if (guard) {
       await deps.workspace.reset(workdir, state.checksSha!)
       return { failures: [{ criterionId: 'guard', output: guard }], summary: result.summary, tip: state.checksSha! }
@@ -241,24 +248,25 @@ async function fixOnce(
  * cannot pass the second time by leaving something behind the first time, or by faking a
  * crash. The second verdict is the one that counts.
  */
-async function verify(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checkFiles: string[]): Promise<Verdict> {
-  const first = await verifyOnce(deps, rumba, state, sha, checkFiles)
+export async function verify(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, lock: Lock): Promise<Verdict> {
+  const first = await verifyOnce(deps, rumba, state, sha, lock)
   if (first.kind === 'passed' || first.kind === 'guard') return first
-  return verifyOnce(deps, rumba, state, sha, checkFiles)
+  return verifyOnce(deps, rumba, state, sha, lock)
 }
 
 /**
- * In a new checkout of the committed fix: compares the check files with their recorded hashes,
- * then runs the checks and the project tests. A changed check file is reset off the branch.
+ * In a new checkout of the committed fix: compares the check files with the lock's hashes,
+ * then runs the checks and the project tests. A changed check file is reset off the branch,
+ * to the lock's commit.
  */
-async function verifyOnce(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, checkFiles: string[]): Promise<Verdict> {
+export async function verifyOnce(deps: Deps, rumba: RumbaConfig, state: TicketState, sha: string, lock: Lock): Promise<Verdict> {
   // The environment never runs where the agent wrote, and nothing it leaves behind is committed.
   const { workdir } = await deps.workspace.prepare(state.branch!, { fresh: false })
   try {
     // Hashed in the checkout that runs, so what is compared is what would be executed.
-    const edited = changedChecks(state.checkHashes, await deps.workspace.hashFiles(workdir, checkFiles))
+    const edited = changedChecks(lock.hashes, await deps.workspace.hashFiles(workdir, lock.files))
     if (edited.length > 0) {
-      await deps.workspace.reset(workdir, state.checksSha!)
+      await deps.workspace.reset(workdir, lock.resetTo)
       return { kind: 'guard', failures: [{ criterionId: 'guard', output: `The fix changed or deleted check files, which must stay as written: ${edited.join(', ')}` }] }
     }
 
@@ -311,8 +319,8 @@ function tailOf(text: string, deps: Deps): string {
   return cleanOutput(text, deps.secrets, ATTEMPT_TAIL)
 }
 
-/** Protected paths in git's list of committed changes since the checks commit. */
-async function protectedFailure(deps: Deps, rumba: RumbaConfig, workdir: string, state: TicketState): Promise<string | null> {
-  const touched = protectedViolations(await deps.workspace.changedFiles(workdir, state.checksSha!), rumba.environment.protected)
+/** Protected paths in git's list of committed changes since `since` (for a fix, the checks commit). */
+export async function protectedFailure(deps: Deps, rumba: RumbaConfig, workdir: string, since: string): Promise<string | null> {
+  const touched = protectedViolations(await deps.workspace.changedFiles(workdir, since), rumba.environment.protected)
   return touched.length > 0 ? `The fix changed protected paths, which the agent must not change: ${touched.join(', ')}` : null
 }

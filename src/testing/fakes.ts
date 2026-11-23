@@ -2,7 +2,7 @@ import type { RumbaConfig } from '../config/load.js'
 import { defaultLabels } from '../core/labels.js'
 import { newState, transition } from '../core/states.js'
 import type {
-  Check, CheckResult, Criterion, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
+  Check, CheckResult, Criterion, Feedback, LabelNames, LinkedDocument, StateName, Ticket, TicketState,
 } from '../core/types.js'
 import type { Agent, AgentResult, AgentTask, AgentTaskKind } from '../ports/agent.js'
 import type { CodeHost, FeedbackItem, LabelAdded, PullRequestDraft, PullRequestInfo } from '../ports/codeHost.js'
@@ -400,6 +400,25 @@ export function verified(d: FakeDeps): TicketState {
     criteria: [...f.criteria, { id: 'c2', text: 'C2', checkable: false }],
     after: [{ criterionId: 'c1', passed: true, exitCode: 0, output: 'check passed' }],
   }
+}
+
+/** The pull request of `changesRequested(d)`. */
+export const REVIEWED_PR = 'https://example.test/pr/1'
+
+/** One review from alice, written after Rumba's push. */
+export const aliceReview: Feedback = {
+  kind: 'review', author: 'alice', url: `${REVIEWED_PR}#pullrequestreview-1`, at: '2025-12-31T12:00:00Z', text: 'Please rename total to subtotal.',
+}
+
+/**
+ * A 'changes_requested' state: verified(d) with its pull request open, pushed at the fix
+ * commit 'sha2', and review feedback stored, built through real transitions.
+ */
+export function changesRequested(d: FakeDeps, feedback: Feedback[] = [aliceReview]): TicketState {
+  const now = d.clock()
+  const s = transition(transition(verified(d), 'pr_open', now), 'changes_requested', now, 'review feedback')
+  d.workspace.branchTip = 'sha2'
+  return { ...s, pullRequestUrl: REVIEWED_PR, pushedAt: '2025-12-31T00:00:00.000Z', reviewRounds: 0, fixSummary: 'fixed', feedback }
 }
 
 export const happyTriage: Extract<AgentResult, { kind: 'triage' }> = {

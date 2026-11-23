@@ -8,6 +8,7 @@ import { openPullRequest } from './steps/openPullRequest.js'
 import { relocateChecks } from './steps/relocateChecks.js'
 import { reproduce } from './steps/reproduce.js'
 import { resumeCriteria } from './steps/resumeCriteria.js'
+import { revise } from './steps/revise.js'
 import { triage } from './steps/triage.js'
 import type { Ticket, TicketState } from './types.js'
 
@@ -47,6 +48,7 @@ export async function advanceTicket(deps: Deps, rumba: RumbaConfig, ticket: Tick
           }
           case 'criteria_ready': current = await reproduce(d, rumba, ticket, current); break
           case 'checks_failing': current = await build(d, rumba, ticket, current); break
+          case 'changes_requested': current = await revise(d, rumba, ticket, current); break
           case 'verified':
             // One step with the pull request, so that a relocation that ran out of time still ends in a pull request.
             // An interrupted relocation is always undone, even when relocation has since been turned off.

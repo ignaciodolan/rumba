@@ -59,6 +59,19 @@ function verdict(results: CheckResult[] | undefined, criterionId: string): strin
   return r === undefined ? '-' : r.passed ? 'pass' : 'fail'
 }
 
+/**
+ * Text an agent wrote, made inert for GitHub: no HTML, @-mentions broken so nobody is
+ * notified, issue references and issue links broken so a merge closes no other issue, and
+ * images broken so the page loads nothing.
+ */
+export function inertText(text: string): string {
+  return escapeHtml(text)
+    .replace(/@(?=\w)/g, '@\u200b')
+    .replace(/#(?=\d)/g, '#\u200b')
+    .replace(/\/(issues|pull)\//gi, '/$1\u200b/')
+    .replace(/!\[/g, '!\u200b[')
+}
+
 /** Well under GitHub's 65,536-character limit on a pull request body. */
 export const MAX_PULL_REQUEST_BODY = 60000
 /** Below this, check output is left out rather than cut further. */
@@ -87,15 +100,8 @@ function render(i: EvidenceInput, cap: number | null): string {
   const sections: string[] = []
 
   if (state.fixSummary) {
-    // The agent wrote it. It is quoted, and made inert: @-mentions are broken so nobody is
-    // notified, issue references and issue links so the merge closes no other issue, and
-    // images so the body loads nothing.
-    const inert = escapeHtml(state.fixSummary.trim())
-      .replace(/@(?=\w)/g, '@\u200b')
-      .replace(/#(?=\d)/g, '#\u200b')
-      .replace(/\/(issues|pull)\//gi, '/$1\u200b/')
-      .replace(/!\[/g, '!\u200b[')
-    const quoted = inert.split('\n').map((l) => `> ${l}`).join('\n')
+    // The agent wrote it, so it is quoted and made inert.
+    const quoted = inertText(state.fixSummary.trim()).split('\n').map((l) => `> ${l}`).join('\n')
     sections.push(`## Summary\n\n${quoted}`)
   }
   // A GitHub issue of this repository is closed by the merge; a Linear issue is linked.

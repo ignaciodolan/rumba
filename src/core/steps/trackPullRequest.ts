@@ -17,8 +17,9 @@ export async function trackPullRequest(deps: Deps, rumba: RumbaConfig, ticket: T
 }
 
 /**
- * Reads the pull request of a ticket parked in `changes_requested`, and only its outcome: no feedback is
- * collected, since the ticket already holds a round. Moves the ticket once the pull request has ended.
+ * Reads the pull request of a ticket in `changes_requested`, and only its outcome: no feedback is collected,
+ * since the ticket already holds a round. Moves the ticket once the pull request has ended; while it is open,
+ * the ticket is left as it is, for the round.
  */
 export async function trackParkedPullRequest(deps: Deps, ticket: Ticket, state: TicketState): Promise<TicketState> {
   if (state.state !== 'changes_requested') throw new Error(`Cannot track a parked pull request from state ${state.state}`)

@@ -3,7 +3,7 @@ import { runRumba, TrackerIdentityError } from '../../src/core/runner.js'
 import { newState, transition } from '../../src/core/states.js'
 import { CodeHostIdentityError } from '../../src/ports/codeHost.js'
 import { AgentError } from '../../src/ports/agent.js'
-import { failing, happyTriage, makeDeps, makeRumba, makeTicket, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
+import { changesRequested, failing, happyTriage, makeDeps, makeRumba, makeTicket, REVIEWED_PR, scriptFeatureWithoutCriteria, scriptHappyBug } from '../../src/testing/fakes.js'
 
 const PR = 'https://example.test/pr/42'
 const oneTicket = makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2, maxReviewRounds: 2 } })
@@ -135,24 +135,32 @@ describe('runRumba', () => {
       ...newState('shop', d.clock()), state: 'changes_requested' as const, lastDurable: 'changes_requested' as const, pullRequestUrl: PR,
       feedback: [{ kind: 'comment' as const, author: 'alice', url: 'u', at: 'a', text: 'Rename it' }], ...extra,
     })
-    it('leaves the ticket alone, open or closed, at no limit cost', async () => {
+    it('sends a ticket whose pull request is open to the engine, with a lease, counting toward the limit', async () => {
       const d = makeDeps(); scriptHappyBug(d)
-      d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }), makeTicket({ id: '3' }))
-      d.tracker.closed.add('2')
-      d.tracker.states.set('1', parked(d)); d.tracker.states.set('2', parked(d))
-      d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
+      d.agent.script.revise = { kind: 'revise', summary: 'Renamed it.', replies: [] }
+      d.tracker.tickets.push(makeTicket({ id: '123' }), makeTicket({ id: '2' }))
+      d.tracker.states.set('123', changesRequested(d))
+      d.codeHost.pullRequests.set(REVIEWED_PR, { state: 'open', headSha: 'sha2' })
+      const leases: unknown[] = []
+      const run = d.agent.run.bind(d.agent)
+      d.agent.run = async (task, w) => { leases.push(d.tracker.states.get('123')?.lease); return run(task, w) }
       const r = await runRumba(d, oneTicket)
-      expect(r.left).toEqual([{ ticket: '1', why: 'changes requested' }, { ticket: '2', why: 'changes requested' }])
-      expect(r.advanced.map((a) => a.ticket)).toEqual(['3'])
-      expect(d.tracker.states.get('1')).toEqual(parked(d))
+      expect(r.advanced).toEqual([{ ticket: '123', from: 'changes_requested', to: 'pr_open' }])
+      expect(r.left).toEqual([{ ticket: '2', why: 'run limit' }])
+      expect(leases).toEqual([{ runId: 'run-1', at: '2026-01-01T00:00:00.000Z' }])
+      expect(d.tracker.states.get('123')).toMatchObject({ state: 'pr_open', reviewRounds: 1 })
+      expect(d.tracker.states.get('123')?.lease).toBeUndefined()
     })
-    it('keeps a ticket parked while its pull request is open, without collecting feedback', async () => {
-      const d = makeDeps(); d.tracker.tickets.push(makeTicket({ id: '1' })); d.tracker.states.set('1', parked(d))
-      d.codeHost.pullRequests.set(PR, { state: 'open', headSha: 'h' })
+    it('reads the outcome before the run limit, and leaves an open one at the limit for a later run', async () => {
+      const d = makeDeps(); scriptHappyBug(d)
+      d.tracker.tickets.push(makeTicket({ id: '2' }), makeTicket({ id: '123' }))
+      d.tracker.states.set('123', changesRequested(d))
+      d.codeHost.pullRequests.set(REVIEWED_PR, { state: 'open', headSha: 'sha2' })
       d.codeHost.listFeedback = async () => { throw new Error('feedback must not be read') }
-      const r = await runRumba(d, makeRumba())
-      expect(r.left).toEqual([{ ticket: '1', why: 'changes requested' }])
-      expect(d.tracker.states.get('1')).toEqual(parked(d))
+      const r = await runRumba(d, oneTicket)
+      expect(r.advanced).toEqual([{ ticket: '2', from: 'queued', to: 'pr_open' }])
+      expect(r.left).toEqual([{ ticket: '123', why: 'run limit' }])
+      expect(d.tracker.states.get('123')).toEqual(changesRequested(d))
     })
     it.each([
       ['merged', { state: 'merged', headSha: 'h', mergedAt: '2026-11-20T10:00:00Z' }, 'merged at 2026-11-20T10:00:00Z', `The pull request was merged: ${PR}`],
