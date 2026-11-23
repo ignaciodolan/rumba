@@ -24,7 +24,7 @@ const INTERRUPTED = 'Rumba was interrupted repeatedly while working on this tick
 export class TrackerIdentityError extends Error {}
 
 /** What the run has spent so far. */
-interface RunCount { errors: number }
+interface RunCount { errors: number; worked: number }
 
 function withoutLease(s: TicketState): TicketState {
   const { lease: _lease, ...rest } = structuredClone(s)
@@ -55,7 +55,7 @@ export async function runRumba(deps: Deps, rumba: RumbaConfig, opts: { ticketId?
   await deps.tracker.ensureLabels()
   const tickets = opts.ticketId === undefined ? await deps.tracker.listCandidates({ closedIn: ['pr_open'] }) : [await deps.tracker.getTicket(opts.ticketId)]
   const summary: RunSummary = { rumba: rumba.name, advanced: [], left: [] }
-  const count: RunCount = { errors: 0 }
+  const count: RunCount = { errors: 0, worked: 0 }
   for (const ticket of tickets) {
     try {
       await handle(deps, rumba, ticket, summary, count)
@@ -104,7 +104,7 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
 
   if (ENDS.includes(state.state)) return left(state.state)
   if (state.state === 'pr_open') return await checkPullRequest(deps, rumba, ticket, state, summary, count)
-  if (summary.advanced.length + count.errors >= limits.maxTicketsPerRun) return left('run limit')
+  if (count.worked + count.errors >= limits.maxTicketsPerRun) return left('run limit')
 
   const from = state.state
   state = { ...state, lease: { runId: deps.runId, at: deps.clock().toISOString() } }
@@ -125,6 +125,7 @@ async function handle(deps: Deps, rumba: RumbaConfig, ticket: Ticket, summary: R
 
   await deps.tracker.writeState(ticket, withoutLease(result))
   if (result.state === 'awaiting_criteria') return left('awaiting criteria')
+  count.worked += 1
   summary.advanced.push({ ticket: ticket.id, from, to: result.state })
 }
 

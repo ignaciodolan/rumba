@@ -18,6 +18,12 @@ export async function trackPullRequest(deps: Deps, _rumba: RumbaConfig, ticket: 
   const next = transition(state, merged ? 'merged' : 'rejected', deps.clock(), when === undefined ? word : `${word} at ${when}`)
   // Write before commenting, so a failed comment cannot leave the ticket looking open.
   await deps.tracker.writeState(ticket, next)
-  await deps.tracker.comment(ticket, merged ? `The pull request was merged: ${url}` : `The pull request was closed without merging: ${url}`)
+  try {
+    await deps.tracker.comment(ticket, merged ? `The pull request was merged: ${url}` : `The pull request was closed without merging: ${url}`)
+  } catch {
+    // The outcome is already recorded. Letting this throw would send the ticket down the runner's error
+    // path, which counts an error on an ended ticket and can overwrite merged/rejected with needs_human.
+    // The state comment and label already show the outcome; only the courtesy comment is lost.
+  }
   return next
 }

@@ -94,7 +94,7 @@ describe('runRumba', () => {
     d.tracker.states.set('1', { ...failing(d), state: 'building', lastDurable: 'criteria_ready' })
     expect((await runRumba(d, makeRumba())).advanced[0]).toMatchObject({ from: 'criteria_ready' })
   })
-  it('leaves ended and pr_open tickets with the state name and no limit cost', async () => {
+  it('leaves ended tickets and one with an open pull request, at no limit cost', async () => {
     const d = makeDeps(); scriptHappyBug(d)
     d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }), makeTicket({ id: '3' }))
     d.tracker.states.set('1', transition(newState('shop', d.clock()), 'needs_human', d.clock()))
@@ -103,6 +103,15 @@ describe('runRumba', () => {
     const r = await runRumba(d, makeRumba({ limits: { maxTicketsPerRun: 1, minutesPerTicket: 30, maxFixAttempts: 2 } }))
     expect(r.left).toEqual([{ ticket: '1', why: 'needs_human' }, { ticket: '2', why: 'pull request open' }])
     expect(r.advanced.map(a => a.ticket)).toEqual(['3'])
+  })
+  it('does not spend a run-limit slot on a pull request that just ended', async () => {
+    const d = makeDeps(); scriptHappyBug(d)
+    d.tracker.tickets.push(makeTicket({ id: '1' }), makeTicket({ id: '2' }))
+    d.tracker.states.set('1', prOpenState(d))
+    d.codeHost.pullRequests.set(PR, { state: 'merged', headSha: 'h' })
+    const r = await runRumba(d, oneTicket)
+    expect(r.advanced).toEqual([{ ticket: '1', from: 'pr_open', to: 'merged' }, { ticket: '2', from: 'queued', to: 'pr_open' }])
+    expect(r.left).toEqual([])
   })
   it.each(['merged', 'rejected'] as const)('leaves a %s ticket without the retry label alone, at no limit cost', async (name) => {
     const d = makeDeps(); scriptHappyBug(d)

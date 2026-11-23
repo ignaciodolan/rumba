@@ -30,6 +30,13 @@ describe('trackPullRequest', () => {
     expect(s.history.at(-1)?.note).toBe('closed at 2026-11-21T09:00:00Z')
     expect(d.tracker.comments.at(-1)?.body).toBe(`The pull request was closed without merging: ${URL}`)
   })
+  it('keeps the recorded outcome and error count when the exit comment fails', async () => {
+    const d = makeDeps(); d.codeHost.pullRequests.set(URL, { state: 'merged', headSha: 'h' })
+    d.tracker.comment = async () => { throw new Error('comment api down') }
+    const s = await trackPullRequest(d, makeRumba(), makeTicket(), { ...prOpen(d), errorCount: 2 })
+    expect(s).toMatchObject({ state: 'merged', errorCount: 2 })
+    expect(d.tracker.states.get('123')).toMatchObject({ state: 'merged', errorCount: 2 })
+  })
   it('returns an open pull request unchanged and writes nothing', async () => {
     const d = makeDeps(); d.codeHost.pullRequests.set(URL, { state: 'open', headSha: 'h' })
     const start = prOpen(d)
