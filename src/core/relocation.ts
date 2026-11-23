@@ -547,8 +547,9 @@ function jsTitles(lines: string[], jsx = false): { lines: string[]; titles: stri
     const line = out[k]!
     if (open) continue
     // In JSX, text between tags, over as many lines as it likes, may hold quotes that are not
-    // strings and hide a template that opens: after the first tag nothing more is masked.
-    open = leavesOpen(line) || (jsx && /<[A-Za-z>]/.test(line))
+    // strings and hide a template that opens. A tag may open as `< p>`, `<_x>` or with `<` at
+    // the end of a line, so after any `<` nothing more is masked.
+    open = leavesOpen(line) || (jsx && line.includes('<'))
     if (next) {
       next = false
       mask(k, 0, /^\s*,/)

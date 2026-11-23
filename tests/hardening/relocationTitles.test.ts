@@ -238,6 +238,13 @@ describe('titles in other languages and in JSX', () => {
     expect(judgeFile('tests/rumba/c1.test.js', 'tests/orders/receipt.test.js', tsx("'inner'"), tsx("'${process.exit(0)}'"))).not.toBeNull()
   })
 
+  it('stops at any <, since a JSX tag may open with a space, an underscore, a dollar or at the end of a line', () => {
+    for (const opener of ['< p>', '<_Row>', '<$Cell>', '<']) {
+      const tsx = (title: string) => `it('c1', () => {\n  render(${opener}\n      '{\`'\ntest(${title}, () => {})\n\`}\n  )\n})\n`
+      expect(judgeFile(...TSX, tsx("'inner'"), tsx("'${process.exit(0)}'")), opener).not.toBeNull()
+    }
+  })
+
   it('keeps titles exact when the command names a title, whatever a comment at the top of the file holds', () => {
     const file = (title: string) => `// Checks the \`fulfil\` helper.\nimport { expect, it } from 'vitest'\n\nit(${title}, () => {\n  expect(1).toBe(1)\n})\n`
     const r = judgeRelocation({
